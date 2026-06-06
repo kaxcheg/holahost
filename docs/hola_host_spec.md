@@ -1154,11 +1154,11 @@ from __future__ import annotations
 import uuid
 
 class GuidebookId(uuid.UUID):
-    classmethod
+    @classmethod
     def new(cls) -> GuidebookId:
         return cls(bytes=uuid.uuid4().bytes)
 
-    classmethod
+    @classmethod
     def from_str(cls, s: str) -> GuidebookId:
         return cls(s)
 ```
@@ -1183,7 +1183,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pydantic import SecretStr
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class MagicLink:
     value: SecretStr
 
@@ -1207,7 +1207,7 @@ from dataclasses import dataclass
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 EMAIL_MAX_LENGTH = 254
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class Email:
     value: str
 
@@ -1231,7 +1231,7 @@ from dataclasses import dataclass
 
 _IP_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class IpHash:
     value: str
 
@@ -1253,7 +1253,7 @@ import numpy as np
 
 EMBEDDING_DIM = 384  # см. §2.5
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class Embedding:
     vector: np.ndarray  # shape=(EMBEDDING_DIM,), dtype=float32, L2-normalized
 
@@ -1261,7 +1261,7 @@ class Embedding:
         # инварианты: shape, dtype, L2-norm ≈ 1.0
         ...
 
-    classmethod
+    @classmethod
     def from_bytes(cls, b: bytes) -> Embedding:
         return cls(vector=np.frombuffer(b, dtype=np.float32))
 
@@ -1297,7 +1297,7 @@ from datetime import datetime, UTC
 from domain.value_objects.guidebook_id import GuidebookId
 from domain.value_objects.ip_hash import IpHash
 
-dataclass
+@dataclass
 class Guidebook:
     id: GuidebookId
     name: str
@@ -1305,7 +1305,7 @@ class Guidebook:
     last_accessed_at: datetime
     ip_hash: IpHash
 
-    classmethod
+    @classmethod
     def create(cls, name: str, ip_hash: IpHash) -> Guidebook:
         now = datetime.now(tz=UTC)
         return cls(
@@ -1316,7 +1316,7 @@ class Guidebook:
             ip_hash=ip_hash,
         )
 
-    classmethod
+    @classmethod
     def from_repo(
         cls,
         id: GuidebookId,
@@ -1350,7 +1350,7 @@ from domain.value_objects.chunk_id import ChunkId
 from domain.value_objects.guidebook_id import GuidebookId
 from domain.value_objects.embedding import Embedding
 
-dataclass
+@dataclass
 class Chunk:
     id: ChunkId
     guidebook_id: GuidebookId
@@ -1358,7 +1358,7 @@ class Chunk:
     text: str
     embedding: Embedding
 
-    classmethod
+    @classmethod
     def create(
         cls,
         guidebook_id: GuidebookId,
@@ -1374,7 +1374,7 @@ class Chunk:
             embedding=embedding,
         )
 
-    classmethod
+    @classmethod
     def from_repo(
         cls,
         id: ChunkId,
@@ -1404,7 +1404,7 @@ from domain.value_objects.magic_link import MagicLink
 from domain.value_objects.ip_hash import IpHash
 from domain.value_objects.lead_flow import LeadFlow
 
-dataclass
+@dataclass
 class Lead:
     id: LeadId
     email: Email
@@ -1416,7 +1416,7 @@ class Lead:
     ip_hash: IpHash
     ua_short: str | None
 
-    classmethod
+    @classmethod
     def create(
         cls,
         email: Email,
@@ -1438,7 +1438,7 @@ class Lead:
             ua_short=ua_short,
         )
 
-    classmethod
+    @classmethod
     def from_repo(
         cls,
         id: LeadId,
@@ -1487,11 +1487,11 @@ from dataclasses import dataclass
 
 MAX_GUEST_MESSAGE_LENGTH = 4000  # см. §3.0
 
-dataclass
+@dataclass
 class GuestMessage:
     text: str
 
-    classmethod
+    @classmethod
     def create(cls, text: str) -> GuestMessage:
         # инвариант: 1 ≤ len(text) ≤ MAX_GUEST_MESSAGE_LENGTH
         if not text:
@@ -1512,12 +1512,12 @@ class GuestMessage:
 from __future__ import annotations
 from dataclasses import dataclass
 
-dataclass
+@dataclass
 class GeneratedReply:
     text: str
     output_tokens: int
 
-    classmethod
+    @classmethod
     def create(cls, text: str, output_tokens: int) -> GeneratedReply:
         return cls(text=text, output_tokens=output_tokens)
 ```
@@ -1533,17 +1533,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-dataclass
+@dataclass
 class SampleBudgetState:
     day: date
     output_tokens_used: int
     dollars_spent_est: float
 
-    classmethod
+    @classmethod
     def create(cls, day: date) -> SampleBudgetState:
         return cls(day=day, output_tokens_used=0, dollars_spent_est=0.0)
 
-    classmethod
+    @classmethod
     def from_repo(
         cls,
         day: date,
@@ -1685,12 +1685,12 @@ Magic_link обязательно передаётся в DTO — валидац
 from __future__ import annotations
 from dataclasses import dataclass
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class SampleGenerateCmd:
     message: str
     ip_hash: str  # вычислен в interface-слое, передан как примитив
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class SampleGenerateResult:
     response_text: str
 ```
@@ -1701,19 +1701,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pydantic import SecretStr
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class CaptureLeadCmd:
     email: str
     flow: str           # "guidebook" | "sample"; валидируется use case'ом
     ip_hash: str
     ua_short: str | None
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class ResolveMagicLinkCmd:
     magic_link: SecretStr
     ip_hash: str
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class ResolveMagicLinkResult:
     email: str
     flow: str
@@ -1728,7 +1728,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pydantic import SecretStr
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class UploadGuidebookCmd:
     magic_link: SecretStr
     ip_hash: str
@@ -1736,7 +1736,7 @@ class UploadGuidebookCmd:
     file_bytes: bytes
     mime_type: str
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class IngestionResult:
     guidebook_id: str         # UUID-строка
     name: str                 # эхо имени для UI
@@ -1749,7 +1749,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pydantic import SecretStr
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class GenerateResponseCmd:
     magic_link: SecretStr
     byok: SecretStr
@@ -1757,7 +1757,7 @@ class GenerateResponseCmd:
     ip_hash: str
     # guidebook_id НЕ передаётся: backend читает lead.guidebook_id после resolve magic_link
 
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class GenerateResponseResult:
     response_text: str
 ```
@@ -1973,7 +1973,7 @@ from application.ports.uow import UnitOfWork
 from domain.entities.chunk import Chunk
 from config.config import Settings
 
-dataclass
+@dataclass
 class SampleGenerateUseCase:
     rate: RateLimiter
     sample_budget_repo: SampleBudgetRepo
@@ -1999,7 +1999,7 @@ from application.ports.magic_link import MagicLinkGenerator
 from application.ports.uow import UnitOfWork
 from config.config import Settings
 
-dataclass
+@dataclass
 class CaptureLeadUseCase:
     rate: RateLimiter
     leads_repo: LeadsRepo
@@ -2021,7 +2021,7 @@ from application.ports.repos import LeadsRepo, GuidebooksRepo
 from application.ports.uow import UnitOfWork
 from config.config import Settings
 
-dataclass
+@dataclass
 class ResolveMagicLinkUseCase:
     rate: RateLimiter
     leads_repo: LeadsRepo
@@ -2044,7 +2044,7 @@ from application.ports.repos import LeadsRepo, GuidebooksRepo, ChunksRepo
 from application.ports.uow import UnitOfWork
 from config.config import Settings
 
-dataclass
+@dataclass
 class UploadGuidebookUseCase:
     rate: RateLimiter
     leads_repo: LeadsRepo
@@ -2072,7 +2072,7 @@ from application.ports.repos import LeadsRepo, GuidebooksRepo, ChunksRepo
 from application.ports.uow import UnitOfWork
 from config.config import Settings
 
-dataclass
+@dataclass
 class GenerateResponseUseCase:
     rate: RateLimiter
     leads_repo: LeadsRepo
@@ -2096,7 +2096,7 @@ from application.ports.repos import LeadsRepo, GuidebooksRepo
 from application.ports.uow import UnitOfWork
 from config.config import Settings
 
-dataclass
+@dataclass
 class CleanupExpiredUseCase:
     leads_repo: LeadsRepo
     guidebooks_repo: GuidebooksRepo
@@ -2115,7 +2115,7 @@ from application.ports.rate import RateLimiter
 from application.ports.uow import UnitOfWork
 from config.config import Settings
 
-dataclass
+@dataclass
 class CleanupRateCountersUseCase:
     rate: RateLimiter
     uow: UnitOfWork
@@ -2255,7 +2255,7 @@ from application.use_cases.generate_response import GenerateResponseUseCase
 # sample data preload (см. §6.1)
 from infrastructure.sample.preload import load_sample_chunks
 
-dataclass
+@dataclass
 class Container:
     settings: Settings
     uow: UnitOfWork
