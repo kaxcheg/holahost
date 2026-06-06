@@ -410,7 +410,7 @@ AC ссылаются на параметры по символическому 
 | `RATE_LIMIT_PER_MAGIC_LINK` | rate limit для запросов с привязкой к magic_link (upload, template/generate, llm_key_msg/send, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
 | `RATE_LIMIT_PER_IP` | rate limit на все backend-запросы (включая sample, capture_email, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
 | `SAMPLE_BUDGET_DAILY_CAP`, `SAMPLE_BUDGET_RESET_AT` | глобальный суточный потолок sample-flow (output-tokens) и время сброса (UTC, lazy на первом запросе после полуночи) | §10.2 (200 000 токенов / 00:00 UTC) |
-| `EMAIL_REGEX`, `EMAIL_MAX_LENGTH` | валидация email | §10.7 (`^[a-zA-Z0-9._%+-]+[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$` / 254) |
+| `EMAIL_REGEX`, `EMAIL_MAX_LENGTH` | валидация email | §10.7 (`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$` / 254) |
 | `API_KEY_HEADER` | имя HTTP-заголовка для передачи BYOK | §10.3 (`X-Api-Key`) |
 | `MAGIC_LINK_HEADER` | имя HTTP-заголовка для magic_link на API-вызовах после resolve | §10.3 (`X-Magic-Link`) |
 | `MAGIC_LINK_URL_PARAM` | имя URL-параметра для входа через magic_link (`?ml=<token>`) | §1.3.4 / §10.3 (`ml`) |
@@ -1204,7 +1204,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 EMAIL_MAX_LENGTH = 254
 
 @dataclass(frozen=True)
@@ -2672,7 +2672,7 @@ def execute(self, cmd: GenerateResponseCmd) -> GenerateResponseResult:
 Триггер — EventBridge schedule (не пользовательский), отдельный Lambda-entry, отдельный `bootstrap_cleanup.py` (§8.6). Назначение — soft-expire истёкших magic_link'ов: для каждого lead'а с `magic_link IS NOT NULL AND last_seen_at < now - GUIDEBOOK_TTL` удалить привязанный guidebook (cascade чанков, §4.3) и обнулить `magic_link` на lead'е (строка lead'а **сохраняется** для analytics, §4.7).
 
 ```python
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class CleanupResult:
     expired_leads: int
     deleted_guidebooks: int
@@ -2743,7 +2743,7 @@ def execute(self) -> CleanupResult:
 Триггер — тот же EventBridge schedule, что и §9.6 (один Lambda-entry, последовательный вызов двух `execute()`; cron `cron(30 0 * * ? *)`, §10.1). Назначение — удалить из `rate_limit_counters` окна, окончившиеся до `now - max_rate_limit_window` (значение — `Settings.max_rate_limit_window = 1 час`, §10.2).
 
 ```python
-dataclass(frozen=True)
+@dataclass(frozen=True)
 class RateCountersCleanupResult:
     deleted_windows: int
 
@@ -3322,7 +3322,7 @@ Hot-update хинтов:
 | # | Стратегия | За | Против |
 |---|---|---|---|
 | A | полный RFC 5322 regex | теоретически корректно | regex длиной ~400 символов; пропускает edge-cases типа `"local part with spaces"x.y`, которые большинство сервисов не принимают |
-| B | **упрощённый regex `^[a-zA-Z0-9._%+-]+[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`** | покрывает >99% реальных email; короткий; легко читать | отказывает в legal-edge-cases (quoted-local-part, IDN-домены без punycode); для STR-публики приемлемо |
+| B | **упрощённый regex `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`** | покрывает >99% реальных email; короткий; легко читать | отказывает в legal-edge-cases (quoted-local-part, IDN-домены без punycode); для STR-публики приемлемо |
 | C | dns-lookup MX-record | подтверждение «домен принимает почту» | сетевая зависимость в hot path; +latency; flaky tests; против architecture (interface-слой синхронный) |
 
 **Альтернативы по EMAIL_MAX_LENGTH.**
@@ -3359,7 +3359,7 @@ Hot-update хинтов:
 
 - **Validation email**: вариант **B** + **I**. Module-level constants в `domain/value_objects/email.py`:
   ```python
-  EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+  EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
   EMAIL_MAX_LENGTH = 254
   ```
   `Email.__post_init__`:
@@ -3861,7 +3861,7 @@ Strict с первого коммита; ослабление настроек �
 | `mypy backend/` | Python type check |
 | `biome check --apply frontend/` | TS lint + format |
 | `tsc --noEmit` | TS type check |
-| `commitlint` | Conventional Commits валидация (`commitlint/config-conventional`) |
+| `commitlint` | Conventional Commits валидация (`@commitlint/config-conventional`) |
 | `gitleaks` | детектор credentials в коммите (AWS keys, Anthropic keys, generic secrets) |
 | `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-json`, `check-merge-conflict` | базовые проверки `pre-commit-hooks` |
 | `check-added-large-files` | блокирует файлы > 1 MB |
