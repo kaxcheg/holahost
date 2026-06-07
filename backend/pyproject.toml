@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "hola.host backend (Python 3.12, clean architecture)"
 authors = [{ name = "kaxcheg", email = "kaxcheg@gmail.com" }]
 requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.13.4,<3",
+    "numpy>=2.4.6,<3",
+]
 
 [tool.poetry]
 package-mode = false
@@ -33,6 +37,7 @@ ignore = ["E501"]
 python_version = "3.12"
 strict = true
 mypy_path = "app"
+plugins = ["pydantic.mypy"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

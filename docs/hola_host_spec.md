@@ -410,7 +410,7 @@ AC ссылаются на параметры по символическому 
 | `RATE_LIMIT_PER_MAGIC_LINK` | rate limit для запросов с привязкой к magic_link (upload, template/generate, llm_key_msg/send, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
 | `RATE_LIMIT_PER_IP` | rate limit на все backend-запросы (включая sample, capture_email, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
 | `SAMPLE_BUDGET_DAILY_CAP`, `SAMPLE_BUDGET_RESET_AT` | глобальный суточный потолок sample-flow (output-tokens) и время сброса (UTC, lazy на первом запросе после полуночи) | §10.2 (200 000 токенов / 00:00 UTC) |
-| `EMAIL_REGEX`, `EMAIL_MAX_LENGTH` | валидация email | §10.7 (`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$` / 254) |
+| `EMAIL_REGEX`, `EMAIL_MAX_LENGTH` | валидация email | §10.7 (`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\Z` / 254) |
 | `API_KEY_HEADER` | имя HTTP-заголовка для передачи BYOK | §10.3 (`X-Api-Key`) |
 | `MAGIC_LINK_HEADER` | имя HTTP-заголовка для magic_link на API-вызовах после resolve | §10.3 (`X-Magic-Link`) |
 | `MAGIC_LINK_URL_PARAM` | имя URL-параметра для входа через magic_link (`?ml=<token>`) | §1.3.4 / §10.3 (`ml`) |
@@ -1204,7 +1204,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\Z")
 EMAIL_MAX_LENGTH = 254
 
 @dataclass(frozen=True)
@@ -1229,7 +1229,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_IP_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_IP_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}\Z")
 
 @dataclass(frozen=True)
 class IpHash:
@@ -3322,7 +3322,7 @@ Hot-update хинтов:
 | # | Стратегия | За | Против |
 |---|---|---|---|
 | A | полный RFC 5322 regex | теоретически корректно | regex длиной ~400 символов; пропускает edge-cases типа `"local part with spaces"x.y`, которые большинство сервисов не принимают |
-| B | **упрощённый regex `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`** | покрывает >99% реальных email; короткий; легко читать | отказывает в legal-edge-cases (quoted-local-part, IDN-домены без punycode); для STR-публики приемлемо |
+| B | **упрощённый regex `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\Z`** | покрывает >99% реальных email; короткий; легко читать | отказывает в legal-edge-cases (quoted-local-part, IDN-домены без punycode); для STR-публики приемлемо |
 | C | dns-lookup MX-record | подтверждение «домен принимает почту» | сетевая зависимость в hot path; +latency; flaky tests; против architecture (interface-слой синхронный) |
 
 **Альтернативы по EMAIL_MAX_LENGTH.**
@@ -3359,9 +3359,12 @@ Hot-update хинтов:
 
 - **Validation email**: вариант **B** + **I**. Module-level constants в `domain/value_objects/email.py`:
   ```python
-  EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+  EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\Z")
   EMAIL_MAX_LENGTH = 254
   ```
+  Примечание: `\Z`, а не `$` — в Python `$` совпадает и перед завершающим `\n`, поэтому при
+  `re.match` адрес `user@example.com\n` прошёл бы (вектор header-injection при доставке magic_link);
+  `\Z` привязывает к концу строки без исключения для `\n`. Тот же `\Z` применён в §7.2.3 `IpHash`.
   `Email.__post_init__`:
   ```python
   def __post_init__(self) -> None:
