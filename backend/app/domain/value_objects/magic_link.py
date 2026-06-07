@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from pydantic import SecretStr
+
+
+@dataclass(frozen=True)
+class MagicLink:
+    """Magic-link token wrapping a secret (spec §7.2.1).
+
+    The value is held in ``pydantic.SecretStr`` so it never leaks via ``repr``, logs, or
+    tracebacks. Length/charset are enforced by the generator (``MagicLinkGenerator``), not here.
+
+    Args:
+        value: The token, wrapped in ``SecretStr``.
+
+    :raises ValueError: If the wrapped secret is empty.
+    """
+
+    value: SecretStr
+
+    def __post_init__(self) -> None:
+        """Validate that the secret is non-empty.
+
+        :raises ValueError: If the wrapped secret is empty.
+        """
+        if not self.value.get_secret_value():
+            raise ValueError("MagicLink: empty value")
