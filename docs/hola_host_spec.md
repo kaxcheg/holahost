@@ -1287,6 +1287,30 @@ class LeadFlow(StrEnum):
 - `StrEnum` + `auto()` → значения `"guidebook"` / `"sample"` (lowercase имени члена), что 1:1 совпадает с DB `leads.flow TEXT` и `LEAD_FLOW_VALUES` (§3.0).
 - Использование: атрибут `Lead.flow`.
 
+#### 7.2.6 `GuidebookName`
+
+```python
+# domain/value_objects/guidebook_name.py
+from __future__ import annotations
+from dataclasses import dataclass
+
+GUIDEBOOK_NAME_MAX_LENGTH = 100  # зеркалит prod_hints.json property_name.max_length (§10.6)
+
+@dataclass(frozen=True)
+class GuidebookName:
+    value: str
+
+    def __post_init__(self) -> None:
+        if not self.value.strip():
+            raise ValueError("GuidebookName: empty value")
+        if len(self.value) > GUIDEBOOK_NAME_MAX_LENGTH:
+            raise ValueError(f"GuidebookName: length > {GUIDEBOOK_NAME_MAX_LENGTH}")
+```
+
+- Минимальные доменные инварианты: непустое значение (после `.strip()`) и длина ≤ 100. Значение хранится **как есть** (без trim); длина считается по сырой строке.
+- `max_length = 100` дублирует фронтовое правило `property_name.max_length` из `prod_hints.json` (§10.6) как backend-страховку (defense-in-depth: клиентскую валидацию можно обойти — US-04). `prod_hints.json` остаётся product source of truth (бэкенд его не читает — доставка через S3/CloudFront, §10.6); при изменении правила обновлять оба места. Мягко отклоняется от §10.6 («бэкенд не валидирует длины полей») — осознанная защита.
+- Использование: атрибут `Guidebook.name` (§7.3). На границе use-case строит VO из примитива `UploadGuidebookCmd.name: str` (§8.1); `ValueError "empty"` → `ERR_INVALID_TEMPLATE reason="empty"` (§10.8).
+
 ### 7.3 `Guidebook` (`domain/entities/guidebook.py`) — persistent
 
 ```python
@@ -1295,18 +1319,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from domain.value_objects.guidebook_id import GuidebookId
+from domain.value_objects.guidebook_name import GuidebookName
 from domain.value_objects.ip_hash import IpHash
 
 @dataclass
 class Guidebook:
     id: GuidebookId
-    name: str
+    name: GuidebookName
     created_at: datetime
     last_accessed_at: datetime
     ip_hash: IpHash
 
     @classmethod
-    def create(cls, name: str, ip_hash: IpHash) -> Guidebook:
+    def create(cls, name: GuidebookName, ip_hash: IpHash) -> Guidebook:
         now = datetime.now(tz=UTC)
         return cls(
             id=GuidebookId.new(),
@@ -1320,7 +1345,7 @@ class Guidebook:
     def from_repo(
         cls,
         id: GuidebookId,
-        name: str,
+        name: GuidebookName,
         created_at: datetime,
         last_accessed_at: datetime,
         ip_hash: IpHash,
@@ -1578,7 +1603,7 @@ class SampleBudgetState:
 
 | Domain | DB-таблица | Маппинг |
 |---|---|---|
-| `Guidebook` | `guidebooks` (§4.2) | `id ↔ guidebook_id`, `created_at`, `last_accessed_at`, `ip_hash` |
+| `Guidebook` | `guidebooks` (§4.2) | `id ↔ guidebook_id`, `name`, `created_at`, `last_accessed_at`, `ip_hash` |
 | `Chunk` | `chunks` (§4.3) | `id`, `guidebook_id`, `ordinal`, `text`, `embedding ↔ bytea` (через `Embedding.to_bytes()` / `Embedding.from_bytes()`) |
 | `Lead` | `leads` (§4.1) | все поля 1:1; `magic_link: MagicLink \| None ↔ TEXT UNIQUE nullable`; `flow: LeadFlow ↔ TEXT` (значение StrEnum) |
 | `SampleBudgetState` | `sample_budget` (§4.5) | `day ↔ date`, `output_tokens_used`, `dollars_spent_est` |
