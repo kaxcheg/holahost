@@ -1968,10 +1968,11 @@ class RateLimiter(Protocol):
 ```python
 # application/ports/uow.py
 from __future__ import annotations
-from typing import Protocol, ContextManager
+from contextlib import AbstractContextManager
+from typing import Protocol
 
 class UnitOfWork(Protocol):
-    def transaction(self) -> ContextManager[None]:
+    def transaction(self) -> AbstractContextManager[None]:
         """Открывает транзакцию; commit на успехе, rollback на исключении."""
         ...
 ```
@@ -2161,8 +2162,18 @@ DTO в `application/dto/cleanup.py`:
 # application/exceptions/__init__.py
 from __future__ import annotations
 
+# Каждый подкласс несёт стабильный `code` (§10.8) и опц. `details_dict()` —
+# фиксированный per-code `details` payload (§10.8). Контекст-поля (max_bytes,
+# allowed, reset_at, resource, scope/retry_after_seconds, retryable/upstream_status)
+# — ОБЯЗАТЕЛЬНЫЕ аргументы конструктора: их значения известны только в точке raise
+# (Settings / вычисление / upstream-статус), use case/адаптер обязан их передать.
+
 class ApplicationError(Exception):
     code: str = "ERR_INTERNAL"
+
+    def details_dict(self) -> dict[str, object]:
+        # ERR_INTERNAL.request_id добавляет response_envelope, не исключение.
+        return {}
 
 class InvalidMagicLinkError(ApplicationError):
     code = "ERR_INVALID_MAGIC_LINK"
@@ -2170,35 +2181,82 @@ class InvalidMagicLinkError(ApplicationError):
 class InvalidApiKeyError(ApplicationError):
     code = "ERR_INVALID_API_KEY"
 
-class InvalidPayloadError(ApplicationError):
-    code = "ERR_INVALID_TEMPLATE"  # generic 400/422; details — поле .field
-    def __init__(self, message: str = "") -> None:
+class NotFoundError(ApplicationError):
+    code = "ERR_NOT_FOUND"
+    def __init__(self, resource: str, message: str = "") -> None:
         super().__init__(message)
+        self.resource = resource
+    def details_dict(self) -> dict[str, object]:
+        return {"resource": self.resource}
+
+class InvalidPayloadError(ApplicationError):
+    code = "ERR_INVALID_TEMPLATE"  # generic 400/422; details — field/reason
+    def __init__(self, message: str = "", *, field: str | None = None,
+                 reason: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
+        self.reason = reason
+    def details_dict(self) -> dict[str, object]:
+        return {"field": self.field, "reason": self.reason}
 
 class NoGuidebookAttachedError(ApplicationError):
     code = "ERR_NO_GUIDEBOOK"
 
 class PayloadTooLargeError(ApplicationError):
     code = "ERR_PAYLOAD_TOO_LARGE"
+    def __init__(self, max_bytes: int, message: str = "") -> None:
+        super().__init__(message)
+        self.max_bytes = max_bytes
+    def details_dict(self) -> dict[str, object]:
+        return {"max_bytes": self.max_bytes}
 
 class UnsupportedMediaTypeError(ApplicationError):
     code = "ERR_UNSUPPORTED_MEDIA_TYPE"
+    def __init__(self, allowed: list[str], message: str = "") -> None:
+        super().__init__(message)
+        self.allowed = allowed
+    def details_dict(self) -> dict[str, object]:
+        return {"allowed": self.allowed}
 
 class EmptyDocumentError(ApplicationError):
     code = "ERR_EMPTY_DOCUMENT"
 
 class RateLimitExceededError(ApplicationError):
     code = "ERR_RATE_LIMIT"
-    # поля: scope: RateLimitScope, retry_after_seconds: int
+    # scope — str-значение ("ip"/"magic_link"), не RateLimitScope, чтобы избежать
+    # импорта exceptions→ports; details-ключ на проводе — retry_after_s (§10.8).
+    def __init__(self, scope: str, retry_after_seconds: int, message: str = "") -> None:
+        super().__init__(message)
+        self.scope = scope
+        self.retry_after_seconds = retry_after_seconds
+    def details_dict(self) -> dict[str, object]:
+        return {"scope": self.scope, "retry_after_s": self.retry_after_seconds}
 
 class SampleBudgetExhaustedError(ApplicationError):
     code = "ERR_SAMPLE_BUDGET_EXHAUSTED"
+    def __init__(self, reset_at: str, message: str = "") -> None:
+        super().__init__(message)
+        self.reset_at = reset_at
+    def details_dict(self) -> dict[str, object]:
+        return {"reset_at": self.reset_at}
 
 class UpstreamLLMError(ApplicationError):
     code = "ERR_UPSTREAM_LLM"
+    def __init__(self, retryable: bool, upstream_status: int | None = None,
+                 message: str = "") -> None:
+        super().__init__(message)
+        self.upstream_status = upstream_status
+        self.retryable = retryable
+    def details_dict(self) -> dict[str, object]:
+        return {"upstream_status": self.upstream_status, "retryable": self.retryable}
 
 class UpstreamEmailError(ApplicationError):
     code = "ERR_UPSTREAM_EMAIL"
+    def __init__(self, retryable: bool, message: str = "") -> None:
+        super().__init__(message)
+        self.retryable = retryable
+    def details_dict(self) -> dict[str, object]:
+        return {"retryable": self.retryable}
 ```
 
 `interface/lambda_/response_envelope.py` мапит `ApplicationError → HTTP` по §5.8.
@@ -2436,7 +2494,10 @@ def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
     with self.uow.transaction():
         state = self.sample_budget_repo.get_or_create(today)
         if state.is_exhausted(self.settings.sample_budget_daily_cap_tokens):
-            raise SampleBudgetExhaustedError()
+            # reset_at = следующая 00:00 UTC (§10.2 lazy reset)
+            raise SampleBudgetExhaustedError(
+                reset_at=datetime.combine(today + timedelta(days=1), time.min, tzinfo=UTC).isoformat()
+            )
 
     # 4. CPU-bound (вне транзакции)
     query_vec: Embedding = self.embedder.embed_one(guest_message.text)
@@ -2573,9 +2634,9 @@ def execute(self, cmd: UploadGuidebookCmd) -> IngestionResult:
 
     # 2. валидации до парсинга (дёшево, не трогаем DB)
     if len(cmd.file_bytes) > self.settings.max_upload_size_bytes:
-        raise PayloadTooLargeError()
+        raise PayloadTooLargeError(max_bytes=self.settings.max_upload_size_bytes)
     if cmd.mime_type not in self.settings.allowed_mime_types:
-        raise UnsupportedMediaTypeError()
+        raise UnsupportedMediaTypeError(allowed=sorted(self.settings.allowed_mime_types))
 
     # 3. resolve magic_link
     with payload_validation():
@@ -2593,7 +2654,8 @@ def execute(self, cmd: UploadGuidebookCmd) -> IngestionResult:
         raise EmptyDocumentError()
     chunks_text: list[str] = self.chunker.chunk(text)
     if len(chunks_text) > self.settings.max_chunks_per_guidebook:
-        raise PayloadTooLargeError()
+        # chunk-count branch: max_bytes — лимит загрузки (UI: «файл меньше»)
+        raise PayloadTooLargeError(max_bytes=self.settings.max_upload_size_bytes)
     embeddings: list[Embedding] = self.embedder.embed_many(chunks_text)
 
     # 5. построить domain-объекты
@@ -3465,13 +3527,13 @@ Hot-update хинтов:
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | `UnsupportedMediaTypeError` | `{ "allowed": [<mime>, ...] }` | no retry; UI: показать allowed-форматы |
 | `ERR_EMPTY_DOCUMENT` | 422 | `EmptyDocumentError` | `{}` | no retry; UI: «извлечённый текст пуст, проверь файл» |
 | `ERR_INVALID_TEMPLATE` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_TEMPLATE"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|honeypot" }` | no retry; UI: подсветить поле, показать `reason` (`honeypot` — UI получает 422 + generic-сообщение без подсветки конкретного поля, см. §10.7) |
-| `ERR_RATE_LIMIT` | 429 | `RateLimitedError` | `{ "scope": "ip\|magic_link", "retry_after_s": <int> }` | auto-retry через `retry_after_s` (UI показывает обратный отсчёт) |
+| `ERR_RATE_LIMIT` | 429 | `RateLimitExceededError` | `{ "scope": "ip\|magic_link", "retry_after_s": <int> }` | auto-retry через `retry_after_s` (UI показывает обратный отсчёт) |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | `SampleBudgetExhaustedError` | `{ "reset_at": "<ISO-8601 UTC>" }` | no retry до `reset_at`; UI: «попробуй завтра или загрузи свой ключ» |
 | `ERR_UPSTREAM_LLM` | 502 | `UpstreamLLMError` | `{ "upstream_status": <int>, "retryable": <bool> }` | если `retryable=true` — экспоненциальный backoff (1s, 2s, 4s; max 3 попытки); иначе no retry |
 | `ERR_UPSTREAM_EMAIL` | 502 | `UpstreamEmailError` | `{ "retryable": <bool> }` | то же что `ERR_UPSTREAM_LLM` |
 | `ERR_INTERNAL` | 500 | unhandled `Exception` (top-level catch) | `{ "request_id": "<uuid>" }` | no auto-retry; UI: «попробуй ещё раз, если повторяется — пришли `request_id`» |
 
-- **`retry_after_s`** в `ERR_RATE_LIMIT` вычисляется в `RateLimiter.check_and_increment(...)` (§8.2.8); возвращается через атрибут `RateLimitedError.retry_after_s: int`; `response_envelope.py` пробрасывает в `details`.
+- **`retry_after_s`** в `ERR_RATE_LIMIT` вычисляется в `RateLimiter.check_and_increment(...)` (§8.2.8); возвращается через атрибут `RateLimitExceededError.retry_after_seconds: int`; `response_envelope.py` пробрасывает в `details` под ключом `retry_after_s`.
 - **`upstream_status` + `retryable`** — заполняет реализация `LLMClient`/`EmailSender` при mapping'е upstream-ошибки в `UpstreamLLMError`/`UpstreamEmailError`; `retryable=true` для 5xx и `429`-ов от upstream'а, `retryable=false` для 4xx других (кроме 429).
 - **Backoff на клиенте**: реализуется во frontend-bundle (`fetch`-wrapper); сервер не управляет client-retry, только декларирует `retryable`.
 - **`request_id`** — UUID, генерируется в `interface/lambda_/handler.py` при входе (если AWS `aws_request_id` доступен — используется напрямую, иначе `uuid4()`); пробрасывается в `details.request_id` для `ERR_INTERNAL`, чтобы корреляция с CloudWatch (§10.5) была одношаговой.
@@ -3487,16 +3549,16 @@ def to_response(err: ApplicationError) -> tuple[int, dict]:
         },
     }
 ```
-- `ApplicationError` подклассы получают метод `details_dict() -> dict` (default — `{}`); подклассы с контекстом (`RateLimitedError`, `PayloadTooLargeError`, …) переопределяют.
+- `ApplicationError` подклассы получают метод `details_dict() -> dict` (default — `{}`); подклассы с контекстом (`RateLimitExceededError`, `PayloadTooLargeError`, …) переопределяют.
 - `HTTP_STATUS_BY_CODE` — module-level dict в `response_envelope.py`, source-of-truth для соответствия code ↔ HTTP-status.
 
 **Последствия.**
 
 - §3.0 `ERR_*` обновляется со ссылкой на `§10.8` (полный финальный список — таблица выше); `ERR_NO_GUIDEBOOK`, `ERR_NOT_FOUND`, `ERR_UPSTREAM_EMAIL` добавляются явно.
 - §5.0 / §5.8 — envelope `details` структура фиксируется по таблице.
-- §8.4 — добавляются подклассы `NotFoundError`, `PayloadTooLargeError`, `UnsupportedMediaTypeError`, `EmptyDocumentError`, `InvalidApiKeyError`, `RateLimitedError`, `SampleBudgetExhaustedError`, `UpstreamLLMError`; `RateLimitedError` имеет атрибут `retry_after_s: int`; `UpstreamLLMError`/`UpstreamEmailError` — `upstream_status: int` (опц.), `retryable: bool`.
+- §8.4 — добавляются подклассы `NotFoundError`, `PayloadTooLargeError`, `UnsupportedMediaTypeError`, `EmptyDocumentError`, `InvalidApiKeyError`, `RateLimitExceededError`, `SampleBudgetExhaustedError`, `UpstreamLLMError`; `RateLimitExceededError` имеет атрибут `retry_after_seconds: int` (в `details` — ключ `retry_after_s`); `UpstreamLLMError`/`UpstreamEmailError` — `upstream_status: int` (опц.), `retryable: bool`. Все подклассы с контекстом получают `details_dict()` и обязательные аргументы конструктора (§8.4).
 - §9.0 / §9.8 — table «исключение → код → HTTP-статус» становится reference, отдельная таблица в §10.8 — source-of-truth.
-- §8.2.8 `RateLimiter.check_and_increment(...)` — сигнатура остаётся; при rate-limit бросается `RateLimitedError(retry_after_s=...)`.
+- §8.2.8 `RateLimiter.check_and_increment(...)` — сигнатура остаётся; при rate-limit бросается `RateLimitExceededError(scope=..., retry_after_seconds=...)`.
 - §8.0 — `response_envelope.py` и `request_parsing.py` остаются; envelope-маппинг конкретизируется.
 - AC §3 US-07 «обработка ошибок» — численно верифицируема (per-code `details` schema, retry-семантика).
 
