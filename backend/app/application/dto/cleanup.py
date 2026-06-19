@@ -8,11 +8,11 @@ class CleanupResult:
     """Result of CleanupExpiredUseCase (spec §8.3 / §9.6).
 
     Args:
-        expired_leads: Count of leads whose magic_link was expired.
+        expired_magic_links: Count of magic links expired (lead rows persist for analytics, §4.7).
         deleted_guidebooks: Count of guidebooks hard-deleted.
     """
 
-    expired_leads: int
+    expired_magic_links: int
     deleted_guidebooks: int
 
 

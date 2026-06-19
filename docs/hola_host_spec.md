@@ -335,7 +335,7 @@ Use case принимает зависимости через конструкт
 | **Max upload size MVP** | **4 MB** (твёрдый потолок ниже Lambda sync body 6 MB; рост выше не планируется) |
 | Max файлов за запрос | 1 |
 | Max длина текста после парсинга | 200 000 символов |
-| Чанкинг | sliding window: 600 токенов окно, 100 токенов overlap |
+| Чанкинг | sliding window: 480 токенов окно, 80 токенов overlap (окно ДОЛЖНО быть ≤ 512 — max input `intfloat/multilingual-e5-small`, с учётом prefix-токенов; иначе эмбеддер молча обрезает чанк) |
 | Max чанков на гайдбук | 500 |
 | Retrieval top-K | 5 чанков |
 | Метрика сходства | cosine на L2-нормализованных embeddings |
@@ -417,7 +417,7 @@ AC ссылаются на параметры по символическому 
 | `EMAIL_DEDUP_POLICY` | политика обработки повторного submit того же email | US-02: `silent_upsert_with_new_magic_link` |
 | `EMAIL_GUIDEBOOK_CARDINALITY` | кардинальность связи email ↔ Guidebook | US-04 / US-05: `1:1_replace` (magic_link не меняется) |
 | `LEAD_FLOW_VALUES` | возможные значения `Lead.flow` (точка захвата email) | §1.3: `guidebook` (из capture_email через `use_guidebook`), `sample` (из capture_email через `leave_email` в sample_response) |
-| `ERR_*` (`ERR_INVALID_API_KEY`, `ERR_INVALID_MAGIC_LINK`, `ERR_NOT_FOUND`, `ERR_NO_GUIDEBOOK`, `ERR_PAYLOAD_TOO_LARGE`, `ERR_UNSUPPORTED_MEDIA_TYPE`, `ERR_EMPTY_DOCUMENT`, `ERR_INVALID_TEMPLATE`, `ERR_RATE_LIMIT`, `ERR_SAMPLE_BUDGET_EXHAUSTED`, `ERR_UPSTREAM_LLM`, `ERR_UPSTREAM_EMAIL`, `ERR_INTERNAL`) | символические идентификаторы классов ошибок; полный список и `details`-структура | §10.8 |
+| `ERR_*` (`ERR_INVALID_API_KEY`, `ERR_INVALID_MAGIC_LINK`, `ERR_NOT_FOUND`, `ERR_NO_GUIDEBOOK`, `ERR_PAYLOAD_TOO_LARGE`, `ERR_TOO_MANY_CHUNKS`, `ERR_UNSUPPORTED_MEDIA_TYPE`, `ERR_EMPTY_DOCUMENT`, `ERR_INVALID_PAYLOAD`, `ERR_RATE_LIMIT`, `ERR_SAMPLE_BUDGET_EXHAUSTED`, `ERR_UPSTREAM_LLM`, `ERR_UPSTREAM_EMAIL`, `ERR_INTERNAL`) | символические идентификаторы классов ошибок; полный список и `details`-структура | §10.8 |
 
 ### US-01: Sample exploration
 
@@ -476,9 +476,9 @@ AC ссылаются на параметры по символическому 
 - Файл с MIME вне whitelist → `ERR_UNSUPPORTED_MEDIA_TYPE`.
 - Файл > `MAX_UPLOAD_SIZE` отклоняется на клиенте до отправки.
 - Файл > `MAX_UPLOAD_SIZE`, отправленный в обход клиента, → серверный `ERR_PAYLOAD_TOO_LARGE`.
-- Пустой `name` (на клиенте обходом валидации или вручную) → серверный `ERR_INVALID_TEMPLATE`.
+- Пустой `name` (на клиенте обходом валидации или вручную) → серверный `ERR_INVALID_PAYLOAD`.
 - Файл, после парсинга которого извлечено < `MIN_EXTRACTED_TEXT_CHARS`, → `ERR_EMPTY_DOCUMENT`.
-- Файл, генерирующий > `MAX_CHUNKS_PER_GUIDEBOOK` чанков, → `ERR_PAYLOAD_TOO_LARGE`.
+- Файл, генерирующий > `MAX_CHUNKS_PER_GUIDEBOOK` чанков, → `ERR_TOO_MANY_CHUNKS`.
 - При успешной загрузке (первый раз): `Guidebook.create(name=<input>, ip_hash=...)` + привязка к Lead'у (`Lead.guidebook_id = new`); magic_link не меняется.
 - При успешной загрузке (replace, у Lead'а уже был Guidebook): по `EMAIL_GUIDEBOOK_CARDINALITY = 1:1_replace` старый Guidebook DELETE'ится (cascade chunks); новый создаётся и привязывается; magic_link не меняется.
 - После успешной загрузки экран `guidebook` reload'ится с обновлённым gb info; кнопка `Next` становится enabled.
@@ -526,10 +526,11 @@ AC ссылаются на параметры по символическому 
 
 **AC по классам:**
 - `ERR_INVALID_API_KEY`: UI просит ввести ключ заново; предыдущий ключ удаляется из state; фокус на поле ключа.
-- `ERR_PAYLOAD_TOO_LARGE`: сообщение содержит фактический лимит (`MAX_UPLOAD_SIZE` или `MAX_CHUNKS_PER_GUIDEBOOK`); экран `guidebook` остаётся, можно выбрать другой файл.
+- `ERR_PAYLOAD_TOO_LARGE`: сообщение содержит фактический байтовый лимит (`MAX_UPLOAD_SIZE`); экран `guidebook` остаётся, можно выбрать другой файл.
+- `ERR_TOO_MANY_CHUNKS`: документ дал больше `MAX_CHUNKS_PER_GUIDEBOOK` чанков; сообщение содержит лимит, экран `guidebook` остаётся.
 - `ERR_UNSUPPORTED_MEDIA_TYPE`: сообщение перечисляет поддерживаемые форматы из `ALLOWED_MIME_TYPES`.
 - `ERR_EMPTY_DOCUMENT`: сообщение указывает, что текст не извлечён, и предлагает альтернативу (другой файл / `Generate by template`).
-- `ERR_INVALID_TEMPLATE`: сообщение указывает конкретное поле и причину; форма шаблона остаётся заполнена данными пользователя.
+- `ERR_INVALID_PAYLOAD`: сообщение указывает конкретное поле и причину; форма шаблона остаётся заполнена данными пользователя.
 - `ERR_RATE_LIMIT`: сообщение содержит число секунд до повтора + scope (per `magic_link` или per `ip`); submit заблокирован на таймере; по истечении — активен без ручного refresh.
 - `ERR_SAMPLE_BUDGET_EXHAUSTED`: сообщение указывает время восстановления (`SAMPLE_BUDGET_RESET_AT`); sample-кнопки disabled; guidebook flow остаётся доступен.
 - `ERR_UPSTREAM_LLM`: один автоматический повтор через 2 с без действий пользователя; при повторной неудаче — ручной retry.
@@ -794,7 +795,7 @@ Sample-flow на серверном ключе (§1.3, US-01).
 |---|---|---|
 | `ERR_RATE_LIMIT` | 429 | `RATE_LIMIT_PER_IP` превышен |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | `SAMPLE_BUDGET_DAILY_CAP` достигнут (см. §4.5) |
-| `ERR_INVALID_TEMPLATE` | 400 | `len(message) > MAX_GUEST_MESSAGE_LENGTH` или пустое сообщение |
+| `ERR_INVALID_PAYLOAD` | 400 | `len(message) > MAX_GUEST_MESSAGE_LENGTH` или пустое сообщение |
 | `ERR_UPSTREAM_LLM` | 502 | sample-LLM (Haiku) вернул 5xx |
 | `ERR_INTERNAL` | 500 | прочие 5xx |
 
@@ -818,7 +819,7 @@ Sample-flow на серверном ключе (§1.3, US-01).
 | Код | HTTP | Условие |
 |---|---|---|
 | `ERR_RATE_LIMIT` | 429 | `RATE_LIMIT_PER_IP` превышен |
-| `ERR_INVALID_TEMPLATE` | 400 | email не проходит `EMAIL_REGEX` или превышает `EMAIL_MAX_LENGTH`; `flow` вне `LEAD_FLOW_VALUES` |
+| `ERR_INVALID_PAYLOAD` | 400 | email не проходит `EMAIL_REGEX` или превышает `EMAIL_MAX_LENGTH`; `flow` вне `LEAD_FLOW_VALUES` |
 | `ERR_INTERNAL` | 500 | Resend / DB сбой |
 
 **Side-effects:**
@@ -880,10 +881,11 @@ Upload гайдбука — обслуживает оба сценария: за
 |---|---|---|
 | `ERR_RATE_LIMIT` | 429 | `RATE_LIMIT_PER_IP` или `RATE_LIMIT_PER_MAGIC_LINK` |
 | `ERR_INVALID_MAGIC_LINK` | 401 | magic_link отсутствует / невалиден / истёк |
-| `ERR_PAYLOAD_TOO_LARGE` | 413 | `size > MAX_UPLOAD_SIZE` или `chunks > MAX_CHUNKS_PER_GUIDEBOOK` |
+| `ERR_PAYLOAD_TOO_LARGE` | 413 | `size > MAX_UPLOAD_SIZE` (байтовый размер файла) |
+| `ERR_TOO_MANY_CHUNKS` | 413 | `chunks > MAX_CHUNKS_PER_GUIDEBOOK` (число чанков) |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | MIME вне `ALLOWED_MIME_TYPES` |
 | `ERR_EMPTY_DOCUMENT` | 422 | извлечённый текст < `MIN_EXTRACTED_TEXT_CHARS` |
-| `ERR_INVALID_TEMPLATE` | 422 | `name` пустой |
+| `ERR_INVALID_PAYLOAD` | 422 | `name` пустой |
 | `ERR_INTERNAL` | 500 | парсер / embedder / DB сбой |
 
 **Side-effects:**
@@ -915,7 +917,7 @@ Real-flow ответ на сообщение гостя (§1.3, US-06).
 | `ERR_INVALID_MAGIC_LINK` | 401 | magic_link невалиден / истёк |
 | `ERR_NO_GUIDEBOOK` | 409 | у lead'а нет привязанного гайдбука (не загружен / удалён cleanup'ом) |
 | `ERR_INVALID_API_KEY` | 401 | Anthropic вернул 401 |
-| `ERR_INVALID_TEMPLATE` | 400 | `len(message) > MAX_GUEST_MESSAGE_LENGTH` / пустое |
+| `ERR_INVALID_PAYLOAD` | 400 | `len(message) > MAX_GUEST_MESSAGE_LENGTH` / пустое |
 | `ERR_UPSTREAM_LLM` | 502 | Anthropic вернул 429 / 5xx |
 | `ERR_INTERNAL` | 500 | embedder / DB сбой |
 
@@ -932,7 +934,7 @@ Real-flow ответ на сообщение гостя (§1.3, US-06).
 | `ERR_INVALID_MAGIC_LINK` | 401 | сообщение + переход на `entrypoint` |
 | `ERR_NO_GUIDEBOOK` | 409 | сообщение + переход на `guidebook` (загрузить/сгенерировать) |
 | `ERR_UPSTREAM_EMAIL` | 502 | сообщение + ручной retry capture |
-| `ERR_INVALID_TEMPLATE` | 400 | inline-сообщение у поля (с `details.field`) |
+| `ERR_INVALID_PAYLOAD` | 400 | inline-сообщение у поля (с `details.field`) |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | сообщение + список форматов |
 | `ERR_PAYLOAD_TOO_LARGE` | 413 | сообщение + фактический лимит |
 | `ERR_EMPTY_DOCUMENT` | 422 | сообщение + предложение Generate by template |
@@ -1211,11 +1213,11 @@ EMAIL_MAX_LENGTH = 254
 class Email:
     value: str
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:   # client-payload VO → DomainValidationError → 422 (§9.0/§9.8)
         if len(self.value) > EMAIL_MAX_LENGTH:
-            raise ValueError(f"Email: length > {EMAIL_MAX_LENGTH}")
+            raise DomainValidationError(f"Email: length > {EMAIL_MAX_LENGTH}", field="email", reason="too_long")
         if not EMAIL_REGEX.match(self.value):
-            raise ValueError("Email: invalid format")
+            raise DomainValidationError("Email: invalid format", field="email", reason="invalid_format")
 ```
 
 - Конкретный regex и значение длины — §10.7; обоснование выбора (упрощённый RFC 5322 + RFC 5321 hard limit) там же.
@@ -1282,9 +1284,14 @@ from enum import StrEnum, auto
 class LeadFlow(StrEnum):
     GUIDEBOOK = auto()
     SAMPLE = auto()
+
+    @classmethod
+    def _missing_(cls, value: object) -> LeadFlow:   # client-payload flow → 422, не stdlib ValueError
+        raise DomainValidationError(f"LeadFlow: unknown {value!r}", field="flow", reason="invalid_format")
 ```
 
 - `StrEnum` + `auto()` → значения `"guidebook"` / `"sample"` (lowercase имени члена), что 1:1 совпадает с DB `leads.flow TEXT` и `LEAD_FLOW_VALUES` (§3.0).
+- `_missing_` (вызывается на неизвестном значении) бросает `DomainValidationError` → use case оборачивает в 422 (§9.0); `LeadFlow(cmd.flow)` на call-site не меняется.
 - Использование: атрибут `Lead.flow`.
 
 #### 7.2.6 `GuidebookName`
@@ -1300,16 +1307,16 @@ GUIDEBOOK_NAME_MAX_LENGTH = 100  # зеркалит prod_hints.json property_nam
 class GuidebookName:
     value: str
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:   # client-payload VO → DomainValidationError → 422 (§9.0/§9.8)
         if not self.value.strip():
-            raise ValueError("GuidebookName: empty value")
+            raise DomainValidationError("GuidebookName: empty value", field="name", reason="empty")
         if len(self.value) > GUIDEBOOK_NAME_MAX_LENGTH:
-            raise ValueError(f"GuidebookName: length > {GUIDEBOOK_NAME_MAX_LENGTH}")
+            raise DomainValidationError(f"GuidebookName: length > {GUIDEBOOK_NAME_MAX_LENGTH}", field="name", reason="too_long")
 ```
 
 - Минимальные доменные инварианты: непустое значение (после `.strip()`) и длина ≤ 100. Значение хранится **как есть** (без trim); длина считается по сырой строке.
 - `max_length = 100` дублирует фронтовое правило `property_name.max_length` из `prod_hints.json` (§10.6) как backend-страховку (defense-in-depth: клиентскую валидацию можно обойти — US-04). `prod_hints.json` остаётся product source of truth (бэкенд его не читает — доставка через S3/CloudFront, §10.6); при изменении правила обновлять оба места. Мягко отклоняется от §10.6 («бэкенд не валидирует длины полей») — осознанная защита.
-- Использование: атрибут `Guidebook.name` (§7.3). На границе use-case строит VO из примитива `UploadGuidebookCmd.name: str` (§8.1); `ValueError "empty"` → `ERR_INVALID_TEMPLATE reason="empty"` (§10.8).
+- Использование: атрибут `Guidebook.name` (§7.3). На границе use-case строит VO из примитива `UploadGuidebookCmd.name: str` (§8.1); `DomainValidationError(reason="empty")` → `ERR_INVALID_PAYLOAD` (§10.8).
 
 ### 7.3 `Guidebook` (`domain/entities/guidebook.py`) — persistent
 
@@ -1518,11 +1525,11 @@ class GuestMessage:
 
     @classmethod
     def create(cls, text: str) -> GuestMessage:
-        # инвариант: 1 ≤ len(text) ≤ MAX_GUEST_MESSAGE_LENGTH
+        # инвариант: 1 ≤ len(text) ≤ MAX_GUEST_MESSAGE_LENGTH; client-payload → 422 (§9.0/§9.8)
         if not text:
-            raise ValueError("GuestMessage: empty text")
+            raise DomainValidationError("GuestMessage: empty text", field="message", reason="empty")
         if len(text) > MAX_GUEST_MESSAGE_LENGTH:
-            raise ValueError(f"GuestMessage: text > {MAX_GUEST_MESSAGE_LENGTH} chars")
+            raise DomainValidationError(f"GuestMessage: text > {MAX_GUEST_MESSAGE_LENGTH} chars", field="message", reason="too_long")
         return cls(text=text)
 ```
 
@@ -1632,7 +1639,7 @@ backend/
         guidebook_id.py, chunk_id.py, lead_id.py,
         magic_link.py, email.py, ip_hash.py,
         embedding.py, lead_flow.py
-      exceptions.py                            # доменные ошибки (если потребуются)
+      exceptions.py                            # DomainValidationError(ValueError) с field/reason (§9.0)
     application/
       dto/
         sample.py                              # SampleGenerateCmd, SampleGenerateResult
@@ -1732,6 +1739,7 @@ class CaptureLeadCmd:
     flow: str           # "guidebook" | "sample"; валидируется use case'ом
     ip_hash: str
     ua_short: str | None
+    honeypot: str = ""  # скрытое антибот-поле (§10.7); непустое → тихий отказ (см. §9.2)
 
 @dataclass(frozen=True)
 class ResolveMagicLinkCmd:
@@ -1891,22 +1899,25 @@ class ChunksRepo(Protocol):
     def list_for_guidebook(self, guidebook_id: GuidebookId) -> list[Chunk]: ...
     def bulk_add(self, chunks: list[Chunk]) -> None: ...
 
-class LeadsRepo(Protocol):
-    def get_by_id(self, id: LeadId) -> Lead | None: ...
-    def get_by_email(self, email: Email) -> Lead | None: ...
-    def get_by_magic_link(self, magic_link: MagicLink) -> Lead | None: ...
-    def add(self, lead: Lead) -> None: ...
-    def update(self, lead: Lead) -> None: ...                  # idempotent UPDATE: пишет текущее состояние lead целиком по lead.id
+class LeadsRepo(Protocol):                                     # Lead = aggregate holder (§9.0)
+    # *_for_update: SELECT ... FOR UPDATE первой операцией write-tx, лок до commit (read→decision→write)
+    def get_by_id_for_update(self, id: LeadId) -> Lead | None: ...                     # cleanup (§9.6)
+    def get_by_email_for_update(self, email: Email) -> Lead | None: ...                # capture upsert (§9.2)
+    def get_by_magic_link(self, magic_link: MagicLink) -> Lead | None: ...             # БЕЗ лока: pre-read до LLM/parse
+    def get_by_magic_link_for_update(self, magic_link: MagicLink) -> Lead | None: ...  # resolve/upload/generate write-tx
+    def add(self, lead: Lead) -> None: ...                     # capture (new email); unique(email) против гонки insert
+    def update(self, lead: Lead) -> None: ...                  # idempotent UPDATE целиком по lead.id (под холдер-локом)
     def list_expired(self, threshold: datetime, limit: int) -> list[Lead]: ...
-        # WHERE magic_link IS NOT NULL AND last_seen_at < threshold LIMIT limit; для cleanup (§9.6)
+        # WHERE magic_link IS NOT NULL AND last_seen_at < threshold LIMIT limit; cleanup candidate, БЕЗ лока (§9.6)
 
-class SampleBudgetRepo(Protocol):
-    def get_or_create(self, day: date) -> SampleBudgetState: ...
+class SampleBudgetRepo(Protocol):                             # day-row = holder (§9.1)
+    def get_or_create(self, day: date) -> SampleBudgetState: ...             # БЕЗ лока: pre-check (overshoot §10.2)
+    def get_or_create_for_update(self, day: date) -> SampleBudgetState: ...  # FOR UPDATE: post-usage RMW
     def save(self, state: SampleBudgetState) -> None: ...
 ```
 
 `silent_upsert_with_new_magic_link` (§3 US-02) реализуется в use case `CaptureLeadUseCase`:
-- `get_by_email(email)` → если есть, `lead.regenerate_magic_link(...)` + `repo.update(lead)`;
+- `get_by_email_for_update(email)` → если есть, `lead.regenerate_magic_link(...)` + `repo.update(lead)`;
 - если нет, `Lead.create(...)` + `repo.add(lead)`.
 
 UoW гарантирует атомарность.
@@ -2151,7 +2162,7 @@ class CleanupRateCountersUseCase:
 ```
 
 DTO в `application/dto/cleanup.py`:
-- `CleanupResult`: `expired_leads: int`, `deleted_guidebooks: int` (для логирования из §9.6);
+- `CleanupResult`: `expired_magic_links: int`, `deleted_guidebooks: int` (для логирования из §9.6);
 - `RateCountersCleanupResult`: `deleted_windows: int` (для логирования из §9.7).
 
 Оба use case'а живут в одной cleanup-Lambda (один EventBridge-тик → entry-point дёргает оба `execute()`); собираются в `bootstrap_cleanup.py` (§8.6).
@@ -2190,7 +2201,9 @@ class NotFoundError(ApplicationError):
         return {"resource": self.resource}
 
 class InvalidPayloadError(ApplicationError):
-    code = "ERR_INVALID_TEMPLATE"  # generic 400/422; details — field/reason
+    code = "ERR_INVALID_PAYLOAD"  # generic 400/422; details — field/reason
+    # (legacy-имя кода было ERR_INVALID_TEMPLATE; template-flow удалён §10.6, теперь это
+    #  общий код невалидного payload'а: пустой email/flow/name, honeypot и т.п.)
     def __init__(self, message: str = "", *, field: str | None = None,
                  reason: str | None = None) -> None:
         super().__init__(message)
@@ -2203,12 +2216,21 @@ class NoGuidebookAttachedError(ApplicationError):
     code = "ERR_NO_GUIDEBOOK"
 
 class PayloadTooLargeError(ApplicationError):
-    code = "ERR_PAYLOAD_TOO_LARGE"
+    code = "ERR_PAYLOAD_TOO_LARGE"  # ТОЛЬКО про байтовый размер файла (не про число чанков)
     def __init__(self, max_bytes: int, message: str = "") -> None:
         super().__init__(message)
         self.max_bytes = max_bytes
     def details_dict(self) -> dict[str, object]:
         return {"max_bytes": self.max_bytes}
+
+class TooManyChunksError(ApplicationError):
+    # размер файла может быть в норме, но число чанков превышает per-guidebook cap (§9.4)
+    code = "ERR_TOO_MANY_CHUNKS"
+    def __init__(self, max_chunks: int, message: str = "") -> None:
+        super().__init__(message)
+        self.max_chunks = max_chunks
+    def details_dict(self) -> dict[str, object]:
+        return {"max_chunks": self.max_chunks}
 
 class UnsupportedMediaTypeError(ApplicationError):
     code = "ERR_UNSUPPORTED_MEDIA_TYPE"
@@ -2261,7 +2283,7 @@ class UpstreamEmailError(ApplicationError):
 
 `interface/lambda_/response_envelope.py` мапит `ApplicationError → HTTP` по §5.8.
 
-Поверх классов лежит `payload_validation()` context manager (см. §9.0) — обёртка, конвертирующая `ValueError` из VO/entity-фабрик в `InvalidPayloadError`. Без неё пустой/невалидный примитив утечёт в `except Exception` handler'а → 500 вместо 422.
+Поверх классов — два context manager'а (см. §9.0), маппинг по **типу** доменной ошибки: `payload_validation()` ловит **только** `DomainValidationError` (client-payload VO/entity: `Email`/`LeadFlow`/`GuidebookName`/`GuestMessage`) → `InvalidPayloadError` 422, пробрасывая `field`/`reason` в `details` (§10.8); `magic_link_validation()` ловит `ValueError` от `MagicLink` → `InvalidMagicLinkError` 401. Обычный `ValueError` от internal-VO (`IpHash`/`Embedding`, формируются сервером/моделью) НЕ ловится → 500 — internal-инвариант, не client payload. `DomainValidationError` — подкласс `ValueError` (`domain.exceptions`, с `field`/`reason`).
 
 ### 8.5 `interface/lambda_/`
 
@@ -2436,35 +2458,42 @@ container: Container = _build()  # module-level singleton (выполняетс�
 | Импорты в сниппетах | опущены; типы — из §7/§8; все файлы — `from __future__ import annotations` |
 | Время | `datetime.now(tz=UTC)` inline; в entity-методах `touch()`/`regenerate_magic_link()`/`attach_guidebook()` `now` ставится внутри (§7.5) |
 | ID-генерация | `<EntityName>Id.new()` внутри `Entity.create()`; use case извне id не передаёт |
-| Конверсия примитив → VO | use case делает явно (`Email(cmd.email)`, `MagicLink(cmd.magic_link)`, `GuidebookId.from_str(cmd.guidebook_id)`, `IpHash(cmd.ip_hash)`) **под `_payload_validation()` context manager** — см. ниже |
+| Конверсия примитив → VO | use case делает явно. Client-payload (`Email`/`LeadFlow`/`GuidebookName`/`GuestMessage`) — под `payload_validation()`; `MagicLink` — под `magic_link_validation()`; internal (`IpHash`) — без обёртки (`ValueError` → 500). См. ниже |
 | Конверсия VO → примитив для Result | `str(entity.id)`, `entity.created_at.isoformat()`; SecretStr из DTO в Result никогда не уходит |
-| Rate-check | `rate.check_and_increment(scope, subject)` — **до** открытия UoW для scope=IP; для scope=MAGIC_LINK после успешного resolve внутри UoW; бросает `RateLimitExceededError` |
+| Rate-check | `rate.check_and_increment(scope, subject)` бросает `RateLimitExceededError`. scope=IP — **первым шагом, в собственной короткой `with uow.transaction():`** (коммитит независимо → попытка учтена даже если бизнес-tx позже откатится); scope=MAGIC_LINK — после успешного resolve **внутри бизнес-UoW** (откатывается вместе с ней) |
+| Атомарность через UoW | контракт application-слоя: **любая запись в БД идёт внутри `with uow.transaction():`** — атомарность выражается UoW, а не «скрытым» commit'ом реализации. Поэтому даже одиночный rate-инкремент обёрнут в транзакцию (см. Rate-check) |
 | UoW boundary | один `with uow.transaction():` на write-фазу; CPU-bound этапы (parse/chunk/embed) и LLM-вызовы — **вне** транзакции; use case может открывать несколько UoW (см. §9.1, §9.4) |
+| Locking / isolation | **READ COMMITTED**. `Lead` — aggregate **holder**: read→decision→write по lead/его guidebook/chunks берёт `SELECT … FOR UPDATE` (`*_for_update`-метод) **первой операцией** write-tx и держит лок до commit → конкурентные писатели сериализуются; дети (guidebook/chunks) пишутся/удаляются под холдер-локом без своих локов (`delete` guidebook = plain DELETE+cascade). `SampleBudgetState` — отдельный holder (post-update под `get_or_create_for_update`). Чтение без лока (pre-read до LLM/parse) — снимок; результат, уходящий наружу (generate gather), ре-валидируется под холдер-локом перед ответом (§9.5). Лок **не** держится через LLM-вызов |
 | Repo-методы | принимают entity/VO (§8.2.5); explicit save: рассинхрон между mutated entity и DB пишется только через явный `repo.update(entity)`. **ORM/identity-map/auto-flush не используются** — локальные присваивания (`guidebook = None` после TTL-проверки) ничего не пишут в DB |
-| Исключения | use case бросает только подклассы `ApplicationError` (§8.4). Любой `ValueError` из VO/entity-фабрик ловится и переоборачивается в `InvalidPayloadError` через `_payload_validation()`; иначе он уйдёт в `except Exception` handler'а и пользователь получит 500 вместо 422 |
+| Исключения | use case бросает только подклассы `ApplicationError` (§8.4). **Тип доменной ошибки кодирует статус:** client-payload VO/entity (`Email`/`LeadFlow`/`GuidebookName`/`GuestMessage`) → `DomainValidationError` → `payload_validation()` → 422; internal VO (`IpHash`, `Embedding`, формируются сервером/моделью) → обычный `ValueError` → не ловится → 500; `MagicLink` → `ValueError` под `magic_link_validation()` → 401 `InvalidMagicLinkError`. `payload_validation()` ловит **только** `DomainValidationError` |
 | Settings | `self.settings.<KEY>` — поля типизированы в `config/config.py`; pydantic-валидаторы фиксируют инварианты (`max_output_tokens > 0`, непустые секретные ключи), application-слой повторно не проверяет |
 
-**Утилита `_payload_validation()` (`application/exceptions/__init__.py`):**
+**Утилиты (`application/exceptions/__init__.py`):**
 
 ```python
-from contextlib import contextmanager
-from collections.abc import Iterator
+@contextmanager
+def payload_validation() -> Iterator[None]:     # client-payload VO/entity → 422
+    try:
+        yield
+    except DomainValidationError as e:          # ловим ТОЛЬКО её; field/reason → details (§10.8)
+        raise InvalidPayloadError(str(e), field=e.field, reason=e.reason) from e
+    # обычный ValueError НЕ ловится → пробрасывается → 500 (internal-инвариант, не client payload)
 
-contextmanager
-def payload_validation() -> Iterator[None]:
+@contextmanager
+def magic_link_validation() -> Iterator[None]:  # пустой/битый токен → 401
     try:
         yield
     except ValueError as e:
-        raise InvalidPayloadError(str(e)) from e
+        raise InvalidMagicLinkError() from e
 ```
 
-Используется в каждом use case вокруг блока примитив → VO:
+Используется в каждом use case вокруг блока примитив → VO (internal-VO — вне обёрток):
 
 ```python
 with payload_validation():
     email = Email(cmd.email)
     flow = LeadFlow(cmd.flow)
-    ip_hash = IpHash(cmd.ip_hash)
+ip_hash = IpHash(cmd.ip_hash)        # internal: ValueError → 500, вне payload_validation
 ```
 
 `InvalidPayloadError.__init__(message)` сохраняет техническую формулировку для `details.field`-маппинга (§5.8, §10.8). В user-facing-ответе message санизируется (`response_envelope` срезает technical text если содержит email/PII).
@@ -2482,8 +2511,9 @@ Subject scope=MAGIC_LINK — `str(lead.id)`, а не сам токен: counter 
 
 ```python
 def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
-    # 1. rate-limit
-    self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
+    # 1. rate-limit (scope=IP в собственной короткой транзакции — см. §9.0 Атомарность)
+    with self.uow.transaction():
+        self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
 
     # 2. примитив → domain (с обёрткой ValueError → InvalidPayloadError)
     with payload_validation():
@@ -2522,7 +2552,7 @@ def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
     # 6. post-увеличение бюджета
     dollars = self._estimate_cost(reply.output_tokens)  # inline по prices в Settings
     with self.uow.transaction():
-        state = self.sample_budget_repo.get_or_create(today)
+        state = self.sample_budget_repo.get_or_create_for_update(today)   # holder-lock: usage не теряется
         state.add_usage(reply.output_tokens, dollars)
         self.sample_budget_repo.save(state)
 
@@ -2538,19 +2568,24 @@ def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
 
 ```python
 def execute(self, cmd: CaptureLeadCmd) -> None:
-    # 1. rate-limit (только scope=ip — magic_link на входе нет)
-    self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
+    # 0. honeypot — тихий отказ ДО любых side-effect'ов (§10.7); generic-сообщение
+    if cmd.honeypot:
+        raise InvalidPayloadError(reason="honeypot")
+
+    # 1. rate-limit (только scope=ip — magic_link на входе нет); своя транзакция (§9.0)
+    with self.uow.transaction():
+        self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
 
     # 2. примитив → VO
     with payload_validation():
         email = Email(cmd.email)
         flow = LeadFlow(cmd.flow)
-        ip_hash = IpHash(cmd.ip_hash)
+    ip_hash = IpHash(cmd.ip_hash)        # internal: ValueError → 500, вне payload_validation
 
     # 3. silent_upsert + email — в одной UoW
     new_magic_link: MagicLink = self.magic_link_gen.generate()
     with self.uow.transaction():
-        existing: Lead | None = self.leads_repo.get_by_email(email)
+        existing: Lead | None = self.leads_repo.get_by_email_for_update(email)   # holder-lock
         if existing is None:
             lead = Lead.create(
                 email=email,
@@ -2581,16 +2616,17 @@ def execute(self, cmd: CaptureLeadCmd) -> None:
 
 ```python
 def execute(self, cmd: ResolveMagicLinkCmd) -> ResolveMagicLinkResult:
-    # 1. rate per-ip (до resolve — защита от scanning)
-    self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
+    # 1. rate per-ip (до resolve — защита от scanning); своя транзакция (§9.0)
+    with self.uow.transaction():
+        self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
 
     # 2. resolve
-    with payload_validation():
-        magic_link = MagicLink(cmd.magic_link)         # cmd.magic_link — SecretStr
+    with magic_link_validation():
+        magic_link = MagicLink(cmd.magic_link)         # пустой/битый токен → 401
     with self.uow.transaction():
-        lead: Lead | None = self.leads_repo.get_by_magic_link(magic_link)
-        if lead is None or lead.magic_link is None:
-            raise InvalidMagicLinkError()
+        lead: Lead | None = self.leads_repo.get_by_magic_link_for_update(magic_link)   # holder-lock
+        if lead is None:                                # get_by_magic_link матчит по токену →
+            raise InvalidMagicLinkError()               # magic_link заведомо не None
 
         # 3. rate per-magic_link — только после успешного resolve; subject = str(lead.id), не token
         self.rate.check_and_increment(RateLimitScope.MAGIC_LINK, str(lead.id))
@@ -2599,10 +2635,10 @@ def execute(self, cmd: ResolveMagicLinkCmd) -> ResolveMagicLinkResult:
         guidebook: Guidebook | None = (
             self.guidebooks_repo.get(lead.guidebook_id) if lead.guidebook_id else None
         )
-        # TTL-soft: локальное обнуление переменной для возврата null UI;
-        # repo НЕ вызывается (explicit save, см. §9.0) — DB-строка guidebooks не трогается,
-        # hard-delete будет на cleanup-Lambda (§9.6).
-        if guidebook and self._expired(guidebook):
+        # TTL-soft: если lead неактивен дольше TTL — локальное обнуление для возврата null UI;
+        # сигнал — Lead.last_seen_at (§10.1), проверяется ДО touch(); repo НЕ вызывается
+        # (explicit save §9.0), hard-delete будет на cleanup-Lambda (§9.6).
+        if guidebook and self._expired(lead):
             guidebook = None
 
         # 5. bump last_seen_at
@@ -2611,14 +2647,16 @@ def execute(self, cmd: ResolveMagicLinkCmd) -> ResolveMagicLinkResult:
 
     return ResolveMagicLinkResult(
         email=lead.email.value,
-        flow=str(lead.flow),                            # StrEnum.value
+        flow=lead.flow.value,                           # LeadFlow.value (StrEnum)
         guidebook_id=str(guidebook.id) if guidebook else None,
-        guidebook_name=guidebook.name if guidebook else None,
+        guidebook_name=guidebook.name.value if guidebook else None,   # GuidebookName VO → str
         guidebook_created_at=guidebook.created_at.isoformat() if guidebook else None,
     )
 
-def _expired(self, guidebook: Guidebook) -> bool:
-    return datetime.now(tz=UTC) - guidebook.last_accessed_at > self.settings.guidebook_ttl
+def _expired(self, lead: Lead) -> bool:
+    # сигнал TTL — Lead.last_seen_at (§10.1), НЕ Guidebook.last_accessed_at (аналитика,
+    # бампится только на /api/generate); вызывать ДО lead.touch()
+    return datetime.now(tz=UTC) - lead.last_seen_at > self.settings.magic_link_ttl
 ```
 
 Заметки:
@@ -2629,83 +2667,96 @@ def _expired(self, guidebook: Guidebook) -> bool:
 
 ```python
 def execute(self, cmd: UploadGuidebookCmd) -> IngestionResult:
-    # 1. rate scope=IP
-    self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
+    # 1. rate scope=IP (своя транзакция, §9.0)
+    with self.uow.transaction():
+        self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
 
-    # 2. валидации до парсинга (дёшево, не трогаем DB)
+    # 2. byte-size guard (min/max) до парсинга (дёшево, не трогаем DB)
     if len(cmd.file_bytes) > self.settings.max_upload_size_bytes:
         raise PayloadTooLargeError(max_bytes=self.settings.max_upload_size_bytes)
+    if len(cmd.file_bytes) < self.settings.min_upload_size_bytes:
+        raise EmptyDocumentError()
     if cmd.mime_type not in self.settings.allowed_mime_types:
         raise UnsupportedMediaTypeError(allowed=sorted(self.settings.allowed_mime_types))
 
-    # 3. resolve magic_link
+    # 3. примитив → VO (имя тоже здесь: GuidebookName бросает DomainValidationError
+    #    reason="empty"/"too_long" → payload_validation → 422; отдельной проверки name нет)
+    with magic_link_validation():
+        magic_link = MagicLink(cmd.magic_link)         # пустой/битый токен → 401
     with payload_validation():
-        magic_link = MagicLink(cmd.magic_link)
-        ip_hash = IpHash(cmd.ip_hash)
+        name = GuidebookName(cmd.name)                 # DomainValidationError reason=empty/too_long → 422
+    ip_hash = IpHash(cmd.ip_hash)                       # internal: ValueError → 500
+
+    # 4. resolve magic_link
     with self.uow.transaction():
         lead: Lead | None = self.leads_repo.get_by_magic_link(magic_link)
-        if lead is None or lead.magic_link is None:
+        if lead is None:
             raise InvalidMagicLinkError()
         self.rate.check_and_increment(RateLimitScope.MAGIC_LINK, str(lead.id))
 
-    # 4. CPU-bound (вне транзакции)
+    # 5. CPU-bound (вне транзакции)
     text: str = self.parser.parse(cmd.file_bytes, cmd.mime_type)
     if len(text) < self.settings.min_extracted_text_chars:
         raise EmptyDocumentError()
     chunks_text: list[str] = self.chunker.chunk(text)
+    # chunk-count guard (min/max). Длина чанка в токенах гарантируется контрактом TextChunker
+    # (§8.2.1): окно ≤ max input эмбеддера (≤512, §2.5) — в use case НЕ перепроверяется (нет токенайзера).
     if len(chunks_text) > self.settings.max_chunks_per_guidebook:
-        # chunk-count branch: max_bytes — лимит загрузки (UI: «файл меньше»)
-        raise PayloadTooLargeError(max_bytes=self.settings.max_upload_size_bytes)
+        raise TooManyChunksError(max_chunks=self.settings.max_chunks_per_guidebook)
+    if len(chunks_text) < self.settings.min_chunks_per_guidebook:
+        raise EmptyDocumentError()
     embeddings: list[Embedding] = self.embedder.embed_many(chunks_text)
 
-    # 5. построить domain-объекты
-    if not cmd.name:
-        raise InvalidPayloadError("name: пустой")
-    guidebook = Guidebook.create(name=cmd.name, ip_hash=ip_hash)
+    # 6. построить domain-объекты
+    guidebook = Guidebook.create(name=name, ip_hash=ip_hash)
     new_chunks: list[Chunk] = [
         Chunk.create(guidebook_id=guidebook.id, ordinal=i, text=t, embedding=e)
-        for i, (t, e) in enumerate(zip(chunks_text, embeddings))
+        for i, (t, e) in enumerate(zip(chunks_text, embeddings, strict=True))
     ]
 
-    # 6. write-фаза в одной UoW
+    # 7. write-фаза в одной UoW
     with self.uow.transaction():
-        # повторный SELECT lead'а: между resolve (шаг 3) и сейчас прошёл CPU-bound;
-        # lead мог быть инвалидирован cleanup'ом — see-condition отлавливается тут
-        lead = self.leads_repo.get_by_magic_link(magic_link)
-        if lead is None or lead.magic_link is None:
+        # повторный SELECT lead'а: между resolve (шаг 4) и сейчас прошёл CPU-bound;
+        # lead мог быть инвалидирован cleanup'ом — race отлавливается тут
+        lead = self.leads_repo.get_by_magic_link_for_update(magic_link)   # holder-lock
+        if lead is None:
             raise InvalidMagicLinkError()
-        if lead.guidebook_id is not None:
-            self.guidebooks_repo.delete(lead.guidebook_id)   # CASCADE chunks (§4.3)
+        # add new → repoint → delete old (§9.0): lead не указывает транзиентно на отсутствующий gb;
+        # старый удаляется последним, под холдер-локом (plain DELETE+cascade, своего лока нет)
+        old_guidebook_id = lead.guidebook_id
         self.guidebooks_repo.add(guidebook)
         self.chunks_repo.bulk_add(new_chunks)
         lead.attach_guidebook(guidebook.id)                  # last_seen_at внутри (§7.5)
         self.leads_repo.update(lead)
+        if old_guidebook_id is not None:
+            self.guidebooks_repo.delete(old_guidebook_id)    # CASCADE chunks (§4.3)
 
     return IngestionResult(
         guidebook_id=str(guidebook.id),
-        name=guidebook.name,
+        name=guidebook.name.value,
         created_at=guidebook.created_at.isoformat(),
     )
 ```
 
 Заметки:
-- Двойной resolve (шаг 3 + шаг 6) — компромисс между «не держать соединение во время CPU-bound» и «защита от race с cleanup».
+- Двойной resolve (шаг 4 + шаг 7) — компромисс между «не держать соединение во время CPU-bound» и «защита от race с cleanup».
 - `guidebook.id` генерируется в `Guidebook.create()` (§7.3); `Chunk.id` — в `Chunk.create()` (§7.4); use case id не «протаскивает» снаружи.
 
 ### 9.5 `GenerateResponseUseCase.execute` (§6.5, POST `/api/generate`)
 
 ```python
 def execute(self, cmd: GenerateResponseCmd) -> GenerateResponseResult:
-    # 1. rate scope=IP
-    self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
+    # 1. rate scope=IP (своя транзакция, §9.0)
+    with self.uow.transaction():
+        self.rate.check_and_increment(RateLimitScope.IP, cmd.ip_hash)
 
     # 2. resolve magic_link → lead → его guidebook (guidebook_id в DTO НЕТ:
     #    привязанный гайдбук однозначно определяется magic_link'ом)
-    with payload_validation():
-        magic_link = MagicLink(cmd.magic_link)
-    with self.uow.transaction():
-        lead = self.leads_repo.get_by_magic_link(magic_link)
-        if lead is None or lead.magic_link is None:
+    with magic_link_validation():
+        magic_link = MagicLink(cmd.magic_link)         # пустой/битый токен → 401
+    with self.uow.transaction():                       # gather: чтение БЕЗ лока (лок нельзя держать
+        lead = self.leads_repo.get_by_magic_link(magic_link)   # через LLM); снимок ре-валидируется в шаге 6
+        if lead is None:
             raise InvalidMagicLinkError()
         if lead.guidebook_id is None:
             raise NoGuidebookAttachedError()            # пользователь ещё не загрузил guidebook
@@ -2739,12 +2790,20 @@ def execute(self, cmd: GenerateResponseCmd) -> GenerateResponseResult:
     # LLM-401 (BYOK) → InvalidApiKeyError; LLM-429 → UpstreamLLMError (отдельная семантика
     # от внутреннего rate-limit, см. §9.8); LLM-5xx → UpstreamLLMError.
 
-    # 6. bump timestamps
+    # 6. re-validate под холдер-локом + bump timestamps. Снимок шага 2 устарел после LLM: guidebook
+    #    мог быть заменён (upload §9.4) / удалён (cleanup §9.6). guidebook'и immutable-by-id (replace =
+    #    новый id) ⇒ совпадение id означает «контент актуален»; иначе reject, не отдаём устаревший ответ.
     with self.uow.transaction():
-        guidebook.touch()                               # last_accessed_at (§7.3)
-        lead.touch()                                    # last_seen_at (§7.5)
-        self.guidebooks_repo.update(guidebook)
-        self.leads_repo.update(lead)
+        fresh_lead = self.leads_repo.get_by_magic_link_for_update(magic_link)   # holder-lock
+        if fresh_lead is None or fresh_lead.guidebook_id != guidebook.id:
+            raise NoGuidebookAttachedError()            # истёк / заменён / удалён during LLM
+        fresh_guidebook = self.guidebooks_repo.get(guidebook.id)
+        if fresh_guidebook is None:
+            raise NoGuidebookAttachedError()
+        fresh_lead.touch()                              # last_seen_at (§7.5)
+        fresh_guidebook.touch()                         # last_accessed_at (§7.3)
+        self.leads_repo.update(fresh_lead)
+        self.guidebooks_repo.update(fresh_guidebook)
 
     return GenerateResponseResult(response_text=reply.text)
 ```
@@ -2753,6 +2812,7 @@ def execute(self, cmd: GenerateResponseCmd) -> GenerateResponseResult:
 - Поле `guidebook_id` в `GenerateResponseCmd` отсутствует: гайдбук однозначно определяется `lead.guidebook_id` после resolve. UI не передаёт ничего избыточного; ownership-check сводится к проверке `lead.guidebook_id IS NOT NULL`.
 - `cmd.byok` нигде не пишется в logger/repo/Settings — только аргумент `LLMClient.generate`. См. US-06.
 - Объединение `UPDATE guidebooks` + `UPDATE leads` в один SQL-statement (vs два repo-вызова в одной UoW) — задача repo-реализации; commit один.
+- **Stale-read — устранён re-check'ом под локом.** Первая UoW (resolve + gather) читает `lead`/`guidebook`/`chunks` **без лока** — лок нельзя держать через LLM-вызов, поэтому между gather и ответом guidebook мог быть заменён concurrent upload'ом (§9.4) или удалён cleanup'ом (§9.6). Чтобы не отдать ответ по устаревшему снимку, **финальная (write) UoW под холдер-локом** перечитывает lead (`get_by_magic_link_for_update`) и **сверяет** `fresh_lead.guidebook_id == guidebook.id` (guidebook'и immutable-by-id — replace создаёт новый id, поэтому совпадение id ⇒ отвечавший контент всё ещё привязан); при mismatch / удалении / истёкшем lead'е — `raise NoGuidebookAttachedError` вместо устаревшего ответа (дополняет inline-пометку `# FK race с cleanup`: это её complementary replace-гонка). **Общий принцип для чтений без `*_for_update`** (этот gather; upload pre-check §9.4; `list_expired` §9.6): чтение — снимок; если производный результат уходит наружу, его ре-валидируют под холдер-локом перед коммитом/ответом.
 
 ### 9.6 `CleanupExpiredUseCase.execute` (cleanup-Lambda, §4.7)
 
@@ -2761,12 +2821,12 @@ def execute(self, cmd: GenerateResponseCmd) -> GenerateResponseResult:
 ```python
 @dataclass(frozen=True)
 class CleanupResult:
-    expired_leads: int
+    expired_magic_links: int
     deleted_guidebooks: int
 
 def execute(self) -> CleanupResult:
-    threshold = datetime.now(tz=UTC) - self.settings.guidebook_ttl
-    expired_leads = 0
+    threshold = datetime.now(tz=UTC) - self.settings.magic_link_ttl
+    expired_magic_links = 0
     deleted_guidebooks = 0
 
     while True:
@@ -2783,9 +2843,10 @@ def execute(self) -> CleanupResult:
         # 2. для каждого lead'а — отдельная UoW, чтобы один сбой не откатывал весь батч
         for lead in batch:
             with self.uow.transaction():
-                # re-check внутри транзакции: между чтением батча и обработкой
-                # пользователь мог войти по magic_link (touch обновил last_seen_at).
-                fresh = self.leads_repo.get_by_id(lead.id)
+                # holder-lock + re-check: lead перечитывается под FOR UPDATE первой операцией tx,
+                # лок держится до commit → конкурентный touch (/resolve, /generate) не вклинится
+                # между re-check и expire (per-lead, краткий; не через весь батч — §9.0).
+                fresh = self.leads_repo.get_by_id_for_update(lead.id)
                 if fresh is None:
                     continue
                 if fresh.last_seen_at >= threshold:
@@ -2807,13 +2868,13 @@ def execute(self) -> CleanupResult:
                     dirty = True
                 if fresh.magic_link is not None:
                     fresh.expire_magic_link()                         # §7.5: magic_link := None
-                    expired_leads += 1
+                    expired_magic_links += 1
                     dirty = True
                 if dirty:
                     self.leads_repo.update(fresh)
 
     return CleanupResult(
-        expired_leads=expired_leads,
+        expired_magic_links=expired_magic_links,
         deleted_guidebooks=deleted_guidebooks,
     )
 ```
@@ -2821,7 +2882,7 @@ def execute(self) -> CleanupResult:
 Заметки:
 - Cleanup `rate_limit_counters` (§4.7) — отдельный use case `CleanupRateCountersUseCase` (§9.7), последовательный вызов после `CleanupExpiredUseCase` в той же cleanup-Lambda.
 - `cleanup_batch_size`, период EventBridge — Settings/Terraform.
-- Счётчики `expired_leads` / `deleted_guidebooks` независимы: для lead'а без guidebook'а (capture без последующего upload) тик инкрементит только `expired_leads`; для дангляющего guidebook'а (если бы такой образовался) — только `deleted_guidebooks`.
+- Счётчики `expired_magic_links` / `deleted_guidebooks` независимы: для lead'а без guidebook'а (capture без последующего upload) тик инкрементит только `expired_magic_links`; для дангляющего guidebook'а (если бы такой образовался) — только `deleted_guidebooks`.
 - ⚠ Race: если пользователь успел зайти между чтением батча (шаг 1) и проверкой во вложенной UoW (шаг 2), `fresh.last_seen_at >= threshold` пропускает удаление — корректно, magic_link продлевается.
 - Cleanup-Lambda не использует `interface/lambda_/handler.py` (нет HTTP-event'а); entry-point вызывает `container.cleanup_expired.execute()` напрямую и логирует `CleanupResult`. Маппинг ошибок в HTTP не нужен; любое исключение пишется в CloudWatch и cleanup перезапускается следующим тиком.
 
@@ -2847,7 +2908,7 @@ def execute(self) -> RateCountersCleanupResult:
 - DELETE — set-based, без батчинга: окна короткие (~минуты), кардинальность за период между cleanup-тиками ограничена.
 - Одна транзакция на весь DELETE — допустимо: не блокирует ничего за рамками `rate_limit_counters`.
 - ⚠ Race с конкурентным `check_and_increment`: новые INSERT'ы используют окна с `window_start >= threshold` (т.е. свежие), поэтому DELETE не удалит активные строки. Lock-конкуренция возможна, но в FW-rate-limit'е она минимальна (короткие транзакции).
-- Cleanup-Lambda entry-point вызывает оба use case'а последовательно: `CleanupExpiredUseCase` → `CleanupRateCountersUseCase`; общий лог `{"expired_leads": ..., "deleted_guidebooks": ..., "deleted_windows": ...}`. Перепутывание ошибок не страшно: сбой одного use case'а не должен блокировать другой (entry-point ловит exception от первого, логирует, запускает второй).
+- Cleanup-Lambda entry-point вызывает оба use case'а последовательно: `CleanupExpiredUseCase` → `CleanupRateCountersUseCase`; общий лог `{"expired_magic_links": ..., "deleted_guidebooks": ..., "deleted_windows": ...}`. Перепутывание ошибок не страшно: сбой одного use case'а не должен блокировать другой (entry-point ловит exception от первого, логирует, запускает второй).
 
 ### 9.8 Cross-cutting
 
@@ -2855,24 +2916,24 @@ def execute(self) -> RateCountersCleanupResult:
 
 | Источник | Триггер | Подкласс ApplicationError | HTTP (§5.8) |
 |---|---|---|---|
-| `Email(...)` `ValueError` | Не прошёл `EMAIL_REGEX` / превышен `EMAIL_MAX_LENGTH` | `InvalidPayloadError` | 422 ERR_INVALID_TEMPLATE |
-| `LeadFlow(...)` `ValueError` | flow ∉ `LEAD_FLOW_VALUES` | `InvalidPayloadError` | 422 |
-| `IpHash(...)` / `MagicLink(...)` `ValueError` | пустое / битое значение | `InvalidPayloadError` | 422 |
-| `GuestMessage.create(...)` `ValueError` | пустой / > MAX_GUEST_MESSAGE_LENGTH | `InvalidPayloadError` | 422 |
-| пустой `cmd.name` в `UploadGuidebookCmd` | `InvalidPayloadError` | 422 ERR_INVALID_TEMPLATE | |
+| `Email` / `LeadFlow` / `GuestMessage.create` / `GuidebookName` `DomainValidationError` | client-payload VO/entity невалиден (`field`/`reason`: email format, flow ∉ values, message/name empty/too_long) | `InvalidPayloadError` (via `payload_validation`) | 422 ERR_INVALID_PAYLOAD |
+| `IpHash` / `Embedding` plain `ValueError` | internal-инвариант (sha256 сервером / вывод модели), НЕ client payload → не ловится | — | 500 ERR_INTERNAL |
+| `MagicLink` `ValueError` | пустой / битый токен (via `magic_link_validation`) | `InvalidMagicLinkError` | 401 ERR_INVALID_MAGIC_LINK |
+| `cmd.honeypot` непустой | антибот (§10.7) | `InvalidPayloadError` (`reason="honeypot"`) | 422 ERR_INVALID_PAYLOAD |
 | `RateLimiter.check_and_increment` | счётчик исчерпан | `RateLimitExceededError` | 429 ERR_RATE_LIMIT |
 | `SampleBudgetState.is_exhausted == True` | дневной cap | `SampleBudgetExhaustedError` | 429 ERR_SAMPLE_BUDGET_EXHAUSTED |
-| `LeadsRepo.get_by_magic_link` → None / `lead.magic_link is None` | токен невалидный/истёк | `InvalidMagicLinkError` | 401 ERR_INVALID_MAGIC_LINK |
+| `LeadsRepo.get_by_magic_link` → None | токен невалидный/истёк (cleanup обнулил magic_link → SELECT по токену не матчит) | `InvalidMagicLinkError` | 401 ERR_INVALID_MAGIC_LINK |
 | `lead.guidebook_id is None` / `guidebooks_repo.get → None` | гайдбук не загружен / удалён cleanup'ом | `NoGuidebookAttachedError` | 409 ERR_NO_GUIDEBOOK |
-| `len(file_bytes) > MAX_UPLOAD_SIZE` или `len(chunks) > MAX_CHUNKS_PER_GUIDEBOOK` | размер | `PayloadTooLargeError` | 413 ERR_PAYLOAD_TOO_LARGE |
+| `len(file_bytes) > MAX_UPLOAD_SIZE` | размер файла | `PayloadTooLargeError` | 413 ERR_PAYLOAD_TOO_LARGE |
+| `len(chunks) > MAX_CHUNKS_PER_GUIDEBOOK` | число чанков | `TooManyChunksError` | 413 ERR_TOO_MANY_CHUNKS |
 | `mime_type ∉ ALLOWED_MIME_TYPES` | формат | `UnsupportedMediaTypeError` | 415 ERR_UNSUPPORTED_MEDIA_TYPE |
-| `len(text) < MIN_EXTRACTED_TEXT_CHARS` после parse | пустой PDF/DOCX | `EmptyDocumentError` | 422 ERR_EMPTY_DOCUMENT |
+| `len(file_bytes) < MIN_UPLOAD_SIZE` / `len(text) < MIN_EXTRACTED_TEXT_CHARS` / `len(chunks) < MIN_CHUNKS_PER_GUIDEBOOK` | пустой / деградировавший документ | `EmptyDocumentError` | 422 ERR_EMPTY_DOCUMENT |
 | `LLMClient.generate` upstream 401 (BYOK) | невалидный BYOK | `InvalidApiKeyError` | 401 ERR_INVALID_API_KEY |
 | `LLMClient.generate` upstream 401 (серверный ключ, sample-flow) | misconfiguration | `UpstreamLLMError` | 502 ERR_UPSTREAM_LLM |
 | `LLMClient.generate` upstream 429/5xx | upstream rate/outage | `UpstreamLLMError` | 502 ERR_UPSTREAM_LLM |
 | `EmailSender.send_magic_link` upstream error | Resend down | `UpstreamEmailError` | 502 ERR_UPSTREAM_EMAIL |
 
-Конверсия `ValueError` из VO/entity-фабрик в `InvalidPayloadError` делается в use case через `payload_validation()` context manager (§9.0). Любой `ValueError`, не обёрнутый этим CM, утечёт в `except Exception` handler'а и пользователь получит 500.
+Тип доменной ошибки кодирует статус (§9.0): `DomainValidationError` (client-payload VO/entity) → `payload_validation()` → 422; `MagicLink` `ValueError` → `magic_link_validation()` → 401; обычный `ValueError` (internal VO — `IpHash`/`Embedding`) НЕ ловится → 500. Незавёрнутый client-payload `ValueError` стал бы 500 — поэтому client-VO бросают именно `DomainValidationError`.
 
 #### Rate-check ordering
 
@@ -2956,14 +3017,14 @@ ADR фиксируют принятые архитектурные решени�
 - Sliding-window сигнал — вариант **γ**: `Lead.last_seen_at` обновляется в use case'ах §9.3 (resolve), §9.4 (upload), §9.5 (generate) через `Lead.touch()` или внутри `regenerate_magic_link()` / `attach_guidebook()` (уже есть в §7.5). `Guidebook.last_accessed_at` остаётся для аналитики (touch только на `/api/generate`), **не** используется как сигнал TTL.
 - Cleanup-частота — вариант **III**: EventBridge schedule `cron(30 0 * * ? *)` (00:30 UTC), один Lambda-entry запускает `CleanupExpiredUseCase` + `CleanupRateCountersUseCase` последовательно (§9.6, §9.7).
 - Конфигурация (отдельно от кода):
-  - `GUIDEBOOK_TTL_DAYS` — env-var Lambda runtime'а (значение задаёт Terraform на этапе deploy, §2.6); читается через pydantic-settings как `Settings.guidebook_ttl_days`. В Python НЕТ default'а — отсутствие env-var → fail-fast при cold start (нет «случайного» fallback'а на код-уровне).
+  - `MAGIC_LINK_TTL_DAYS` — env-var Lambda runtime'а (значение задаёт Terraform на этапе deploy, §2.6); читается через pydantic-settings как `Settings.magic_link_ttl_days` и отдаётся use case'ам как property `magic_link_ttl: timedelta`. В Python НЕТ default'а — отсутствие env-var → fail-fast при cold start (нет «случайного» fallback'а на код-уровне). (Символическое имя параметра в §3.0 — по-прежнему `GUIDEBOOK_TTL`; Settings-поле названо по сущности, что истекает — magic_link.)
   - Cleanup-частота — атрибут `schedule_expression` в Terraform-ресурсе `aws_cloudwatch_event_rule` (§2.6), значение `cron(30 0 * * ? *)`. Python-код о расписании НЕ знает (Lambda триггерится извне); ничего соответствующего в `Settings` нет.
 
 **Последствия.**
 
 - §3.0 «Источник» для `GUIDEBOOK_TTL` — `§10.1 (30 дней)`.
 - §4.7 (cleanup-задачи) дополняется ссылкой на §10.1 в части частоты и TTL.
-- §9.6 (`CleanupExpiredUseCase`) — `threshold = datetime.now(tz=UTC) - timedelta(days=settings.guidebook_ttl_days)` без изменений pseudocode.
+- §9.6 (`CleanupExpiredUseCase`) — `threshold = datetime.now(tz=UTC) - settings.magic_link_ttl` (property = `timedelta(days=magic_link_ttl_days)`); счётчик/DTO-поле — `expired_magic_links`.
 - §2.6 (IaC) — Terraform aws_cloudwatch_event_rule с указанным cron-expression.
 - AC §3 US-03/US-04/US-05/US-06 — все «host возвращается через ≤ 30 дней → доступ сохраняется» становятся численно верифицируемыми.
 - Риск: lag до 24h между фактическим истечением TTL и DELETE — выраженный, но допустимый: на MVP-объёмах ошибочно обслуживается ≤ суток, после cleanup пользователь получает `ERR_INVALID_MAGIC_LINK` штатно.
@@ -3007,7 +3068,7 @@ ADR фиксируют принятые архитектурные решени�
 | B | **4000 символов** | покрывает 99% «гость объясняет ситуацию» + контекст-окно для русского/non-Latin; сопоставимо с PROMPT-частью у Claude (≪ 200k context) | поверхность prompt injection растёт; компенсация — §10.4 (prompt injection) |
 | C | 8000 символов | редкие edge case'ы (гость присылает целое письмо) | избыточно для UX чата; провоцирует abuse |
 
-**Решение.** `MAX_GUEST_MESSAGE_LENGTH = 4000` (вариант **B**). Валидация — `GuestMessage.create()` (§7.6); ошибка → `InvalidPayloadError` → 422 `ERR_INVALID_TEMPLATE` (§9.0 mapping).
+**Решение.** `MAX_GUEST_MESSAGE_LENGTH = 4000` (вариант **B**). Валидация — `GuestMessage.create()` (§7.6); ошибка → `InvalidPayloadError` → 422 `ERR_INVALID_PAYLOAD` (§9.0 mapping).
 
 **Альтернативы по `MAX_OUTPUT_TOKENS`.**
 
@@ -3049,7 +3110,7 @@ ADR фиксируют принятые архитектурные решени�
 - `RESPONSE_P95_BUDGET = 8s`.
 - Это SLO (CloudWatch alarm на 60s/8s по `p95(duration)` за 15 минут), а не enforced timeout. Hard timeout API Gateway — 30s по умолчанию (см. §2.1); потребуется поднять до 90s через Lambda Function URL (нет API Gateway): Lambda max execution time = 15 минут, Function URL timeout = тот же → отдельный hard timeout в Settings (`Settings.lambda_max_duration_s = 90`).
 
-**Решение по `Settings.max_rate_limit_window`** (используется в §9.7 `CleanupRateCountersUseCase`): 1 час (равно window size); cleanup удаляет окна, окончившиеся > 1 час назад.
+**Решение по `Settings.max_rate_limit_window`** (используется в §9.7 `CleanupRateCountersUseCase`): 1 час (равно window size); cleanup удаляет окна, окончившиеся > 1 час назад. В Settings — env-поле `max_rate_limit_window_seconds: int` (= 3600) + property `max_rate_limit_window: timedelta` (целочисленный env для ops; без ISO-8601).
 
 **Решение по `Settings.cleanup_batch_size`** (используется в §9.6 `CleanupExpiredUseCase.list_expired(limit=...)`): 100 lead'ов за тик. Один тик в сутки (§10.1) на ожидаемом объёме (<<100 expired/день) обрабатывает всё разом.
 
@@ -3059,7 +3120,7 @@ ADR фиксируют принятые архитектурные решени�
 - §4.4 — алгоритм fixed-window формализован.
 - §5.1 — числа подставляются.
 - §7.6 `MAX_GUEST_MESSAGE_LENGTH = 4000` (уже 4000, остаётся).
-- §8.0 / `app/config/config.py` — добавляются поля (`Settings` читает их из env-vars; конкретные значения задаёт Terraform, §2.6; Python defaults НЕ задаются — fail-fast при cold start, если env отсутствует): `rate_limit_per_ip: int`, `rate_limit_per_magic_link: int`, `rate_limit_window: timedelta`, `max_guest_message_length: int`, `max_output_tokens: int`, `sample_budget_daily_cap_tokens: int`, `ingestion_p95_budget_s: int`, `response_p95_budget_s: int`, `lambda_max_duration_s: int`, `max_rate_limit_window: timedelta`, `cleanup_batch_size: int`. SLO `INGESTION_P95_BUDGET`/`RESPONSE_P95_BUDGET` дополнительно настраивают CloudWatch alarm threshold'ы в Terraform.
+- §8.0 / `app/config/config.py` — добавляются поля (`Settings` читает их из env-vars; конкретные значения задаёт Terraform, §2.6; Python defaults НЕ задаются — fail-fast при cold start, если env отсутствует): `rate_limit_per_ip: int`, `rate_limit_per_magic_link: int`, `rate_limit_window_seconds: int`, `max_guest_message_length: int`, `max_output_tokens: int`, `sample_budget_daily_cap_tokens: int`, `ingestion_p95_budget_s: int`, `response_p95_budget_s: int`, `lambda_max_duration_s: int`, `max_rate_limit_window_seconds: int`, `cleanup_batch_size: int`, `magic_link_ttl_days: int`, `min_upload_size_bytes: int`, `min_chunks_per_guidebook: int`. Длительности задаются целочисленными env-полями (`*_seconds` / `*_days`) и отдаются use case'ам как `timedelta`-property (`max_rate_limit_window`, `magic_link_ttl`) — ops задают целые числа, без ISO-8601 в env. `max_chunk_tokens` (= max input эмбеддера, ≤512) — НЕ отдельное Settings-поле тут: это инвариант чанкера (окно `chunk_window` ≤ этого значения, §2.5), конфиг чанкера — отдельным infra-тикетом. SLO `INGESTION_P95_BUDGET`/`RESPONSE_P95_BUDGET` дополнительно настраивают CloudWatch alarm threshold'ы в Terraform.
 - §2.4 (stack) — Sonnet 4.6 при `MAX_OUTPUT_TOKENS=1000` укладывается в 8s p95 при стандартном Anthropic API latency (≈ 200 ms TTFT + ~0.5s/100 tok).
 - §9.1 `_estimate_cost(output_tokens)` фиксируется как `output_tokens * settings.haiku_output_price_per_mtok / 1_000_000`.
 - AC §3.0 — все параметры из §10.2 становятся численно верифицируемыми.
@@ -3281,7 +3342,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
     - `request_duration_p95{endpoint}` (extracted из `duration_ms`)
     - `error_count{code}` (extracted из `event=http_request_completed AND level=ERROR`)
     - `sample_budget_tokens_used_today` (extracted из `event=sample_response_completed`)
-    - `cleanup_deleted_guidebooks`, `cleanup_expired_leads`, `cleanup_deleted_rate_windows` (extracted из cleanup-Lambda events).
+    - `cleanup_deleted_guidebooks`, `cleanup_expired_magic_links`, `cleanup_deleted_rate_windows` (extracted из cleanup-Lambda events).
   - **CloudWatch Alarms**: `request_duration_p95{endpoint=/api/generate} > 8s` (RESPONSE_P95_BUDGET, §10.2); `request_duration_p95{endpoint=/api/ingest/*} > 60s`; `error_count{code=ERR_INTERNAL} > N/min`; `sample_budget_tokens_used_today > 0.8 × SAMPLE_BUDGET_DAILY_CAP`. Alarm-action — SNS topic → email хоста проекта.
   - **Sentry** (через `sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.env)`): только unhandled-`Exception` (handler в `interface/lambda_/handler.py` ловит `ApplicationError` отдельно — это **не** Sentry-сигнал; всё, что прорвалось до top-level `except Exception`, идёт в Sentry с PII-scrubbing).
   - **Postgres / Neon Insights**: pg_stat_statements нативно (Neon dashboard); top-N slow queries раз в неделю — ручной чек, не автоматизирован.
@@ -3291,7 +3352,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
       "request_id", "endpoint", "method", "status", "duration_ms",
       "ip_hash", "lead_id", "guidebook_id",
       "error_code", "error_message_sanitized",
-      "sample_tokens_used", "deleted_guidebooks", "expired_leads", "deleted_rate_windows",
+      "sample_tokens_used", "deleted_guidebooks", "expired_magic_links", "deleted_rate_windows",
   })
   ```
   Поля, **запрещённые** в логах (повторно подчёркнуто здесь, чтобы было видно при code-review):
@@ -3391,7 +3452,7 @@ Hot-update хинтов:
 - §8.7 — строки `POST /api/ingest/template` и `GET /api/template/schema` удалены из mapping endpoint → use case.
 - §8.0 / §10.3 — `Settings.template_hints` удалён; env-var `TEMPLATE_HINTS_JSON` удалён; `infrastructure/ingestion/templates/guidebook.j2` удалён.
 - §10.5 — `template_hints_json_bytes` метрика и alarm удалены.
-- §10.8 — `ERR_INVALID_TEMPLATE` упрощается до `details.reason ∈ {"empty", "invalid_json"}` или удаляется целиком (template-endpoint'а нет — единственным источником может остаться невалидный mime/payload на `/api/ingest/upload`).
+- §10.8 — `ERR_INVALID_PAYLOAD` упрощается до `details.reason ∈ {"empty", "invalid_json"}` или удаляется целиком (template-endpoint'а нет — единственным источником может остаться невалидный mime/payload на `/api/ingest/upload`).
 - §11 (Frontend) — `templateSchema` signal фетчит из `/config/template_schema.json` (а не `/api/template/schema`); §11.3 OpenAPI-codegen не покрывает schema-файл, фронт читает JSON напрямую.
 - §4.2 — `guidebooks` таблица получает колонку `name TEXT NOT NULL`.
 - §12 (Infra) — TF-модуль `s3_frontend` дополняется `aws_s3_object` для schema-файла; `cloudfront` — отдельной cache-behavior для `/config/*`.
@@ -3454,11 +3515,11 @@ Hot-update хинтов:
   `\Z` привязывает к концу строки без исключения для `\n`. Тот же `\Z` применён в §7.2.3 `IpHash`.
   `Email.__post_init__`:
   ```python
-  def __post_init__(self) -> None:
+  def __post_init__(self) -> None:   # DomainValidationError → 422 (§9.8)
       if len(self.value) > EMAIL_MAX_LENGTH:
-          raise ValueError(f"Email: length > {EMAIL_MAX_LENGTH}")
+          raise DomainValidationError(f"Email: length > {EMAIL_MAX_LENGTH}", field="email", reason="too_long")
       if not EMAIL_REGEX.match(self.value):
-          raise ValueError("Email: invalid format")
+          raise DomainValidationError("Email: invalid format", field="email", reason="invalid_format")
   ```
   Та же валидация на клиенте (frontend bundle, для немедленного feedback'а до отправки запроса) — это duplication, but server — authoritative.
 - **Antibot**: вариант **β**. Honeypot-поле во frontend-форме (`<input name="website" style="display:none">`); если приходит непустое — backend в `CaptureLeadUseCase` отбрасывает запрос с `InvalidPayloadError("honeypot")` (тихий отказ без объяснения причины, чтобы бот не итерировал). Реализация: `CaptureLeadCmd.honeypot: str` (default `""`); use case проверяет первым шагом. Rate-limit `RATE_LIMIT_PER_IP = 60/час` (§10.2) — backstop.
@@ -3524,9 +3585,10 @@ Hot-update хинтов:
 | `ERR_NOT_FOUND` | 404 | `NotFoundError` (новый, §10.3) | `{ "resource": "<guidebook\|lead>" }` | no retry; UI: показать «ресурс не найден» |
 | `ERR_NO_GUIDEBOOK` | 409 | `NoGuidebookAttachedError` | `{}` | no retry; UI: показать кнопку «Загрузить гайдбук» (`/upload` или `/template`) |
 | `ERR_PAYLOAD_TOO_LARGE` | 413 | `PayloadTooLargeError` | `{ "max_bytes": <int> }` | no retry; UI: показать `max_bytes`, попросить файл меньше |
+| `ERR_TOO_MANY_CHUNKS` | 413 | `TooManyChunksError` | `{ "max_chunks": <int> }` | no retry; UI: документ слишком большой, показать `max_chunks` |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | `UnsupportedMediaTypeError` | `{ "allowed": [<mime>, ...] }` | no retry; UI: показать allowed-форматы |
 | `ERR_EMPTY_DOCUMENT` | 422 | `EmptyDocumentError` | `{}` | no retry; UI: «извлечённый текст пуст, проверь файл» |
-| `ERR_INVALID_TEMPLATE` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_TEMPLATE"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|honeypot" }` | no retry; UI: подсветить поле, показать `reason` (`honeypot` — UI получает 422 + generic-сообщение без подсветки конкретного поля, см. §10.7) |
+| `ERR_INVALID_PAYLOAD` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_PAYLOAD"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|honeypot" }` | no retry; UI: подсветить поле, показать `reason` (`honeypot` — UI получает 422 + generic-сообщение без подсветки конкретного поля, см. §10.7) |
 | `ERR_RATE_LIMIT` | 429 | `RateLimitExceededError` | `{ "scope": "ip\|magic_link", "retry_after_s": <int> }` | auto-retry через `retry_after_s` (UI показывает обратный отсчёт) |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | `SampleBudgetExhaustedError` | `{ "reset_at": "<ISO-8601 UTC>" }` | no retry до `reset_at`; UI: «попробуй завтра или загрузи свой ключ» |
 | `ERR_UPSTREAM_LLM` | 502 | `UpstreamLLMError` | `{ "upstream_status": <int>, "retryable": <bool> }` | если `retryable=true` — экспоненциальный backoff (1s, 2s, 4s; max 3 попытки); иначе no retry |
@@ -3556,7 +3618,7 @@ def to_response(err: ApplicationError) -> tuple[int, dict]:
 
 - §3.0 `ERR_*` обновляется со ссылкой на `§10.8` (полный финальный список — таблица выше); `ERR_NO_GUIDEBOOK`, `ERR_NOT_FOUND`, `ERR_UPSTREAM_EMAIL` добавляются явно.
 - §5.0 / §5.8 — envelope `details` структура фиксируется по таблице.
-- §8.4 — добавляются подклассы `NotFoundError`, `PayloadTooLargeError`, `UnsupportedMediaTypeError`, `EmptyDocumentError`, `InvalidApiKeyError`, `RateLimitExceededError`, `SampleBudgetExhaustedError`, `UpstreamLLMError`; `RateLimitExceededError` имеет атрибут `retry_after_seconds: int` (в `details` — ключ `retry_after_s`); `UpstreamLLMError`/`UpstreamEmailError` — `upstream_status: int` (опц.), `retryable: bool`. Все подклассы с контекстом получают `details_dict()` и обязательные аргументы конструктора (§8.4).
+- §8.4 — добавляются подклассы `NotFoundError`, `PayloadTooLargeError`, `TooManyChunksError`, `UnsupportedMediaTypeError`, `EmptyDocumentError`, `InvalidApiKeyError`, `RateLimitExceededError`, `SampleBudgetExhaustedError`, `UpstreamLLMError`; `RateLimitExceededError` имеет атрибут `retry_after_seconds: int` (в `details` — ключ `retry_after_s`); `UpstreamLLMError`/`UpstreamEmailError` — `upstream_status: int` (опц.), `retryable: bool`; `TooManyChunksError` — `max_chunks: int`. `InvalidPayloadError.code` переименован `ERR_INVALID_TEMPLATE` → `ERR_INVALID_PAYLOAD` (template-flow удалён §10.6). Все подклассы с контекстом получают `details_dict()` и обязательные аргументы конструктора (§8.4).
 - §9.0 / §9.8 — table «исключение → код → HTTP-статус» становится reference, отдельная таблица в §10.8 — source-of-truth.
 - §8.2.8 `RateLimiter.check_and_increment(...)` — сигнатура остаётся; при rate-limit бросается `RateLimitExceededError(scope=..., retry_after_seconds=...)`.
 - §8.0 — `response_envelope.py` и `request_parsing.py` остаются; envelope-маппинг конкретизируется.

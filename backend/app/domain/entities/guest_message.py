@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.exceptions import DomainValidationError
+
 MAX_GUEST_MESSAGE_LENGTH = 4000
 
 
@@ -30,11 +32,16 @@ class GuestMessage:
             A new GuestMessage with stripped text.
 
         Raises:
-            ValueError: If text is empty after stripping or exceeds MAX_GUEST_MESSAGE_LENGTH.
+            DomainValidationError: If text is empty after stripping or exceeds
+                MAX_GUEST_MESSAGE_LENGTH.
         """
         stripped = text.strip()
         if not stripped:
-            raise ValueError("GuestMessage: empty text")
+            raise DomainValidationError("GuestMessage: empty text", field="message", reason="empty")
         if len(stripped) > MAX_GUEST_MESSAGE_LENGTH:
-            raise ValueError(f"GuestMessage: text > {MAX_GUEST_MESSAGE_LENGTH} chars")
+            raise DomainValidationError(
+                f"GuestMessage: text > {MAX_GUEST_MESSAGE_LENGTH} chars",
+                field="message",
+                reason="too_long",
+            )
         return cls(text=stripped)

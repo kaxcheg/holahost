@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from domain.exceptions import DomainValidationError
+
 
 class ApplicationError(Exception):
     """Base for all application-layer errors (spec §8.4; taxonomy §10.8).
@@ -54,13 +59,15 @@ class NotFoundError(ApplicationError):
 
 
 class InvalidPayloadError(ApplicationError):
-    """Invalid primitive / template field (§8.4 / §9.0) → 422 ERR_INVALID_TEMPLATE.
+    """Generic invalid request payload (§8.4 / §9.0) → 422 ERR_INVALID_PAYLOAD.
 
-    Raised when a VO/entity factory raises ``ValueError`` (via ``payload_validation()``,
-    added in B-20 / §9.0); ``field`` / ``reason`` feed the §10.8 ``details`` payload.
+    Raised when a VO/entity factory raises ``DomainValidationError`` (via ``payload_validation()``,
+    §9.0) or on an explicit payload check (honeypot); ``field`` / ``reason`` feed the §10.8
+    ``details`` payload. (Renamed from the legacy ``ERR_INVALID_TEMPLATE`` — the template flow was
+    removed in §10.6; this is the generic payload-validation code.)
     """
 
-    code = "ERR_INVALID_TEMPLATE"
+    code = "ERR_INVALID_PAYLOAD"
 
     def __init__(
         self,
@@ -92,7 +99,7 @@ class NoGuidebookAttachedError(ApplicationError):
 
 
 class PayloadTooLargeError(ApplicationError):
-    """Upload / chunk-count over the limit (§9.4 / §9.8) → 413 ERR_PAYLOAD_TOO_LARGE."""
+    """Uploaded file over the byte-size limit (§9.4 / §9.8) → 413 ERR_PAYLOAD_TOO_LARGE."""
 
     code = "ERR_PAYLOAD_TOO_LARGE"
 
@@ -100,7 +107,7 @@ class PayloadTooLargeError(ApplicationError):
         """Init.
 
         Args:
-            max_bytes: The exceeded limit reported to the UI (§10.8 details).
+            max_bytes: The exceeded byte limit reported to the UI (§10.8 details).
             message: Optional technical message.
         """
         super().__init__(message)
@@ -108,6 +115,29 @@ class PayloadTooLargeError(ApplicationError):
 
     def details_dict(self) -> dict[str, object]:
         return {"max_bytes": self.max_bytes}
+
+
+class TooManyChunksError(ApplicationError):
+    """Parsed document yields more than the chunk cap (§9.4 / §9.8) → 413 ERR_TOO_MANY_CHUNKS.
+
+    Distinct from ``PayloadTooLargeError``: the byte size may be fine, but the chunk count exceeds
+    the per-guidebook cap (memory / embedding-count bound). Carries the chunk limit, not bytes.
+    """
+
+    code = "ERR_TOO_MANY_CHUNKS"
+
+    def __init__(self, max_chunks: int, message: str = "") -> None:
+        """Init.
+
+        Args:
+            max_chunks: The exceeded chunk-count cap reported to the UI (§10.8 details).
+            message: Optional technical message.
+        """
+        super().__init__(message)
+        self.max_chunks = max_chunks
+
+    def details_dict(self) -> dict[str, object]:
+        return {"max_chunks": self.max_chunks}
 
 
 class UnsupportedMediaTypeError(ApplicationError):
@@ -222,3 +252,42 @@ class UpstreamEmailError(ApplicationError):
 
     def details_dict(self) -> dict[str, object]:
         return {"retryable": self.retryable}
+
+
+@contextmanager
+def payload_validation() -> Iterator[None]:
+    """Convert ``DomainValidationError`` from VO/entity factories into ``InvalidPayloadError``.
+
+    Wrap each ``primitive -> VO`` / entity-factory block in a use case with this manager so a bad
+    primitive surfaces as 422 ``ERR_INVALID_PAYLOAD`` (spec §9.0) instead of leaking to the
+    handler's ``except Exception`` (500). The ``field`` / ``reason`` carried by the
+    ``DomainValidationError`` flow through to the §10.8 ``details`` payload.
+
+    Only ``DomainValidationError`` is caught: every payload-facing VO/entity factory raises it
+    (domain invariant, §8.0), so a *plain* ``ValueError`` escaping this block signals an
+    unconverted internal bug and is left to propagate (500), not silently masked as a client 422.
+
+    :raises InvalidPayloadError: if the wrapped block raises ``DomainValidationError``.
+    """
+    try:
+        yield
+    except DomainValidationError as e:
+        raise InvalidPayloadError(str(e), field=e.field, reason=e.reason) from e
+
+
+@contextmanager
+def magic_link_validation() -> Iterator[None]:
+    """Convert a ``MagicLink`` VO failure into ``InvalidMagicLinkError`` (spec §9.8) → 401.
+
+    An empty/malformed magic-link token is an invalid credential — not a client-payload field error
+    (422 via :func:`payload_validation`) nor an internal bug (500). Wrap the ``MagicLink(...)``
+    construction in a use case with this manager so a bad token surfaces as 401
+    ``ERR_INVALID_MAGIC_LINK``, consistent with the unknown/expired cases. Keep the wrapped block to
+    that single construction so the broad ``except ValueError`` cannot catch an unrelated error.
+
+    :raises InvalidMagicLinkError: if the wrapped block raises ``ValueError``.
+    """
+    try:
+        yield
+    except ValueError as e:
+        raise InvalidMagicLinkError() from e
