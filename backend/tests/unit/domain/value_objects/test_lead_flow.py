@@ -1,3 +1,6 @@
+import pytest
+
+from domain.exceptions import DomainValidationError
 from domain.value_objects.lead_flow import LeadFlow
 
 
@@ -11,3 +14,9 @@ class TestLeadFlow:
 
     def test_lookup_by_value(self) -> None:
         assert LeadFlow("sample") is LeadFlow.SAMPLE
+
+    def test_unknown_value_raises_domain_validation(self) -> None:
+        with pytest.raises(DomainValidationError) as exc:
+            LeadFlow("bogus")
+        assert exc.value.field == "flow"
+        assert exc.value.reason == "invalid_format"

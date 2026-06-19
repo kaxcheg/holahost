@@ -14,12 +14,14 @@ class CaptureLeadCmd:
         flow: "guidebook" | "sample"; validated by the use case via LeadFlow.
         ip_hash: SHA-256 ip hash (primitive).
         ua_short: Truncated user-agent, or None.
+        honeypot: Hidden anti-bot field (§10.7); a non-empty value triggers a silent reject.
     """
 
     email: str
     flow: str
     ip_hash: str
     ua_short: str | None
+    honeypot: str = ""
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.exceptions import DomainValidationError
+
 GUIDEBOOK_NAME_MAX_LENGTH = 100  # mirrors prod_hints.json property_name.max_length (§10.6); D6
 
 
@@ -18,7 +20,8 @@ class GuidebookName:
     Args:
         value: The display name.
 
-    :raises ValueError: If empty/whitespace-only, or longer than ``GUIDEBOOK_NAME_MAX_LENGTH``.
+    :raises DomainValidationError: If empty/whitespace-only, or longer than
+        ``GUIDEBOOK_NAME_MAX_LENGTH`` (carries ``field="name"`` + ``reason``, §10.8).
     """
 
     value: str
@@ -26,9 +29,14 @@ class GuidebookName:
     def __post_init__(self) -> None:
         """Validate the name is non-empty and within the length cap.
 
-        :raises ValueError: If empty/whitespace-only or too long.
+        :raises DomainValidationError: If empty/whitespace-only (``reason="empty"``) or too long
+            (``reason="too_long"``); a ``ValueError`` subclass, so ``payload_validation()`` maps it.
         """
         if not self.value.strip():
-            raise ValueError("GuidebookName: empty value")
+            raise DomainValidationError("GuidebookName: empty value", field="name", reason="empty")
         if len(self.value) > GUIDEBOOK_NAME_MAX_LENGTH:
-            raise ValueError(f"GuidebookName: length > {GUIDEBOOK_NAME_MAX_LENGTH}")
+            raise DomainValidationError(
+                f"GuidebookName: length > {GUIDEBOOK_NAME_MAX_LENGTH}",
+                field="name",
+                reason="too_long",
+            )

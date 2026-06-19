@@ -27,6 +27,11 @@ class Embedding:
     def __post_init__(self) -> None:
         """Validate shape, dtype, finiteness, and L2 norm.
 
+        Built from model output (business logic), never from a client payload, so failures raise a
+        plain ``ValueError`` — an internal invariant breach the interface maps to 500 — not a
+        ``DomainValidationError`` (which ``payload_validation()`` would convert to a 422 payload
+        error, §9.0). Embedding is never constructed inside a ``payload_validation()`` block.
+
         :raises ValueError: If shape != ``(EMBEDDING_DIM,)``, dtype is not float32, the vector
             holds non-finite values (NaN/inf), or the L2 norm is not within ``1e-3`` of 1.0.
         """

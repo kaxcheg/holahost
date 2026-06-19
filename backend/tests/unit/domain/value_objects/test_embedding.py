@@ -2,6 +2,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
+from domain.exceptions import DomainValidationError
 from domain.value_objects.embedding import EMBEDDING_DIM, Embedding
 
 
@@ -22,8 +23,11 @@ class TestEmbedding:
         assert np.array_equal(restored.vector, emb.vector)
 
     def test_rejects_wrong_shape(self) -> None:
-        with pytest.raises(ValueError):
+        # Internal invariant (built from model output) → plain ValueError → 500, NOT a payload 422:
+        # must stay a bare ValueError so payload_validation() never converts it.
+        with pytest.raises(ValueError) as exc:
             Embedding(np.zeros(10, dtype=np.float32))
+        assert not isinstance(exc.value, DomainValidationError)
 
     def test_rejects_wrong_dtype(self) -> None:
         bad = _normalized().astype(np.float64)

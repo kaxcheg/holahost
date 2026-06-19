@@ -9,6 +9,16 @@ class TestCaptureLeadCmd:
         assert cmd.flow == "sample"
         assert cmd.ua_short is None
 
+    def test_honeypot_defaults_empty(self) -> None:
+        cmd = CaptureLeadCmd(email="a@b.co", flow="guidebook", ip_hash="h", ua_short=None)
+        assert cmd.honeypot == ""
+
+    def test_honeypot_can_be_set(self) -> None:
+        cmd = CaptureLeadCmd(
+            email="a@b.co", flow="guidebook", ip_hash="h", ua_short=None, honeypot="bot"
+        )
+        assert cmd.honeypot == "bot"
+
 
 class TestResolveMagicLinkCmd:
     def test_magic_link_is_secret_and_masked(self) -> None:

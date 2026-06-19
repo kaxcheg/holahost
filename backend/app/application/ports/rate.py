@@ -26,6 +26,17 @@ class RateLimiter(Protocol):
             scope: Whether the subject is an ip hash or a magic-link-derived id.
             subject: The counted subject (ip_hash, or str(lead.id) for MAGIC_LINK — §9.8).
 
+        Race-protection contract (adapter requirement — separate from atomicity, which the use case
+        already gets from ``uow.transaction()``): concurrent ``check_and_increment`` calls for the
+        same ``(scope, subject, current window)`` MUST NOT both pass the cap. The adapter must
+        serialize the read-and-increment against concurrent callers — e.g. a conditional
+        increment-and-return (``UPDATE ... SET count = count + 1 ... RETURNING count``, cap-checked
+        on the returned value; or a guarded ``WHERE count < cap`` treating zero rows updated as
+        "exceeded") or a row lock. Under READ COMMITTED a plain SELECT-then-UPDATE does NOT prevent
+        the race: two concurrent calls both read ``count = N`` and both pass, overshooting the cap.
+        The transaction boundary cannot prevent this interleaving — only the adapter can
+        (spec §8.2.8 / §9.0).
+
         Raises:
             RateLimitExceededError: when the per-window cap is exceeded
                 (application.exceptions, code ERR_RATE_LIMIT).

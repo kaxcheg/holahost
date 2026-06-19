@@ -25,6 +25,12 @@ class TextChunker(Protocol):
     def chunk(self, text: str) -> list[str]:
         """Split text into ordered chunk strings.
 
+        Invariant (enforced by the impl): every returned chunk fits within the embedding model's
+        max input length (``max_chunk_tokens``). The chunker's token window MUST be configured
+        ``<= max_chunk_tokens``; otherwise the embedder silently truncates over-long chunks and
+        retrieval quality degrades (§2.5). The application layer relies on this contract — it has no
+        tokenizer to re-check chunk length at runtime.
+
         Args:
             text: Source text to chunk.
 

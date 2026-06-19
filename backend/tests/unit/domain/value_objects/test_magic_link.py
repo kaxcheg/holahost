@@ -1,6 +1,7 @@
 import pytest
 from pydantic import SecretStr
 
+from domain.exceptions import DomainValidationError
 from domain.value_objects.magic_link import MagicLink
 
 
@@ -16,5 +17,8 @@ class TestMagicLink:
         assert MagicLink(SecretStr("x")) == MagicLink(SecretStr("x"))
 
     def test_empty_secret_rejected(self) -> None:
-        with pytest.raises(ValueError):
+        # Empty/invalid token is a 401 (use case maps to InvalidMagicLinkError), not a 422 payload
+        # field → plain ValueError, never DomainValidationError.
+        with pytest.raises(ValueError) as exc:
             MagicLink(SecretStr(""))
+        assert not isinstance(exc.value, DomainValidationError)

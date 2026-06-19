@@ -1,5 +1,6 @@
 import pytest
 
+from domain.exceptions import DomainValidationError
 from domain.value_objects.ip_hash import IpHash
 
 
@@ -9,8 +10,11 @@ class TestIpHash:
         assert IpHash(value).value == value
 
     def test_rejects_wrong_length(self) -> None:
-        with pytest.raises(ValueError):
+        # Server-derived VO → plain ValueError → 500, NOT a payload 422: must stay a bare
+        # ValueError so payload_validation() never converts it to InvalidPayloadError.
+        with pytest.raises(ValueError) as exc:
             IpHash("abc")
+        assert not isinstance(exc.value, DomainValidationError)
 
     def test_rejects_uppercase(self) -> None:
         with pytest.raises(ValueError):

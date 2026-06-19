@@ -9,6 +9,7 @@ from application.exceptions import (
     PayloadTooLargeError,
     RateLimitExceededError,
     SampleBudgetExhaustedError,
+    TooManyChunksError,
     UnsupportedMediaTypeError,
     UpstreamEmailError,
     UpstreamLLMError,
@@ -21,6 +22,7 @@ ALL_SUBCLASSES = [
     InvalidPayloadError,
     NoGuidebookAttachedError,
     PayloadTooLargeError,
+    TooManyChunksError,
     UnsupportedMediaTypeError,
     EmptyDocumentError,
     RateLimitExceededError,
@@ -38,9 +40,10 @@ class TestErrorCodes:
         assert InvalidMagicLinkError.code == "ERR_INVALID_MAGIC_LINK"
         assert InvalidApiKeyError.code == "ERR_INVALID_API_KEY"
         assert NotFoundError.code == "ERR_NOT_FOUND"
-        assert InvalidPayloadError.code == "ERR_INVALID_TEMPLATE"
+        assert InvalidPayloadError.code == "ERR_INVALID_PAYLOAD"
         assert NoGuidebookAttachedError.code == "ERR_NO_GUIDEBOOK"
         assert PayloadTooLargeError.code == "ERR_PAYLOAD_TOO_LARGE"
+        assert TooManyChunksError.code == "ERR_TOO_MANY_CHUNKS"
         assert UnsupportedMediaTypeError.code == "ERR_UNSUPPORTED_MEDIA_TYPE"
         assert EmptyDocumentError.code == "ERR_EMPTY_DOCUMENT"
         assert RateLimitExceededError.code == "ERR_RATE_LIMIT"
@@ -74,6 +77,9 @@ class TestDetailsDict:
 
     def test_payload_too_large(self) -> None:
         assert PayloadTooLargeError(max_bytes=4_194_304).details_dict() == {"max_bytes": 4_194_304}
+
+    def test_too_many_chunks(self) -> None:
+        assert TooManyChunksError(max_chunks=500).details_dict() == {"max_chunks": 500}
 
     def test_unsupported_media_type(self) -> None:
         e = UnsupportedMediaTypeError(allowed=["application/pdf", "text/plain"])
