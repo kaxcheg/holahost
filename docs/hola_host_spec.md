@@ -194,6 +194,8 @@ stateDiagram-v2
 
 Стартовая конфигурация — serverless на AWS под единичную нагрузку. Ядро (`domain` + `application`) изолировано от инфраструктуры через ports/adapters, поэтому миграция на always-on (EC2 + FastAPI + RDS) ограничена сменой interface-адаптера и нескольких реализаций портов.
 
+Бэкенд **синхронный** (sync; SQLAlchemy Core 2.0 поверх драйвера psycopg, без asyncio): под serverless inter-request-конкуррентность обеспечивает платформа (изоляция инстансов Lambda — один запрос на инстанс), а внутризапросного параллелизма во flow нет (lock → read → LLM → write последовательны), поэтому async не даёт выигрыша и лишь добавляет цену (мост `asyncio.run`, управление event-loop/пулом); исчерпание коннектов решает внешний пулер, не event loop. Переход на async откладывается до той же миграции на always-on (EC2 + FastAPI), где модель «один процесс — много одновременных соединений» становится осмысленной.
+
 ```mermaid
 flowchart LR
     BR[Браузер: Vite TS bundle] -->|HTTPS| CF[CloudFront]
@@ -319,8 +321,8 @@ Use case принимает зависимости через конструкт
 | Vector retrieval | numpy cosine на L2-нормализованных embeddings, top-K в Python |
 | Tokenizer для чанкинга | `tiktoken` (`cl100k_base`) |
 | LLM | Anthropic Claude: `claude-sonnet-4-6` для real-flow (BYOK), `claude-haiku-4-5-20251001` для sample-flow (server key) |
-| СУБД | Neon Postgres через `psycopg[binary,pool]` |
-| Миграции | Alembic |
+| СУБД | Neon Postgres через **SQLAlchemy Core (2.0)** поверх драйвера `psycopg[binary,pool]` (psycopg 3); ORM не используется (§9) |
+| Миграции | Alembic (DDL из того же `MetaData`, что и Core-запросы) |
 | Email-провайдер | Resend |
 | Validation | Pydantic v2 |
 | Тесты | pytest, fakes для портов |
@@ -3346,7 +3348,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
   - **CloudWatch Alarms**: `request_duration_p95{endpoint=/api/generate} > 8s` (RESPONSE_P95_BUDGET, §10.2); `request_duration_p95{endpoint=/api/ingest/*} > 60s`; `error_count{code=ERR_INTERNAL} > N/min`; `sample_budget_tokens_used_today > 0.8 × SAMPLE_BUDGET_DAILY_CAP`. Alarm-action — SNS topic → email хоста проекта.
   - **Sentry** (через `sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.env)`): только unhandled-`Exception` (handler в `interface/lambda_/handler.py` ловит `ApplicationError` отдельно — это **не** Sentry-сигнал; всё, что прорвалось до top-level `except Exception`, идёт в Sentry с PII-scrubbing).
   - **Postgres / Neon Insights**: pg_stat_statements нативно (Neon dashboard); top-N slow queries раз в неделю — ручной чек, не автоматизирован.
-- **PII / secret-scrubbing** — вариант **III**: helper `log_event(event_name: str, **fields)` в `interface/lambda_/observability.py`. Allowlist полей фиксированный (на момент MVP):
+- **PII / secret-scrubbing** — вариант **III**: helper `log_event(event_name: str, *, level: int = logging.INFO, **fields)` в `config/logging.py` (дом логирования — `config/`, импортируемый всеми слоями, не `interface/`; уровень задаёт вызывающий — `level=logging.ERROR` для failure-событий, чтобы метрика `error_count{code}` с фильтром `level=ERROR` срабатывала). Allowlist полей фиксированный (на момент MVP):
   ```python
   _ALLOWED_LOG_FIELDS = frozenset({
       "request_id", "endpoint", "method", "status", "duration_ms",
@@ -3584,6 +3586,7 @@ Hot-update хинтов:
 | `ERR_INVALID_MAGIC_LINK` | 401 | `InvalidMagicLinkError` | `{}` | no retry; UI: redirect на capture-flow |
 | `ERR_NOT_FOUND` | 404 | `NotFoundError` (новый, §10.3) | `{ "resource": "<guidebook\|lead>" }` | no retry; UI: показать «ресурс не найден» |
 | `ERR_NO_GUIDEBOOK` | 409 | `NoGuidebookAttachedError` | `{}` | no retry; UI: показать кнопку «Загрузить гайдбук» (`/upload` или `/template`) |
+| `ERR_EMAIL_CONFLICT` | 409 | `EmailConflictError` (§4.1 — `UNIQUE(email)`-гонка в адаптере) | `{}` | внутренний сигнал: `CaptureLeadUseCase` ловит → retry на existing-email upsert-path (silent, §9.2); при нормальном flow до клиента не доходит |
 | `ERR_PAYLOAD_TOO_LARGE` | 413 | `PayloadTooLargeError` | `{ "max_bytes": <int> }` | no retry; UI: показать `max_bytes`, попросить файл меньше |
 | `ERR_TOO_MANY_CHUNKS` | 413 | `TooManyChunksError` | `{ "max_chunks": <int> }` | no retry; UI: документ слишком большой, показать `max_chunks` |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | `UnsupportedMediaTypeError` | `{ "allowed": [<mime>, ...] }` | no retry; UI: показать allowed-форматы |
@@ -3620,6 +3623,7 @@ def to_response(err: ApplicationError) -> tuple[int, dict]:
 - §5.0 / §5.8 — envelope `details` структура фиксируется по таблице.
 - §8.4 — добавляются подклассы `NotFoundError`, `PayloadTooLargeError`, `TooManyChunksError`, `UnsupportedMediaTypeError`, `EmptyDocumentError`, `InvalidApiKeyError`, `RateLimitExceededError`, `SampleBudgetExhaustedError`, `UpstreamLLMError`; `RateLimitExceededError` имеет атрибут `retry_after_seconds: int` (в `details` — ключ `retry_after_s`); `UpstreamLLMError`/`UpstreamEmailError` — `upstream_status: int` (опц.), `retryable: bool`; `TooManyChunksError` — `max_chunks: int`. `InvalidPayloadError.code` переименован `ERR_INVALID_TEMPLATE` → `ERR_INVALID_PAYLOAD` (template-flow удалён §10.6). Все подклассы с контекстом получают `details_dict()` и обязательные аргументы конструктора (§8.4).
 - §9.0 / §9.8 — table «исключение → код → HTTP-статус» становится reference, отдельная таблица в §10.8 — source-of-truth.
+- `ERR_EMAIL_CONFLICT` (409, `EmailConflictError`) — внутренний сигнал silent-upsert (§9.2); входит в таблицу для полноты `HTTP_STATUS_BY_CODE` (запись добавит interface-тикет), хотя при нормальном flow клиенту не возвращается.
 - §8.2.8 `RateLimiter.check_and_increment(...)` — сигнатура остаётся; при rate-limit бросается `RateLimitExceededError(scope=..., retry_after_seconds=...)`.
 - §8.0 — `response_envelope.py` и `request_parsing.py` остаются; envelope-маппинг конкретизируется.
 - AC §3 US-07 «обработка ошибок» — численно верифицируема (per-code `details` schema, retry-семантика).
