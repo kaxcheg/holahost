@@ -98,6 +98,29 @@ class NoGuidebookAttachedError(ApplicationError):
     code = "ERR_NO_GUIDEBOOK"
 
 
+class EmailConflictError(ApplicationError):
+    """New-email ``UNIQUE(email)`` race lost (§4.1) → 409 ERR_EMAIL_CONFLICT.
+
+    Raised only by ``PostgresLeadsRepo.add`` when two transactions both insert the *same new*
+    email concurrently (both saw ``existing is None`` under READ COMMITTED; the loser hits
+    ``UNIQUE(email)``). The client retries, taking the silent-upsert/update path (§4.1). The email
+    is carried for server-side logging only and is deliberately NOT exposed in ``details`` (PII;
+    ``details_dict()`` stays ``{}``).
+    """
+
+    code = "ERR_EMAIL_CONFLICT"
+
+    def __init__(self, email: str, message: str = "") -> None:
+        """Init.
+
+        Args:
+            email: The conflicting email (server-side logging only; not surfaced to the client).
+            message: Optional technical message.
+        """
+        super().__init__(message)
+        self.email = email
+
+
 class PayloadTooLargeError(ApplicationError):
     """Uploaded file over the byte-size limit (§9.4 / §9.8) → 413 ERR_PAYLOAD_TOO_LARGE."""
 

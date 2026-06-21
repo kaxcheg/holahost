@@ -5,6 +5,7 @@ from __future__ import annotations
 from config.config import Settings
 
 _DEFAULTS: dict[str, object] = dict(
+    env="dev",
     model_id_sample="claude-haiku-4-5-20251001",
     model_id_real="claude-sonnet-4-6",
     system_prompt="You are a helpful STR host assistant.",
@@ -22,6 +23,12 @@ _DEFAULTS: dict[str, object] = dict(
     magic_link_ttl_days=30,
     cleanup_batch_size=100,
     max_rate_limit_window_seconds=3600,
+    database_url="postgresql://test",
+    ip_hash_salt="test-salt",
+    magic_link_token_bytes=32,
+    rate_limit_per_ip=60,
+    rate_limit_per_magic_link=60,
+    rate_limit_window_seconds=3600,
 )
 
 

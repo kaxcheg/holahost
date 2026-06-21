@@ -8,6 +8,7 @@ from pydantic import SecretStr, ValidationError
 from config.config import Settings
 
 _VALID: dict[str, object] = dict(
+    env="dev",
     model_id_sample="claude-haiku-4-5-20251001",
     model_id_real="claude-sonnet-4-6",
     system_prompt="You are a helpful STR host assistant.",
@@ -25,6 +26,12 @@ _VALID: dict[str, object] = dict(
     magic_link_ttl_days=30,
     cleanup_batch_size=100,
     max_rate_limit_window_seconds=3600,
+    database_url="postgresql://test",
+    ip_hash_salt="test-salt",
+    magic_link_token_bytes=32,
+    rate_limit_per_ip=60,
+    rate_limit_per_magic_link=60,
+    rate_limit_window_seconds=3600,
 )
 
 
@@ -56,6 +63,22 @@ class TestSettings:
     def test_empty_allowed_mime_types_rejected(self) -> None:
         with pytest.raises(ValidationError):
             Settings(**{**_VALID, "allowed_mime_types": frozenset()})  # type: ignore[arg-type]
+
+    def test_invalid_env_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(**{**_VALID, "env": "production"})  # type: ignore[arg-type]
+
+    def test_prod_rejects_localhost_database_url(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(  # type: ignore[arg-type]
+                **{**_VALID, "env": "prod", "database_url": "postgresql://localhost:5432/db"}
+            )
+
+    def test_prod_accepts_remote_database_url(self) -> None:
+        s = Settings(  # type: ignore[arg-type]
+            **{**_VALID, "env": "prod", "database_url": "postgresql://main.db.neon.tech/app"}
+        )
+        assert s.env == "prod"
 
     def test_from_env_reads_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key, val in _VALID.items():

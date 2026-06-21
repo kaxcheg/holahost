@@ -143,7 +143,12 @@ class LeadsRepo(Protocol):
         ...
 
     def add(self, lead: Lead) -> None:
-        """Insert a new lead (capture, new email). Concurrency: unique ``email`` constraint."""
+        """Insert a new lead (capture, new email). Concurrency: unique ``email`` constraint.
+
+        :raises EmailConflictError: if a concurrent transaction already inserted a lead with the
+            same (new) email — the loser of the ``UNIQUE(email)`` race (§4.1). The caller retries,
+            taking the silent upsert/update path.
+        """
         ...
 
     def update(self, lead: Lead) -> None:
