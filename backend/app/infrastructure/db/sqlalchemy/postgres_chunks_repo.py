@@ -19,6 +19,7 @@ def _to_values(chunk: Chunk) -> dict[str, Any]:
         "guidebook_id": chunk.guidebook_id,
         "ordinal": chunk.ordinal,
         "text": chunk.text,
+        "page": chunk.page,
         "embedding": chunk.embedding.to_bytes(),
     }
 
@@ -29,6 +30,7 @@ def _from_row(row: RowMapping) -> Chunk:
         guidebook_id=GuidebookId(bytes=row["guidebook_id"].bytes),
         ordinal=row["ordinal"],
         text=row["text"],
+        page=row["page"],
         embedding=Embedding.from_bytes(bytes(row["embedding"])),  # BYTEA memoryview -> bytes
     )
 

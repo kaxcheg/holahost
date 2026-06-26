@@ -9,6 +9,7 @@ from domain.value_objects.ip_hash import IpHash
 from domain.value_objects.lead_flow import LeadFlow
 from domain.value_objects.lead_id import LeadId
 from domain.value_objects.magic_link import MagicLink
+from domain.value_objects.parsed_segment import ParsedSegment
 
 __all__ = [
     "ChunkId",
@@ -20,4 +21,5 @@ __all__ = [
     "LeadFlow",
     "LeadId",
     "MagicLink",
+    "ParsedSegment",
 ]

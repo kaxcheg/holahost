@@ -94,6 +94,14 @@ class TestUploadGuidebook:
         assert fresh is not None
         assert fresh.guidebook_id == gbs.added[0].id
 
+    def test_chunk_page_propagates_into_persisted_chunks(self) -> None:
+        _, leads = _wired()
+        gbs = FakeGuidebooksRepo()
+        chunks = FakeChunksRepo()
+        _uc(leads, gbs, chunks, chunker=FakeTextChunker(["a", "b"], pages=[0, 1])).execute(_cmd())
+        persisted = chunks.bulk_added[0]
+        assert [c.page for c in persisted] == [0, 1]
+
     def test_replace_deletes_old(self) -> None:
         old = make_guidebook()
         _, leads = _wired(guidebook_id=old.id)

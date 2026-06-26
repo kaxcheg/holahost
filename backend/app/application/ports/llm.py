@@ -20,6 +20,7 @@ class LLMClient(Protocol):
         system_prompt: str,
         max_output_tokens: int,
         api_key: SecretStr,
+        is_byok: bool,
     ) -> GeneratedReply:
         """Generate a reply for ``guest_message`` grounded in ``chunks``.
 
@@ -30,6 +31,7 @@ class LLMClient(Protocol):
             system_prompt: System prompt (from Settings).
             max_output_tokens: Output cap (from Settings; ``> 0`` enforced in Settings).
             api_key: Server key (sample) or BYOK (real); SecretStr.
+            is_byok: True for the BYOK flow — selects the upstream-401 mapping (§9.5 vs §9.1).
 
         Returns:
             The generated reply entity.

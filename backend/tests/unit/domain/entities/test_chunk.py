@@ -16,7 +16,7 @@ _TEXT = "Check-in is at 3pm."
 class TestChunk:
     def test_create_sets_fields(self) -> None:
         chunk = Chunk.create(
-            guidebook_id=_GID, ordinal=0, text=_TEXT, embedding=_EMB
+            guidebook_id=_GID, ordinal=0, text=_TEXT, page=None, embedding=_EMB
         )
         assert isinstance(chunk.id, ChunkId)
         assert chunk.guidebook_id == _GID
@@ -27,11 +27,28 @@ class TestChunk:
     def test_create_generates_unique_ids(self) -> None:
         ids = {
             Chunk.create(
-                guidebook_id=_GID, ordinal=i, text=_TEXT, embedding=_EMB
+                guidebook_id=_GID, ordinal=i, text=_TEXT, page=None, embedding=_EMB
             ).id
             for i in range(100)
         }
         assert len(ids) == 100
+
+    def test_create_carries_page_provenance(self) -> None:
+        chunk = Chunk.create(
+            guidebook_id=_GID, ordinal=0, text=_TEXT, page=3, embedding=_EMB
+        )
+        assert chunk.page == 3
+
+    def test_from_repo_page_can_be_none(self) -> None:
+        chunk = Chunk.from_repo(
+            id=ChunkId.new(),
+            guidebook_id=_GID,
+            ordinal=0,
+            text=_TEXT,
+            page=None,
+            embedding=_EMB,
+        )
+        assert chunk.page is None
 
     def test_from_repo_reconstructs_verbatim(self) -> None:
         cid = ChunkId.new()
@@ -40,6 +57,7 @@ class TestChunk:
             guidebook_id=_GID,
             ordinal=3,
             text="Checkout by 11am.",
+            page=None,
             embedding=_EMB,
         )
         assert chunk.id == cid
@@ -54,19 +72,19 @@ class TestChunk:
         vec2[1] = 1.0
         emb2 = Embedding(vector=vec2)
         a = Chunk.from_repo(
-            id=cid, guidebook_id=_GID, ordinal=0, text="A", embedding=_EMB
+            id=cid, guidebook_id=_GID, ordinal=0, text="A", page=None, embedding=_EMB
         )
         b = Chunk.from_repo(
-            id=cid, guidebook_id=_GID2, ordinal=99, text="B", embedding=emb2
+            id=cid, guidebook_id=_GID2, ordinal=99, text="B", page=None, embedding=emb2
         )
         assert a == b
 
     def test_not_equal_when_different_id_or_other_type(self) -> None:
         a = Chunk.create(
-            guidebook_id=_GID, ordinal=0, text=_TEXT, embedding=_EMB
+            guidebook_id=_GID, ordinal=0, text=_TEXT, page=None, embedding=_EMB
         )
         b = Chunk.create(
-            guidebook_id=_GID, ordinal=0, text=_TEXT, embedding=_EMB
+            guidebook_id=_GID, ordinal=0, text=_TEXT, page=None, embedding=_EMB
         )
         assert a != b
         not_a_chunk: object = "not-a-chunk"
@@ -78,10 +96,10 @@ class TestChunk:
         vec2[1] = 1.0
         emb2 = Embedding(vector=vec2)
         a = Chunk.from_repo(
-            id=cid, guidebook_id=_GID, ordinal=0, text="A", embedding=_EMB
+            id=cid, guidebook_id=_GID, ordinal=0, text="A", page=None, embedding=_EMB
         )
         b = Chunk.from_repo(
-            id=cid, guidebook_id=_GID2, ordinal=99, text="B", embedding=emb2
+            id=cid, guidebook_id=_GID2, ordinal=99, text="B", page=None, embedding=emb2
         )
         assert hash(a) == hash(b)
         assert len({a, b}) == 1

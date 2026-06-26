@@ -26,6 +26,7 @@ from domain.value_objects.embedding import Embedding
 from domain.value_objects.guidebook_id import GuidebookId
 from domain.value_objects.lead_id import LeadId
 from domain.value_objects.magic_link import MagicLink
+from domain.value_objects.parsed_segment import ParsedSegment
 from tests._support.builders import make_embedding
 
 
@@ -225,6 +226,7 @@ class FakeLLMClient:
         system_prompt: str,
         max_output_tokens: int,
         api_key: SecretStr,
+        is_byok: bool,
     ) -> GeneratedReply:
         self.calls.append(
             {
@@ -234,6 +236,7 @@ class FakeLLMClient:
                 "system_prompt": system_prompt,
                 "max_output_tokens": max_output_tokens,
                 "api_key": api_key,
+                "is_byok": is_byok,
             }
         )
         if self.error is not None:
@@ -267,24 +270,32 @@ class FakeMagicLinkGenerator:
 
 
 class FakeFileParser:
-    """``FileParser`` returning fixed text."""
+    """``FileParser`` returning a single fixed segment (``page=None``)."""
 
     def __init__(self, text: str = "parsed document text") -> None:
         self.text = text
         self.calls: list[tuple[bytes, str]] = []
 
-    def parse(self, file_bytes: bytes, mime_type: str) -> str:
+    def parse(self, file_bytes: bytes, mime_type: str) -> list[ParsedSegment]:
         self.calls.append((file_bytes, mime_type))
-        return self.text
+        return [ParsedSegment(text=self.text, page=None)]
 
 
 class FakeTextChunker:
-    """``TextChunker`` returning fixed chunks."""
+    """``TextChunker`` returning fixed chunks; optional per-chunk ``pages`` for provenance tests."""
 
-    def __init__(self, chunks: list[str] | None = None) -> None:
+    def __init__(
+        self, chunks: list[str] | None = None, pages: list[int | None] | None = None
+    ) -> None:
         self.chunks = chunks if chunks is not None else ["chunk-0", "chunk-1"]
-        self.calls: list[str] = []
+        self.pages = pages
+        self.calls: list[list[ParsedSegment]] = []
 
-    def chunk(self, text: str) -> list[str]:
-        self.calls.append(text)
-        return list(self.chunks)
+    def chunk(self, segments: list[ParsedSegment]) -> list[ParsedSegment]:
+        self.calls.append(segments)
+        if self.pages is not None:
+            return [
+                ParsedSegment(text=t, page=p)
+                for t, p in zip(self.chunks, self.pages, strict=True)
+            ]
+        return [ParsedSegment(text=t, page=None) for t in self.chunks]

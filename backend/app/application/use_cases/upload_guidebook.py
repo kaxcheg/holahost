@@ -92,23 +92,29 @@ class UploadGuidebookUseCase:
                 raise InvalidMagicLinkError()
             self.rate.check_and_increment(RateLimitScope.MAGIC_LINK, str(lead.id))
 
-        text = self.parser.parse(cmd.file_bytes, cmd.mime_type)
-        if len(text) < self.settings.min_extracted_text_chars:
+        segments = self.parser.parse(cmd.file_bytes, cmd.mime_type)
+        if sum(len(s.text) for s in segments) < self.settings.min_extracted_text_chars:
             raise EmptyDocumentError()
         # chunk-count guard (min/max). The chunker contract guarantees per-chunk token length
         # (TextChunker port): its window must be <= the embedding model's max input, else the
         # embedder silently truncates (§2.5) — enforced by the chunker impl, not measurable here.
-        chunks_text = self.chunker.chunk(text)
-        if len(chunks_text) > self.settings.max_chunks_per_guidebook:
+        chunked = self.chunker.chunk(segments)
+        if len(chunked) > self.settings.max_chunks_per_guidebook:
             raise TooManyChunksError(max_chunks=self.settings.max_chunks_per_guidebook)
-        if len(chunks_text) < self.settings.min_chunks_per_guidebook:
+        if len(chunked) < self.settings.min_chunks_per_guidebook:
             raise EmptyDocumentError()
-        embeddings = self.embedder.embed_many(chunks_text)
+        embeddings = self.embedder.embed_many([c.text for c in chunked])
 
         guidebook = Guidebook.create(name=name, ip_hash=ip_hash)
         new_chunks: list[Chunk] = [
-            Chunk.create(guidebook_id=guidebook.id, ordinal=i, text=t, embedding=e)
-            for i, (t, e) in enumerate(zip(chunks_text, embeddings, strict=True))
+            Chunk.create(
+                guidebook_id=guidebook.id,
+                ordinal=i,
+                text=c.text,
+                page=c.page,
+                embedding=e,
+            )
+            for i, (c, e) in enumerate(zip(chunked, embeddings, strict=True))
         ]
 
         with self.uow.transaction():

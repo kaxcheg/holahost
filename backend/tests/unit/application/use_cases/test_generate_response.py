@@ -135,6 +135,7 @@ class TestGenerateResponse:
         api_key = call["api_key"]
         assert isinstance(api_key, SecretStr)
         assert api_key.get_secret_value() == "sk-byok"
+        assert call["is_byok"] is True
 
     def test_rate_subjects(self) -> None:
         lead, _, leads, gbs, chunks = _wired()

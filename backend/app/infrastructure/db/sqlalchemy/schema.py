@@ -71,6 +71,7 @@ chunks = Table(
     ),
     Column("ordinal", Integer, nullable=False),
     Column("text", Text, nullable=False),
+    Column("page", Integer, nullable=True),
     Column("embedding", BYTEA, nullable=False),
 )
 
