@@ -316,11 +316,11 @@ Use case принимает зависимости через конструкт
 | Frontend bundler | Vite 5 |
 | Frontend язык | TypeScript (strict), без React/Vue/Svelte |
 | CSS | Tailwind CSS v4 |
-| Embedding-модель | `intfloat/multilingual-e5-small` (384-dim, многоязычная) |
-| Embedding runtime | ONNX через `optimum` + `onnxruntime` (CPU); ~120 MB в образе |
+| Embedding-модель | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384-dim, многоязычная) — встроена в реестр `fastembed` (B-40, C-05) |
+| Embedding runtime | `fastembed` (onnxruntime под капотом); модель скачивается и кэшируется библиотекой при первом прогоне — ручной ONNX-экспорт (`optimum`) не нужен |
 | Vector retrieval | numpy cosine на L2-нормализованных embeddings, top-K в Python |
-| Tokenizer для чанкинга | `tiktoken` (`cl100k_base`) |
-| LLM | Anthropic Claude: `claude-sonnet-4-6` для real-flow (BYOK), `claude-haiku-4-5-20251001` для sample-flow (server key) |
+| Tokenizer для чанкинга | токенайзер самой embedding-модели (через `fastembed`); `RecursiveCharacterTextSplitter` (`langchain-text-splitters`), `length_function` = этот токенайзер — НЕ `tiktoken`/`cl100k` (BPE OpenAI ≠ SentencePiece модели; C-05/C-07) |
+| LLM | Anthropic Claude через `langchain_anthropic.ChatAnthropic` за портом `LLMClient` (B-42, C-15): `claude-sonnet-4-6` для real-flow (BYOK), `claude-haiku-4-5-20251001` для sample-flow (server key) |
 | СУБД | Neon Postgres через **SQLAlchemy Core (2.0)** поверх драйвера `psycopg[binary,pool]` (psycopg 3); ORM не используется (§9) |
 | Миграции | Alembic (DDL из того же `MetaData`, что и Core-запросы) |
 | Email-провайдер | Resend |
@@ -332,12 +332,12 @@ Use case принимает зависимости через конструкт
 | Параметр | Значение |
 |---|---|
 | Поддерживаемые форматы | PDF, DOCX, MD, TXT |
-| Парсеры | PDF → `pymupdf`; DOCX → `python-docx`; MD/TXT → встроенно |
+| Парсеры | PDF → `pymupdf` (по сегменту на страницу — provenance, §7.4); DOCX → `python-docx` (только `document.paragraphs` — текст ячеек Word-таблиц НЕ извлекается, ограничение MVP; `page=None`); MD/TXT → `bytes.decode("utf-8")`. Всё in-memory |
 | OCR | НЕ применяется |
 | **Max upload size MVP** | **4 MB** (твёрдый потолок ниже Lambda sync body 6 MB; рост выше не планируется) |
 | Max файлов за запрос | 1 |
 | Max длина текста после парсинга | 200 000 символов |
-| Чанкинг | sliding window: 480 токенов окно, 80 токенов overlap (окно ДОЛЖНО быть ≤ 512 — max input `intfloat/multilingual-e5-small`, с учётом prefix-токенов; иначе эмбеддер молча обрезает чанк) |
+| Чанкинг | token-aware sliding window: **120** токенов окно, **16** overlap (окно ДОЛЖНО быть ≤ max input embedding-модели = **128** токенов у MiniLM-L12 — измерено по токенайзеру модели, C-10; устаревшее «512» из карточки qdrant неверно; иначе эмбеддер молча обрезает чанк). Резка посегментно — `page` provenance сохраняется, чанки не пересекают границы страниц |
 | Max чанков на гайдбук | 500 |
 | Retrieval top-K | 5 чанков |
 | Метрика сходства | cosine на L2-нормализованных embeddings |
@@ -671,6 +671,7 @@ CREATE TABLE chunks (
     guidebook_id  UUID         NOT NULL REFERENCES guidebooks(guidebook_id) ON DELETE CASCADE,
     ordinal       INT          NOT NULL,
     text          TEXT         NOT NULL,
+    page          INT,
     embedding     BYTEA        NOT NULL
 );
 ```
@@ -679,6 +680,7 @@ CREATE TABLE chunks (
 - `id` — `ChunkId.new()` (UUID); генерируется в `Chunk.create()` (§7).
 - `embedding` — `numpy.frombuffer(bytes, dtype=float32)` длины `EMBEDDING_DIM` (384), L2-нормализован. Cosine retrieve в Python (см. §2.5).
 - `ordinal` — порядок чанка в исходном тексте; для отладки prompt'а, в retrieve не участвует.
+- `page` — 0-based исходная страница (PDF) или `NULL` для форматов без пагинации (DOCX/MD/TXT); provenance, в retrieve не участвует (§2.5, B-38–B-40). На свежей БД колонку материализует `metadata.create_all` миграции `0001` (отдельной миграции нет — D7=A, до запуска БД не развёрнута).
 - Cascade-delete: удаление `guidebook_id` (replace или TTL-cleanup) автоматически чистит чанки.
 
 ### 4.4 rate_limit_counters
@@ -1390,6 +1392,7 @@ class Chunk:
     guidebook_id: GuidebookId
     ordinal: int
     text: str
+    page: int | None
     embedding: Embedding
 
     @classmethod
@@ -1398,6 +1401,7 @@ class Chunk:
         guidebook_id: GuidebookId,
         ordinal: int,
         text: str,
+        page: int | None,
         embedding: Embedding,
     ) -> Chunk:
         return cls(
@@ -1405,6 +1409,7 @@ class Chunk:
             guidebook_id=guidebook_id,
             ordinal=ordinal,
             text=text,
+            page=page,
             embedding=embedding,
         )
 
@@ -1415,14 +1420,16 @@ class Chunk:
         guidebook_id: GuidebookId,
         ordinal: int,
         text: str,
+        page: int | None,
         embedding: Embedding,
     ) -> Chunk:
-        return cls(id, guidebook_id, ordinal, text, embedding)
+        return cls(id, guidebook_id, ordinal, text, page, embedding)
 ```
 
 - `id` — UUID (см. §4.3); генерируется в `create()`.
 - `ordinal` — индекс чанка в исходном тексте (`enumerate(chunks_text)` в ingestion-use case).
-- Заметка: `RawChunk` **не** вводится — `TextChunker` возвращает `list[str]`, ordinal вычисляется из enumerate.
+- `page` — 0-based исходная страница (PDF) или `None` (DOCX/MD/TXT); provenance (§2.5 / §4.3).
+- Заметка: носитель «текст + страница» на границах парсера/чанкера — frozen VO `ParsedSegment(text, page)` (`domain/value_objects/parsed_segment.py`, B-38–B-40). `TextChunker.chunk(list[ParsedSegment]) -> list[ParsedSegment]`; ordinal по-прежнему вычисляется из `enumerate` в use case.
 
 ### 7.5 `Lead` (`domain/entities/lead.py`) — persistent
 
@@ -1807,12 +1814,15 @@ class GenerateResponseResult:
 # application/ports/ingestion.py
 from __future__ import annotations
 from typing import Protocol
+from domain.value_objects.parsed_segment import ParsedSegment
 
 class FileParser(Protocol):
-    def parse(self, file_bytes: bytes, mime_type: str) -> str: ...
+    # PDF → один сегмент на страницу (page 0-based); прочие форматы → один сегмент, page=None.
+    def parse(self, file_bytes: bytes, mime_type: str) -> list[ParsedSegment]: ...
 
 class TextChunker(Protocol):
-    def chunk(self, text: str) -> list[str]: ...
+    # Каждый сегмент режется на чанки ≤ max_chunk_tokens; page наследуется от исходного сегмента.
+    def chunk(self, segments: list[ParsedSegment]) -> list[ParsedSegment]: ...
 ```
 
 #### 8.2.2 `embedding.py`
@@ -1867,10 +1877,12 @@ class LLMClient(Protocol):
         system_prompt: str,
         max_output_tokens: int,
         api_key: SecretStr,
+        is_byok: bool,
     ) -> GeneratedReply: ...
 ```
 
 - `chunks` — top-K retrieved Chunk'и (sample- или real-flow); реализация формирует prompt из `chunk.text`, не из embedding.
+- `is_byok` — дискриминатор потока (B-42, C-03/D3): на upstream-`401` BYOK (`True`) → `InvalidApiKeyError` (→ 401), server-key (`False`) → `UpstreamLLMError(retryable=False)` (серверная мисконфигурация). Без флага серверный 401 ошибочно стал бы `InvalidApiKeyError`, который sample-flow не ловит → 500.
 - `guest_message` — domain entity; реализация подставляет `guest_message.text` в prompt.
 - `model_id`, `system_prompt`, `max_output_tokens` — примитивы; sample/real-flow берут значения из `Settings` (валидация при load env).
 - `api_key` — `SecretStr`; для real-flow приходит из `GenerateResponseCmd.byok` (без перепроверки на стороне application), для sample-flow — из `Settings.sample_server_api_key` (pydantic гарантирует непустоту).
@@ -3122,7 +3134,7 @@ ADR фиксируют принятые архитектурные решени�
 - §4.4 — алгоритм fixed-window формализован.
 - §5.1 — числа подставляются.
 - §7.6 `MAX_GUEST_MESSAGE_LENGTH = 4000` (уже 4000, остаётся).
-- §8.0 / `app/config/config.py` — добавляются поля (`Settings` читает их из env-vars; конкретные значения задаёт Terraform, §2.6; Python defaults НЕ задаются — fail-fast при cold start, если env отсутствует): `rate_limit_per_ip: int`, `rate_limit_per_magic_link: int`, `rate_limit_window_seconds: int`, `max_guest_message_length: int`, `max_output_tokens: int`, `sample_budget_daily_cap_tokens: int`, `ingestion_p95_budget_s: int`, `response_p95_budget_s: int`, `lambda_max_duration_s: int`, `max_rate_limit_window_seconds: int`, `cleanup_batch_size: int`, `magic_link_ttl_days: int`, `min_upload_size_bytes: int`, `min_chunks_per_guidebook: int`. Длительности задаются целочисленными env-полями (`*_seconds` / `*_days`) и отдаются use case'ам как `timedelta`-property (`max_rate_limit_window`, `magic_link_ttl`) — ops задают целые числа, без ISO-8601 в env. `max_chunk_tokens` (= max input эмбеддера, ≤512) — НЕ отдельное Settings-поле тут: это инвариант чанкера (окно `chunk_window` ≤ этого значения, §2.5), конфиг чанкера — отдельным infra-тикетом. SLO `INGESTION_P95_BUDGET`/`RESPONSE_P95_BUDGET` дополнительно настраивают CloudWatch alarm threshold'ы в Terraform.
+- §8.0 / `app/config/config.py` — добавляются поля (`Settings` читает их из env-vars; конкретные значения задаёт Terraform, §2.6; Python defaults НЕ задаются — fail-fast при cold start, если env отсутствует): `rate_limit_per_ip: int`, `rate_limit_per_magic_link: int`, `rate_limit_window_seconds: int`, `max_guest_message_length: int`, `max_output_tokens: int`, `sample_budget_daily_cap_tokens: int`, `ingestion_p95_budget_s: int`, `response_p95_budget_s: int`, `lambda_max_duration_s: int`, `max_rate_limit_window_seconds: int`, `cleanup_batch_size: int`, `magic_link_ttl_days: int`, `min_upload_size_bytes: int`, `min_chunks_per_guidebook: int`. Длительности задаются целочисленными env-полями (`*_seconds` / `*_days`) и отдаются use case'ам как `timedelta`-property (`max_rate_limit_window`, `magic_link_ttl`) — ops задают целые числа, без ISO-8601 в env. `max_chunk_tokens` (= фактический max input эмбеддера, **128** у MiniLM-L12, §2.5) — инфра-тикетом B-38–B-45 стал отдельным Settings-полем; валидаторы `chunk_window ≤ max_chunk_tokens` и `chunk_overlap < chunk_window` живут в `Settings` (`_validate_chunking_window`). Тем же тикетом добавлены adapter-поля: `embedding_model_name`, `chunk_window`, `chunk_overlap`, `anthropic_base_url`, `llm_timeout_seconds`, `resend_api_key: SecretStr`, `resend_from`, `magic_link_base_url`, `email_timeout_seconds`, и дискриминатор окружения `env: Literal["dev","staging","prod"]` (prod-guardrail `_enforce_prod_guardrails`). Реальный max input эмбеддера ловится fail-fast в composition root (B-46) через `FastEmbedEmbeddingModel.max_input_tokens()`. SLO `INGESTION_P95_BUDGET`/`RESPONSE_P95_BUDGET` дополнительно настраивают CloudWatch alarm threshold'ы в Terraform.
 - §2.4 (stack) — Sonnet 4.6 при `MAX_OUTPUT_TOKENS=1000` укладывается в 8s p95 при стандартном Anthropic API latency (≈ 200 ms TTFT + ~0.5s/100 tok).
 - §9.1 `_estimate_cost(output_tokens)` фиксируется как `output_tokens * settings.haiku_output_price_per_mtok / 1_000_000`.
 - AC §3.0 — все параметры из §10.2 становятся численно верифицируемыми.
@@ -3169,7 +3181,7 @@ ADR фиксируют принятые архитектурные решени�
 
 - **BYOK** — вариант **C**: HTTP-header `X-Api-Key` (значение `API_KEY_HEADER = "X-Api-Key"`). Передаётся только на `/api/generate` (единственный endpoint, потребляющий BYOK, §5.7). Сервер:
   - парсит в interface-слое в `SecretStr`, кладёт в DTO (`GenerateResponseCmd.byok: SecretStr`, уже зафиксировано в §8.1);
-  - передаётся в `LLMClient.generate(..., api_key: SecretStr)` (§8.2.4); реализация `anthropic_llm_client.py` извлекает `.get_secret_value()` непосредственно в строку httpx-заголовка `Authorization: Bearer ...`, ссылка на строку нигде не сохраняется;
+  - передаётся в `LLMClient.generate(..., api_key: SecretStr, is_byok: bool)` (§8.2.4); реализация `anthropic_llm_client.py` строит per-call `langchain_anthropic.ChatAnthropic` (`max_retries=0`) с ключом в поле `anthropic_api_key` — SDK аутентифицируется заголовком **`x-api-key`** (НЕ `Authorization: Bearer`, который у Anthropic используется лишь в OAuth-потоке — фактическая правка спеки, C-02); SecretStr на инстансе адаптера не сохраняется (свежий клиент на каждый invocation);
   - RAM-only: сразу после возврата из `LLMClient.generate(...)` ссылок на raw-значение не остаётся; lifecycle ключа = lifecycle одного Lambda-invocation'а (Function URL request);
   - `logger.exception(...)`, `logger.error(...)` имеют explicit allowlist полей (см. §10.5); raw BYOK не входит — даже при unhandled-exception'е CloudWatch получает sanitized payload (см. §10.5 sanitizer-table).
 - **magic_link** — вариант **β**: landing `?ml=<token>` (фронтовая логика — извлечь из URL, `history.replaceState` без query, чтобы вкладка/история браузера не сохранили token дольше первой загрузки), далее header `X-Magic-Link` на всех endpoint'ах с MAGIC_LINK-scope. `MAGIC_LINK_HEADER = "X-Magic-Link"`, `MAGIC_LINK_URL_PARAM = "ml"`. Header исключён из логирования (см. §10.5).
@@ -3254,7 +3266,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
 
 **Решение.**
 
-- **Разделение в промпте** — вариант **B**. `LLMClient.generate(...)` (impl `anthropic_llm_client.py`, §8.0) формирует Anthropic Messages API request как:
+- **Разделение в промпте** — вариант **B**. `LLMClient.generate(...)` (impl `anthropic_llm_client.py`, §8.0; B-42/C-15 — через `langchain_anthropic.ChatAnthropic`, не raw httpx) строит запрос из `SystemMessage(system_prompt)` + `HumanMessage(<контекст + вопрос>)`; концептуально это эквивалентно Anthropic Messages API request'у:
   ```python
   {
       "model": settings.real_model_id,
@@ -3273,7 +3285,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
       ],
   }
   ```
-  Уточнение: chunks включены в user-message (не в system-prompt), потому что они per-request retrieval, а не часть instruction'а; разделение `chunks ↔ guest_message` внутри user-message — текстовое (delimiter `\n\n---\n\n` + явная подпись).
+  Уточнение: chunks включены в user-message (не в system-prompt), потому что они per-request retrieval, а не часть instruction'а; разделение `chunks ↔ guest_message` внутри user-message — текстовое. Фактическая реализация (B-42) оборачивает контекст в теги `<context>…</context>` перед вопросом гостя (тот же вариант-B split); точная формулировка-делимитер — деталь реализации, не контракт.
 - `system_prompt` (Settings, §10.2 / config — конкретный текст в §10.4 не фиксируется, утверждается (отдельный ADR, продуктовое решение). Шаблон должен содержать:
   - роль модели («ты помощник STR-хоста, отвечаешь гостям по контенту гайдбука»);
   - правило источника («используй только содержимое блока „Контент гайдбука"»);
