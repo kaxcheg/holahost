@@ -32,6 +32,16 @@ _VALID: dict[str, object] = dict(
     rate_limit_per_ip=60,
     rate_limit_per_magic_link=60,
     rate_limit_window_seconds=3600,
+    embedding_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    max_chunk_tokens=128,
+    chunk_window=120,
+    chunk_overlap=16,
+    anthropic_base_url="https://api.anthropic.com",
+    llm_timeout_seconds=30.0,
+    resend_api_key="re_test_key",
+    resend_from="dev@hola.host",
+    magic_link_base_url="https://app.test/claim",
+    email_timeout_seconds=10.0,
 )
 
 
@@ -79,6 +89,15 @@ class TestSettings:
             **{**_VALID, "env": "prod", "database_url": "postgresql://main.db.neon.tech/app"}
         )
         assert s.env == "prod"
+
+    def test_chunk_window_exceeding_max_chunk_tokens_rejected(self) -> None:
+        # The chunker window must fit the embedder's ceiling, else it silently truncates (§2.5 / C-07).
+        with pytest.raises(ValidationError):
+            Settings(**{**_VALID, "max_chunk_tokens": 128, "chunk_window": 129})  # type: ignore[arg-type]
+
+    def test_chunk_overlap_not_below_window_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(**{**_VALID, "chunk_window": 120, "chunk_overlap": 120})  # type: ignore[arg-type]
 
     def test_from_env_reads_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key, val in _VALID.items():

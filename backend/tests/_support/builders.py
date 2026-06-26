@@ -29,6 +29,11 @@ def make_embedding(seed: int = 0) -> Embedding:
     return Embedding(vector=vector)
 
 
+def make_guidebook_id() -> GuidebookId:
+    """Return a fresh ``GuidebookId``."""
+    return GuidebookId.new()
+
+
 def make_magic_link(token: str = "tok-abc") -> MagicLink:
     """Return a ``MagicLink`` wrapping ``token``."""
     return MagicLink(value=SecretStr(token))
@@ -67,11 +72,17 @@ def make_guidebook(
     return guidebook
 
 
-def make_chunk(guidebook_id: GuidebookId, ordinal: int = 0, text: str = "chunk text") -> Chunk:
+def make_chunk(
+    guidebook_id: GuidebookId,
+    ordinal: int = 0,
+    text: str = "chunk text",
+    page: int | None = None,
+) -> Chunk:
     """Build a ``Chunk`` with a valid embedding for ``guidebook_id``."""
     return Chunk.create(
         guidebook_id=guidebook_id,
         ordinal=ordinal,
         text=text,
+        page=page,
         embedding=make_embedding(ordinal),
     )

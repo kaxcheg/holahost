@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     rate_limit_per_ip: int = Field(gt=0)
     rate_limit_per_magic_link: int = Field(gt=0)
     rate_limit_window_seconds: int = Field(gt=0)
+    # Infrastructure adapter config (B-38…B-45). Co-located here per the one-class env model (§10.2).
+    embedding_model_name: str
+    max_chunk_tokens: int = Field(gt=0)
+    chunk_window: int = Field(gt=0)
+    chunk_overlap: int = Field(ge=0)
+    anthropic_base_url: str
+    llm_timeout_seconds: float = Field(gt=0)
+    resend_api_key: SecretStr = Field(min_length=1)
+    resend_from: str
+    magic_link_base_url: str
+    email_timeout_seconds: float = Field(gt=0)
 
     @property
     def magic_link_ttl(self) -> timedelta:
@@ -86,6 +97,24 @@ class Settings(BaseSettings):
             host in self.database_url.get_secret_value() for host in ("localhost", "127.0.0.1")
         ):
             raise ValueError("database_url must not point to localhost in prod")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_chunking_window(self) -> Self:
+        """Chunk window must fit the embedder and overlap must be smaller than the window (§2.5).
+
+        The embedder silently truncates inputs over ``max_chunk_tokens``; the chunker's window has
+        to stay within it (C-07). This validator only checks the window/overlap relations against the
+        operator-set ``max_chunk_tokens`` — it cannot load the model. That ``max_chunk_tokens`` does
+        not exceed the model's REAL ceiling is enforced at the composition root (B-46) via
+        ``FastEmbedEmbeddingModel.max_input_tokens()`` (fail-fast); the real limit is 128 (D6).
+
+        :raises ValueError: if ``chunk_window > max_chunk_tokens`` or ``chunk_overlap >= chunk_window``.
+        """
+        if self.chunk_window > self.max_chunk_tokens:
+            raise ValueError("chunk_window must be <= max_chunk_tokens")
+        if self.chunk_overlap >= self.chunk_window:
+            raise ValueError("chunk_overlap must be < chunk_window")
         return self
 
     @classmethod

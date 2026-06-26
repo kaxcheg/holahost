@@ -23,7 +23,8 @@ class Chunk:
         guidebook_id: FK to the parent guidebook.
         ordinal: Zero-based index of this chunk within the source text
             (``enumerate(chunks_text)`` in the ingestion use case, §9.4).
-        text: Raw text slice (600-token window, §2.5).
+        text: Raw text slice (<= chunk_window tokens; window verified against the embedder, §2.5).
+        page: 0-based source page (PDF), or ``None`` when not page-derived (§2.5).
         embedding: L2-normalised 384-dim float32 vector (§2.5).
     """
 
@@ -31,6 +32,7 @@ class Chunk:
     guidebook_id: GuidebookId
     ordinal: int
     text: str
+    page: int | None
     embedding: Embedding
 
     @classmethod
@@ -39,6 +41,7 @@ class Chunk:
         guidebook_id: GuidebookId,
         ordinal: int,
         text: str,
+        page: int | None,
         embedding: Embedding,
     ) -> Chunk:
         """Create a new chunk with a fresh id.
@@ -47,6 +50,7 @@ class Chunk:
             guidebook_id: Id of the parent guidebook.
             ordinal: Zero-based position in the source text.
             text: Raw text slice.
+            page: 0-based source page (PDF), or ``None`` when not page-derived.
             embedding: Pre-computed L2-normalised embedding.
 
         Returns:
@@ -57,6 +61,7 @@ class Chunk:
             guidebook_id=guidebook_id,
             ordinal=ordinal,
             text=text,
+            page=page,
             embedding=embedding,
         )
 
@@ -67,6 +72,7 @@ class Chunk:
         guidebook_id: GuidebookId,
         ordinal: int,
         text: str,
+        page: int | None,
         embedding: Embedding,
     ) -> Chunk:
         """Reconstruct a chunk from persisted values (no id generation).
@@ -76,6 +82,7 @@ class Chunk:
             guidebook_id: Persisted parent guidebook id.
             ordinal: Persisted position index.
             text: Persisted text slice.
+            page: Persisted 0-based source page, or ``None``.
             embedding: Persisted embedding vector.
 
         Returns:
@@ -86,6 +93,7 @@ class Chunk:
             guidebook_id=guidebook_id,
             ordinal=ordinal,
             text=text,
+            page=page,
             embedding=embedding,
         )
 

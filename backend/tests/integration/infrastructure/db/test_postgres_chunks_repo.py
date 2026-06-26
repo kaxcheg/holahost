@@ -24,7 +24,9 @@ def _unit_embedding(seed: int) -> Embedding:
 def test_bulk_add_then_list_ordered(uow: PostgresUnitOfWork) -> None:
     gb = Guidebook.create(name=GuidebookName("G"), ip_hash=IpHash("0" * 64))
     chunks = [
-        Chunk.create(guidebook_id=gb.id, ordinal=i, text=f"t{i}", embedding=_unit_embedding(i))
+        Chunk.create(
+            guidebook_id=gb.id, ordinal=i, text=f"t{i}", page=i, embedding=_unit_embedding(i)
+        )
         for i in range(3)
     ]
     with uow.transaction():
@@ -34,6 +36,10 @@ def test_bulk_add_then_list_ordered(uow: PostgresUnitOfWork) -> None:
         loaded = PostgresChunksRepo(uow).list_for_guidebook(gb.id)
     assert [c.ordinal for c in loaded] == [0, 1, 2]
     assert loaded[0].text == "t0"
+    # Page provenance round-trips through the `page` column — proves D7=A: a fresh DB's
+    # metadata.create_all materialises the new column (no separate migration), and the
+    # repo Data Mapper writes/reads it (B-38…B-45 §2.5).
+    assert [c.page for c in loaded] == [0, 1, 2]
     assert np.allclose(loaded[1].embedding.vector, chunks[1].embedding.vector)
 
 

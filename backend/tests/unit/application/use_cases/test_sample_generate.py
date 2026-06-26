@@ -104,3 +104,4 @@ class TestSampleGenerate:
         api_key = call["api_key"]
         assert isinstance(api_key, SecretStr)
         assert api_key.get_secret_value() == "sk-sample-key"
+        assert call["is_byok"] is False

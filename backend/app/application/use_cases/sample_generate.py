@@ -70,6 +70,7 @@ class SampleGenerateUseCase:
             system_prompt=self.settings.system_prompt,
             max_output_tokens=self.settings.max_output_tokens,
             api_key=self.settings.sample_server_api_key,
+            is_byok=False,
         )
         dollars = self._estimate_cost(reply.output_tokens)
         with self.uow.transaction():

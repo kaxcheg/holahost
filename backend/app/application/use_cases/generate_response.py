@@ -88,6 +88,7 @@ class GenerateResponseUseCase:
             system_prompt=self.settings.system_prompt,
             max_output_tokens=self.settings.max_output_tokens,
             api_key=cmd.byok,
+            is_byok=True,
         )
         # Re-validate under the holder lock before returning: the tx1 gather was unlocked (no lock
         # may span the LLM call), so the guidebook could have been replaced (upload §9.4) or deleted

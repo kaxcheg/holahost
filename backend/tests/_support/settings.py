@@ -29,6 +29,16 @@ _DEFAULTS: dict[str, object] = dict(
     rate_limit_per_ip=60,
     rate_limit_per_magic_link=60,
     rate_limit_window_seconds=3600,
+    embedding_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    max_chunk_tokens=128,
+    chunk_window=120,
+    chunk_overlap=16,
+    anthropic_base_url="https://api.anthropic.com",
+    llm_timeout_seconds=30.0,
+    resend_api_key="re_test_key",
+    resend_from="dev@hola.host",
+    magic_link_base_url="https://app.test/claim",
+    email_timeout_seconds=10.0,
 )
 
 
