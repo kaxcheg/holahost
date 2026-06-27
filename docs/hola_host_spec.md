@@ -1686,9 +1686,9 @@ backend/
         postgres_uow.py,
         alembic/                               # миграции
       llm/
-        anthropic_llm_client.py                # Claude (Sonnet/Haiku) через httpx
+        anthropic_llm_client.py                # Claude (Sonnet/Haiku) через langchain_anthropic.ChatAnthropic
       embedding/
-        onnx_e5_embedding_model.py             # multilingual-e5-small через onnxruntime
+        fastembed_embedding_model.py           # paraphrase-multilingual-MiniLM-L12 через fastembed (onnxruntime)
       vector/
         numpy_vector_search.py                 # cosine top-K на L2-нормализованных embeddings
       email/
@@ -1696,7 +1696,7 @@ backend/
       ingestion/
         pdf_file_parser.py, docx_file_parser.py, text_file_parser.py,
         composite_file_parser.py,              # роутинг по MIME → конкретный парсер
-        tiktoken_text_chunker.py,
+        recursive_text_chunker.py,
         jinja_template_renderer.py
       common/
         url_safe_magic_link_generator.py       # MagicLinkGenerator (secrets.token_urlsafe)
@@ -2370,12 +2370,12 @@ from infrastructure.db.postgres_leads_repo import PostgresLeadsRepo
 from infrastructure.db.postgres_sample_budget_repo import PostgresSampleBudgetRepo
 from infrastructure.db.postgres_rate_limiter import PostgresRateLimiter
 from infrastructure.llm.anthropic_llm_client import AnthropicLLMClient
-from infrastructure.embedding.onnx_e5_embedding_model import OnnxE5EmbeddingModel
+from infrastructure.embedding.fastembed_embedding_model import FastEmbedEmbeddingModel
 from infrastructure.vector.numpy_vector_search import NumpyVectorSearch
 from infrastructure.email.resend_email_sender import ResendEmailSender
 from infrastructure.common.url_safe_magic_link_generator import UrlSafeMagicLinkGenerator
 from infrastructure.ingestion.composite_file_parser import CompositeFileParser
-from infrastructure.ingestion.tiktoken_text_chunker import TiktokenTextChunker
+from infrastructure.ingestion.recursive_text_chunker import RecursiveTextChunker
 
 # use cases
 from application.use_cases.sample_generate import SampleGenerateUseCase
@@ -2422,10 +2422,10 @@ def build() -> Container:
     email_sender = make_email_sender(settings)  # dev → SMTP/Mailpit, иначе Resend
     magic_link_gen = UrlSafeMagicLinkGenerator(settings.magic_link_token_bytes)
     llm = AnthropicLLMClient()
-    embedder = OnnxE5EmbeddingModel(settings.embedding_model_path)  # ONNX preload
+    embedder = FastEmbedEmbeddingModel(settings.embedding_model_name)  # fastembed preload
     vector_search = NumpyVectorSearch()
     parser = CompositeFileParser()
-    chunker = TiktokenTextChunker(settings.chunk_window, settings.chunk_overlap)
+    chunker = RecursiveTextChunker(settings.chunk_window, settings.chunk_overlap)
     sample_source = FileSampleGuidebookSource(settings.sample_guidebook_path)  # docs/-документ (§6.1)
     sample_chunks = load_sample_chunks(sample_source, parser, chunker, embedder)  # cold-start preload
 
@@ -4235,9 +4235,9 @@ Strict с первого коммита; ослабление настроек �
 - `B-37` Postgres RateLimiter (fixed-window 1 ч + `cleanup_old_windows`) — §8.2.8 / §10.2
 - `B-38` File parsers PDF/DOCX/text + composite-роутер по MIME — §2.5
 - `B-39` Text chunker (tiktoken) — §2.5
-- `B-40` ONNX e5-small EmbeddingModel + preload — §2.5 / §8.6
+- `B-40` fastembed MiniLM-L12 EmbeddingModel + preload — §2.5 / §8.6
 - `B-41` NumPy VectorSearch (cosine top-K) — §8.2.3
-- `B-42` Anthropic LLMClient (Sonnet + Haiku, через httpx) — §10.3 / §10.4
+- `B-42` Anthropic LLMClient (Sonnet + Haiku, langchain ChatAnthropic) — §10.3 / §10.4
 - `B-43` Resend EmailSender + `magic_link.j2` шаблон — §10.7
 - `B-44` Mailpit EmailSender (dev) — §11.0
 - `B-45` Mock LLMClient (dev) — §11.0
