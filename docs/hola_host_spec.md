@@ -293,6 +293,8 @@ infra/                      # Terraform (см. 2.6)
 | interface | ✓ | ✓ | ✓ | ✗ | — | ✗ |
 | scripts (bootstrap) | ✓ | ✓ | ✓ | ✓ | ✗ | — |
 
+Реальный контракт `import-linter` (`backend/pyproject.toml`, тип `layers`): `layers = ["interface", "infrastructure", "application", "domain"]` (сверху вниз — вышестоящий слой импортирует нижестоящие, не наоборот; `config` — leaf-исключение, см. §8.0). `interface` — **обязательный (non-optional)** слой контракта (`root_packages` включает `interface`). `scripts/` (composition root, §8.6) намеренно вне layered-контракта (не входит в `root_packages`): ему разрешён импорт любого слоя для сборки DI-графа. Проверка — `make lint-imports`.
+
 Use case принимает зависимости через конструкторную инжекцию; типы аргументов — Protocols из `application/ports/`. Конкретные реализации собираются в `scripts/bootstrap.py` и кэшируются на module-level Lambda execution environment (вместе с эффектом SnapStart). `Clock`-порт и `IdGenerator`-порт **не вводятся**: `datetime.now(tz=UTC)` используется inline; идентификаторы (`GuidebookId`/`ChunkId`/`LeadId`) — self-generating классы с методом `new()` (§7); `MagicLink` генерируется отдельным портом `MagicLinkGenerator`.
 
 ### 2.3 Подход к моделированию домена
@@ -1700,7 +1702,8 @@ backend/
         url_safe_magic_link_generator.py       # MagicLinkGenerator (secrets.token_urlsafe)
         sha256_ip_hasher.py                    # SHA-256 ip → IpHash (interface-слой)
       sample/
-        preload.py                             # load_sample_chunks(embedder) — cold-start preload (§8.6, §8.8)
+        source.py                              # SampleGuidebookSource port + FileSampleGuidebookSource (§6.1)
+        preload.py                             # load_sample_chunks(source, parser, chunker, embedder) — cold-start (§8.6, §8.8)
     interface/
       lambda_/
         handler.py                             # Lambda Function URL entry point
@@ -2304,36 +2307,46 @@ class UpstreamEmailError(ApplicationError):
 ```python
 # interface/lambda_/handler.py — обобщённый контур
 from __future__ import annotations
-import logging
-from scripts.bootstrap import container
-from interface.lambda_.router import dispatch
-from interface.lambda_.response_envelope import to_http_response
+from uuid import uuid4
 from application.exceptions import ApplicationError
+from config.logging import get_logger, log_event
+from interface.lambda_ import response_envelope as to_http_response  # модуль-алиас, не объект
+from interface.lambda_.router import dispatch
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)  # holahost.<module> child-логгер (§10.5), не bare logging.getLogger
 
-def lambda_handler(event, _context):
+def handle(event, context, container):                 # тестируемое ядро: container инжектируется
+    settings = container.settings
+    request_id = getattr(context, "aws_request_id", None) or str(uuid4())  # §10.8
+    method = event["requestContext"]["http"]["method"]
+    if method == "OPTIONS":
+        return to_http_response.preflight(settings)    # CORS preflight 204 (§10.3)
     try:
         cmd, use_case = dispatch(event, container)
         result = use_case.execute(cmd)
-        return to_http_response.ok(result)
-    except ApplicationError as e:
-        return to_http_response.from_application_error(e)
+        return to_http_response.ok(result, settings)
+    except ApplicationError as exc:
+        return to_http_response.from_application_error(exc, settings)
     except Exception:
         logger.exception("unhandled error in lambda_handler")
-        return to_http_response.internal()
+        return to_http_response.internal(request_id, settings)
+    # каждая ветка дополнительно эмитит log_event("http_request_completed", ...) с allowlist-полями (§10.5)
+
+def lambda_handler(event, context):                    # AWS entry point
+    from scripts.bootstrap import container             # lazy-import: не строить DI-граф на import (тесты)
+    return handle(event, context, container)
 ```
 
-Два уровня обработки: `ApplicationError` (и его подклассы, §8.4) → маппинг `code → HTTP` по §5.8 в `to_http_response.from_application_error`; всё прочее (`Exception`) → лог через `logger.exception` + 500 `ERR_INTERNAL` без stack-trace в теле (требование US-07). Конкретные подклассы (`InvalidMagicLinkError`, `RateLimitExceededError`, …) в handler'е не перечисляются — единая точка маппинга в `response_envelope`.
+Два уровня обработки: `ApplicationError` (и его подклассы, §8.4) → маппинг `code → HTTP` по §5.8 в `to_http_response.from_application_error`; всё прочее (`Exception`) → лог через `logger.exception` + 500 `ERR_INTERNAL` без stack-trace в теле (требование US-07). Конкретные подклассы (`InvalidMagicLinkError`, `RateLimitExceededError`, …) в handler'е не перечисляются — единая точка маппинга в `response_envelope`. `handle(event, context, container)` — чистое тестируемое ядро (container инжектируется); тонкий `lambda_handler(event, context)` лениво импортирует cold-start `container` из `scripts.bootstrap`, чтобы тесты импортировали `handle` без сборки DI-графа. `response_envelope` экспортирует module-level функции `to_response(err) -> (status, body)` + обёртки `ok(result, settings)` / `from_application_error(err, settings)` / `internal(request_id, settings)` / `preflight(settings)` — единый envelope-контур, общий с §10.8 (не объект `to_http_response`, а одноимённый модуль-алиас).
 
 `router.dispatch` мапит `(method, path)` → `(cmd_class, use_case)` по таблице §5.2. `request_parsing` извлекает примитивы из JSON/multipart, оборачивает секреты в `SecretStr`, считает `ip_hash` через `infrastructure/common/sha256_ip_hasher.py`, собирает соответствующий `*Cmd`.
 
-### 8.6 `scripts/bootstrap.py` — composition root
+### 8.6 `scripts/wiring.py` + `scripts/bootstrap.py` — composition root
 
-Composition root для Lambda. Кэшируется на module-level (Lambda execution environment + SnapStart, см. §2.1). Зависимостей вида `Clock` / `IdGenerator` нет (§7.9).
+Composition root для Lambda, **разделён на два модуля** (B-46): `scripts/wiring.py` держит `Container` (dataclass) и чистую `build() -> Container` без import-side-effects (тестируема изолированно); `scripts/bootstrap.py` — тонкий cold-start entry: читает `os.environ["ENV"]`, для `staging`/`prod` подгружает server-side секреты (`sm_loader.load_secrets_into_env`, §10.3), вызывает `configure_logging()` (§10.5), затем `container = build()`. Результат кэшируется на module-level (Lambda execution environment + SnapStart, см. §2.1). Зависимостей вида `Clock` / `IdGenerator` нет (§7.9). `build()` дополнительно выбирает реализацию `EmailSender` по env (`make_email_sender`: dev → SMTP/Mailpit, иначе Resend) и проверяет потолок токенов эмбеддера (`check_embedder_ceiling`, §2.5/C-10).
 
 ```python
-# scripts/bootstrap.py — контур
+# scripts/wiring.py — контур (Container + build())
 from __future__ import annotations
 from dataclasses import dataclass
 from config.config import Settings
@@ -2373,6 +2386,7 @@ from application.use_cases.generate_response import GenerateResponseUseCase
 
 # sample data preload (см. §6.1)
 from infrastructure.sample.preload import load_sample_chunks
+from infrastructure.sample.source import FileSampleGuidebookSource
 
 @dataclass
 class Container:
@@ -2397,7 +2411,7 @@ class Container:
     upload_guidebook: UploadGuidebookUseCase
     generate_response: GenerateResponseUseCase
 
-def _build() -> Container:
+def build() -> Container:
     settings = Settings.from_env()
     uow = PostgresUnitOfWork(settings.database_url)
     guidebooks_repo = PostgresGuidebooksRepo(uow)
@@ -2405,14 +2419,15 @@ def _build() -> Container:
     leads_repo = PostgresLeadsRepo(uow)
     sample_budget_repo = PostgresSampleBudgetRepo(uow)
     rate = PostgresRateLimiter(uow, settings)
-    email_sender = ResendEmailSender(settings)
+    email_sender = make_email_sender(settings)  # dev → SMTP/Mailpit, иначе Resend
     magic_link_gen = UrlSafeMagicLinkGenerator(settings.magic_link_token_bytes)
     llm = AnthropicLLMClient()
     embedder = OnnxE5EmbeddingModel(settings.embedding_model_path)  # ONNX preload
     vector_search = NumpyVectorSearch()
     parser = CompositeFileParser()
     chunker = TiktokenTextChunker(settings.chunk_window, settings.chunk_overlap)
-    sample_chunks = load_sample_chunks(embedder)  # cold-start preload
+    sample_source = FileSampleGuidebookSource(settings.sample_guidebook_path)  # docs/-документ (§6.1)
+    sample_chunks = load_sample_chunks(sample_source, parser, chunker, embedder)  # cold-start preload
 
     return Container(
         settings=settings,
@@ -2436,7 +2451,9 @@ def _build() -> Container:
         generate_response=GenerateResponseUseCase(rate, leads_repo, guidebooks_repo, chunks_repo, embedder, vector_search, llm, uow, settings),
     )
 
-container: Container = _build()  # module-level singleton (выполняется при cold start)
+# --- scripts/bootstrap.py (тонкий entry) ---
+# env = os.environ["ENV"]; на staging/prod: sm_loader.load_secrets_into_env(env, sm_client); configure_logging()
+container: Container = build()  # module-level singleton (выполняется при cold start)
 ```
 
 `bootstrap_cleanup.py` собирает мини-контейнер для cleanup-Lambda (`leads_repo`, `guidebooks_repo`, `rate`, `uow`, `settings`, плюс use case'ы `CleanupExpiredUseCase` и `CleanupRateCountersUseCase`) и обслуживает EventBridge-trigger (§4.7). Entry-point вызывает оба `execute()` последовательно и логирует объединённый итог; ничего из HTTP-стека (`router`, `request_parsing`, `response_envelope`) не использует.
@@ -2453,11 +2470,11 @@ container: Container = _build()  # module-level singleton (выполняетс�
 
 ### 8.8 DI, Lambda lifecycle, request flow
 
-- **DI**: конструкторная инжекция Protocol'ов; собрано вручную в `_build()`; никаких контейнерных фреймворков (`punq`/`dependency_injector` не вводятся).
+- **DI**: конструкторная инжекция Protocol'ов; собрано вручную в `build()` (`scripts/wiring.py`); никаких контейнерных фреймворков (`punq`/`dependency_injector` не вводятся).
 - **Lambda lifecycle**: `container` создаётся на cold start; SnapStart фризит инициализированный процесс с ONNX-моделью и preloaded sample-чанками (§2.1). Warm-invocation: handler → `dispatch(event, container)` → `use_case.execute(cmd)`.
-- **Request flow**: `lambda_handler(event)` → `router.dispatch` → `request_parsing.*Cmd` → `use_case.execute(cmd)` → `response_envelope.ok|error` → HTTP-ответ. Ошибки (`ApplicationError` и его подклассы) ловятся в handler'е, маппятся через `to_http_response.error` по таблице §5.8.
+- **Request flow**: `lambda_handler(event, context)` → `handle(event, context, container)` → `router.dispatch` → `request_parsing.*Cmd` → `use_case.execute(cmd)` → `response_envelope.ok|from_application_error` → HTTP-ответ. Ошибки (`ApplicationError` и его подклассы) ловятся в handler'е, маппятся через `response_envelope.from_application_error` по таблице §5.8.
 - **UoW и repo**: реализации repo принимают `PostgresUnitOfWork` и используют его текущее соединение/транзакцию. Use case оборачивает write-блок в `with uow.transaction():` (детали — §9).
-- **Sample-чанки preload**: `load_sample_chunks(embedder)` читает фиксированный текст из container image (`infrastructure/sample/`), чанкит + эмбеддит один раз на cold start, возвращает `list[Chunk]`. SnapStart фризит результат — на warm-вызовы embed не запускается.
+- **Sample-чанки preload**: `load_sample_chunks(sample_source, parser, chunker, embedder)` читает бизнес-документ из `docs/` через порт `FileSampleGuidebookSource(settings.sample_guidebook_path)` (sample-гайдбук — не код приложения, лежит в `docs/`, как `guidebook_template.json`), парсит + чанкит + эмбеддит один раз на cold start, возвращает `list[Chunk]`. SnapStart фризит результат — на warm-вызовы embed не запускается.
 
 ---
 
@@ -3185,7 +3202,7 @@ ADR фиксируют принятые архитектурные решени�
   - RAM-only: сразу после возврата из `LLMClient.generate(...)` ссылок на raw-значение не остаётся; lifecycle ключа = lifecycle одного Lambda-invocation'а (Function URL request);
   - `logger.exception(...)`, `logger.error(...)` имеют explicit allowlist полей (см. §10.5); raw BYOK не входит — даже при unhandled-exception'е CloudWatch получает sanitized payload (см. §10.5 sanitizer-table).
 - **magic_link** — вариант **β**: landing `?ml=<token>` (фронтовая логика — извлечь из URL, `history.replaceState` без query, чтобы вкладка/история браузера не сохранили token дольше первой загрузки), далее header `X-Magic-Link` на всех endpoint'ах с MAGIC_LINK-scope. `MAGIC_LINK_HEADER = "X-Magic-Link"`, `MAGIC_LINK_URL_PARAM = "ml"`. Header исключён из логирования (см. §10.5).
-- **CORS** — вариант **II**: `Access-Control-Allow-Origin` = `Settings.frontend_origin` (env-var, например `https://hola.host`); `Access-Control-Allow-Methods: GET, POST, OPTIONS`; `Access-Control-Allow-Headers: Content-Type, X-Api-Key, X-Magic-Link`; `Access-Control-Allow-Credentials: false` (cookie не используется); `Access-Control-Max-Age: 86400`. Под DEV-env (`Settings.env == "dev"`) добавляется `http://localhost:5173`.
+- **CORS** — вариант **II**: `Access-Control-Allow-Origin` = `Settings.frontend_origin` (env-var, например `https://hola.host`); `Access-Control-Allow-Methods: GET, POST, OPTIONS`; `Access-Control-Allow-Headers: Content-Type, X-Api-Key, X-Magic-Link`; `Access-Control-Allow-Credentials: false` (cookie не используется); `Access-Control-Max-Age: 86400`. **Без env-branching** (C-39): allowed origin — всегда `Settings.frontend_origin`; в dev `.env` подставляет в `frontend_origin` адрес Vite dev server (`http://localhost:5173`), отдельной ветки `env == "dev"` в `response_envelope.py` нет.
 - **CSP** — вариант **B**: применяется к статике из CloudFront (response-headers policy), не к API-ответам (API возвращает JSON, CSP неприменим). Точный header:
   ```
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
@@ -3201,7 +3218,7 @@ ADR фиксируют принятые архитектурные решени�
   - `X-Content-Type-Options: nosniff`
   - `Cache-Control: no-store` (ответы содержат secrets/PII)
 
-**Альтернативы по runtime-каналу для server-side секретов** (`neon_url`, `resend_api_key`, `sentry_dsn`, `support_email`, `ip_hash_salt` — server-side ключи, отличаются от BYOK тем, что приходят не per-request, а на cold start). Хранилище (где лежат, prefix, ротация) — §12; здесь решается, **как** Lambda их получает в процесс.
+**Альтернативы по runtime-каналу для server-side секретов** (`database_url`, `resend_api_key`, `ip_hash_salt`, `sample_server_api_key` — server-side ключи, отличаются от BYOK тем, что приходят не per-request, а на cold start). Хранилище (где лежат, prefix, ротация) — §12; здесь решается, **как** Lambda их получает в процесс.
 
 | # | Канал | За | Против |
 |---|---|---|---|
@@ -3209,19 +3226,21 @@ ADR фиксируют принятые архитектурные решени�
 | B | **`boto3.client("secretsmanager").get_secret_value(...)` на cold start в `app/scripts/bootstrap.py`, выставление в `os.environ[key]` до инициализации `Settings`** | секрет НЕ виден ни в Lambda Configuration, ни в TF state; стандартная IAM-граница через `Resource` policy; pydantic-settings подхватывает значения как обычные env | ~100–300 мс cold-start на каждый ключ (mitigation — один общий JSON-secret или `BatchGetSecretValue`); зависимость от Secrets Manager API доступности на cold start |
 | C | AWS Parameters and Secrets Lambda Extension (HTTP `localhost:2773` с in-extension cache) | переживает warm-инвокации без повторных API-вызовов; меньше cold-start latency на повторных холодных стартах | дополнительный Lambda layer; ещё одна точка отказа; для MVP-нагрузки overhead не оправдан |
 
-**Решение по server-side секретам.** Вариант **B**. Bootstrap-wrapper `app/scripts/bootstrap.py` на cold start однопроходно читает Secrets Manager в `os.environ` до первой инициализации `Settings`; pydantic-settings подхватывает значения как обычные env-vars:
+**Решение по server-side секретам.** Вариант **B**. На cold start `app/scripts/bootstrap.py` читает `os.environ["ENV"]` и для `staging`/`prod` вызывает `load_secrets_into_env(env, boto3.session.Session().client("secretsmanager"))` из `app/scripts/sm_loader.py` (модуль назван `sm_loader`, не `secrets`, — последнее имя зарезервировано) **до** первой инициализации `Settings`; pydantic-settings подхватывает значения как обычные env-vars. В `dev` SM не вызывается (секреты приходят из локального `.env`):
 
 ```python
-sm = boto3.client("secretsmanager")
-for key in _SERVER_SIDE_SECRET_KEYS:
-    os.environ[key.upper()] = sm.get_secret_value(
-        SecretId=f"holahost/{env}/{key}"
-    )["SecretString"]
+# app/scripts/sm_loader.py
+SERVER_SIDE_SECRET_KEYS = ("database_url", "resend_api_key", "ip_hash_salt", "sample_server_api_key")
+
+def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
+    for key in SERVER_SIDE_SECRET_KEYS:
+        secret = client.get_secret_value(SecretId=f"holahost/{env}/{key}")
+        os.environ[key.upper()] = secret["SecretString"]
 ```
 
 Вариант **A** — anti-pattern, явно запрещён: Terraform-модуль `secrets` создаёт только `aws_secretsmanager_secret` (resource без `secret_string`), значения секретов заполняются вне IaC. Вариант **C** — не используется на MVP.
 
-Состав `_SERVER_SIDE_SECRET_KEYS` фиксирован: `neon_url`, `resend_api_key`, `sentry_dsn`, `support_email`, `ip_hash_salt`. BYOK end-user'а в список не входит (приходит per-request в HTTP-заголовке `X-Api-Key`, см. выше).
+Состав `SERVER_SIDE_SECRET_KEYS` (`app/scripts/sm_loader.py`) фиксирован: `database_url`, `resend_api_key`, `ip_hash_salt`, `sample_server_api_key`. BYOK end-user'а в список не входит (приходит per-request в HTTP-заголовке `X-Api-Key`, см. выше); `sentry_dsn` / `support_email` через SM-канал не загружаются (обычные env-vars, не часть cold-start secret-loader'а).
 
 **Последствия.**
 
@@ -3229,7 +3248,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
 - §5.0/§5.7 — конкретные имена header'ов подставляются.
 - §5.8 — маппинг «чужой `guidebook_id` → 401 vs 404» — решение: 404 как для ресурса не существующего (предотвращает enumeration); fixed в §10.3 как часть transport-design (добавляется код `ERR_NOT_FOUND` в таксономию §10.8).
 - §8.0/Settings — добавляются: `frontend_origin: str` (env), `env: str` (env, `"dev"|"prod"`); в `interface/lambda_/response_envelope.py` — middleware, добавляющий security headers + CORS-ответ.
-- §8.0 — `app/scripts/bootstrap.py` загружает server-side секреты через boto на cold start в `os.environ` до инициализации `Settings`; Lambda execution role получает inline policy `secretsmanager:GetSecretValue` с `Resource: arn:aws:secretsmanager:*:*:secret:holahost/{env}/*`.
+- §8.0 — `app/scripts/bootstrap.py` на cold start (только `staging`/`prod`) загружает server-side секреты через `sm_loader.load_secrets_into_env` (boto3) в `os.environ` до инициализации `Settings`; Lambda execution role получает inline policy `secretsmanager:GetSecretValue` с `Resource: arn:aws:secretsmanager:*:*:secret:holahost/{env}/*`.
 - §2.6 (IaC) — CloudFront response-headers policy для статики; Lambda Function URL CORS settings (если поддерживаются — иначе headers добавляются в `response_envelope.py`); Terraform-модуль `secrets` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
 - §12 — раздел инфраструктуры ссылается на §10.3 за runtime-каналом и IAM-формой доступа Lambda к секретам; сам §12 фиксирует storage-backend (Secrets Manager) и storage-location per env.
 - AC §3 US-07 «обработка ошибок без утечки `api_key`» становится численно верифицируемым: e2e-тест с `X-Api-Key: invalid` ожидает в CloudWatch-логах отсутствие подстроки `invalid`.
@@ -3378,7 +3397,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
   - `chunk.text`, `chunk.embedding` — никогда.
   - Anthropic upstream error body — sanitized (только status + error.type, без error.message содержимого).
 - `log_event` валидирует имена полей через `assert set(fields) <= _ALLOWED_LOG_FIELDS`; mismatch → `AssertionError` на старте (cold start dev-tests) или ERROR в prod (assert remains, не `if __debug__`).
-- `error_message_sanitized` формируется в `response_envelope.py`: `ApplicationError.message` пропускается через простой regex-detector PII (email-pattern, magic_link-pattern); при попадании — `"<sanitized>"`. Это best-effort backup на случай ошибки разработчика, основная защита — конструкторы Application-error'ов без чувствительных payload'ов (§9.8).
+- `error_message_sanitized` формируется в `response_envelope.py` (`_sanitize`): текст ошибки (`str(err)` — у `ApplicationError` нет атрибута `.message`) пропускается через regex-detector PII (email- и opaque-token-паттерны), совпадения заменяются на `<email>` / `<token>`. Дополнительно `config/logging.py` (`_redact_value`) скрабит то же поле и `SecretStr`-значения при логировании — defense-in-depth. Основная защита — конструкторы Application-error'ов без чувствительных payload'ов (§9.8).
 
 **Решение по `IpHash` (закрывает §3.0):**
 
@@ -3391,7 +3410,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
 
 - §3.0 «Источник» для `IpHash`-инварианта обновляется на `§10.5`.
 - §7.2.3 `IpHash` — `__post_init__` дополняется length+charset check'ом.
-- §8.0 — добавляется `interface/lambda_/observability.py` (helper `log_event`); `infrastructure/common/sha256_ip_hasher.py` (уже в дереве) фиксирует алгоритм согласно §10.5.
+- §8.0 — helper `log_event` и `get_logger(name)` живут в `config/logging.py` (дом логирования — `config/`, импортируемый всеми слоями; **отдельного `interface/lambda_/observability.py` нет**). Модули берут логгер через `get_logger(__name__)` → child `holahost.<module>`, маршрутизируемый через JSON-handler из `configure_logging()` (а не bare `logging.getLogger`, который ушёл бы в root и обошёл handler). `infrastructure/common/sha256_ip_hasher.py` (уже в дереве) фиксирует алгоритм согласно §10.5.
 - Settings — `cloudwatch_log_retention_days: int` (env), `sentry_dsn: SecretStr | None` (env, optional), `ip_hash_salt: SecretStr` (env).
 - §9.8 (Cross-cutting) — раздел «секреты» дополняется ссылкой на §10.5 в части allowlist.
 - §2.6 (IaC) — log group retention, metric-filter'ы, alarm'ы, SNS topic.
@@ -3603,13 +3622,14 @@ Hot-update хинтов:
 | `ERR_TOO_MANY_CHUNKS` | 413 | `TooManyChunksError` | `{ "max_chunks": <int> }` | no retry; UI: документ слишком большой, показать `max_chunks` |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | `UnsupportedMediaTypeError` | `{ "allowed": [<mime>, ...] }` | no retry; UI: показать allowed-форматы |
 | `ERR_EMPTY_DOCUMENT` | 422 | `EmptyDocumentError` | `{}` | no retry; UI: «извлечённый текст пуст, проверь файл» |
-| `ERR_INVALID_PAYLOAD` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_PAYLOAD"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|honeypot" }` | no retry; UI: подсветить поле, показать `reason` (`honeypot` — UI получает 422 + generic-сообщение без подсветки конкретного поля, см. §10.7) |
+| `ERR_INVALID_PAYLOAD` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_PAYLOAD"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|honeypot\|invalid_json" }` | no retry; UI: подсветить поле, показать `reason` (`honeypot` — UI получает 422 + generic-сообщение без подсветки конкретного поля, см. §10.7) |
 | `ERR_RATE_LIMIT` | 429 | `RateLimitExceededError` | `{ "scope": "ip\|magic_link", "retry_after_s": <int> }` | auto-retry через `retry_after_s` (UI показывает обратный отсчёт) |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | `SampleBudgetExhaustedError` | `{ "reset_at": "<ISO-8601 UTC>" }` | no retry до `reset_at`; UI: «попробуй завтра или загрузи свой ключ» |
 | `ERR_UPSTREAM_LLM` | 502 | `UpstreamLLMError` | `{ "upstream_status": <int>, "retryable": <bool> }` | если `retryable=true` — экспоненциальный backoff (1s, 2s, 4s; max 3 попытки); иначе no retry |
 | `ERR_UPSTREAM_EMAIL` | 502 | `UpstreamEmailError` | `{ "retryable": <bool> }` | то же что `ERR_UPSTREAM_LLM` |
 | `ERR_INTERNAL` | 500 | unhandled `Exception` (top-level catch) | `{ "request_id": "<uuid>" }` | no auto-retry; UI: «попробуй ещё раз, если повторяется — пришли `request_id`» |
 
+- **`reason = "invalid_json"`** — добавлен interface-слоем (B-48): shape/contract-нарушение payload'а (обязательное поле отсутствует / не той структуры / невалидный JSON или multipart) → `InvalidPayloadError(reason="invalid_json")` 422. Прочие `reason` (`empty`/`too_long`/…) — value-семантика, выставляемая доменными VO / use-case'ами (§9). Так interface-shape («баг фронта/контракта») и user-value («пустое поле») различимы (C-36/C-37). Валидация формы — pydantic-модели в `request_parsing.py`; значения текут дальше в use case.
 - **`retry_after_s`** в `ERR_RATE_LIMIT` вычисляется в `RateLimiter.check_and_increment(...)` (§8.2.8); возвращается через атрибут `RateLimitExceededError.retry_after_seconds: int`; `response_envelope.py` пробрасывает в `details` под ключом `retry_after_s`.
 - **`upstream_status` + `retryable`** — заполняет реализация `LLMClient`/`EmailSender` при mapping'е upstream-ошибки в `UpstreamLLMError`/`UpstreamEmailError`; `retryable=true` для 5xx и `429`-ов от upstream'а, `retryable=false` для 4xx других (кроме 429).
 - **Backoff на клиенте**: реализуется во frontend-bundle (`fetch`-wrapper); сервер не управляет client-retry, только декларирует `retryable`.
@@ -3621,11 +3641,12 @@ def to_response(err: ApplicationError) -> tuple[int, dict]:
     return HTTP_STATUS_BY_CODE[err.code], {
         "error": {
             "code": err.code,
-            "message": _sanitize(err.message),  # §10.5
+            "message": _sanitize(str(err)),  # §10.5 — у ApplicationError нет .message; текст через str(err)
             "details": err.details_dict(),
         },
     }
 ```
+`from_application_error(err, settings)` оборачивает `to_response` в полный Lambda-HTTP-ответ (status + envelope + security/CORS-заголовки, §10.3); `ok` / `internal` / `preflight` — те же обёртки (общий контур с §8.5).
 - `ApplicationError` подклассы получают метод `details_dict() -> dict` (default — `{}`); подклассы с контекстом (`RateLimitExceededError`, `PayloadTooLargeError`, …) переопределяют.
 - `HTTP_STATUS_BY_CODE` — module-level dict в `response_envelope.py`, source-of-truth для соответствия code ↔ HTTP-status.
 
@@ -3893,7 +3914,7 @@ Runtime-канал доступа Lambda к server-side секретам (boto �
 | Окружение | Где лежат | Кто имеет доступ |
 |---|---|---|
 | **dev** | локальный `.env` файл на машине разработчика; `.env` в `.gitignore`; `.env.example` (шаблон с placeholder'ами) — версионируется в репо | сам разработчик; внешние участники не имеют доступа |
-| **staging** | AWS Secrets Manager, prefix `holahost/staging/` (`neon_url`, `resend_api_key` sandbox, `sentry_dsn` staging, `support_email`, `ip_hash_salt`) | владелец проекта; deploy-IAM-Role `terraform-deploy-staging` (для записи); Lambda execution role `holahost-staging-api` (read-only по prefix, §10.3) |
+| **staging** | AWS Secrets Manager, prefix `holahost/staging/` (`database_url`, `resend_api_key` sandbox, `ip_hash_salt`, `sample_server_api_key` — cold-start loader-set, §10.3) | владелец проекта; deploy-IAM-Role `terraform-deploy-staging` (для записи); Lambda execution role `holahost-staging-api` (read-only по prefix, §10.3) |
 | **prod** | AWS Secrets Manager, prefix `holahost/prod/` (тот же набор ключей, production-значения) | владелец проекта только под MFA через deploy-IAM-Role `terraform-deploy-prod`; Lambda execution role `holahost-prod-api` (read-only по prefix, §10.3); консольный доступ к значениям требует MFA |
 
 **Модель доступа — single-host.** Все секреты держит один владелец проекта; staging-доступ self-serve через AWS Console, prod-доступ только под MFA.
@@ -3905,7 +3926,7 @@ Runtime-канал доступа Lambda к server-side секретам (boto �
 
 Шаг ротации (для каждого секрета): сгенерировать / запросить новое значение → записать новую версию в Secrets Manager → дождаться cold-start всех Lambda (или принудительно `update-function-configuration`) → отозвать старую версию у провайдера. Отдельный случай — `ip_hash_salt`: ротация инвалидирует существующие `rate_limit_counters` (subject рассчитан с прежней солью) и в MVP не выполняется (§10.5).
 
-Состав секретов фиксирован §10 (`neon_url` §12.1 / §10.X, `resend_api_key` §10.7, `sentry_dsn` §10.5, `support_email` §10.7, `ip_hash_salt` §10.5, `DEV_ANTHROPIC_API_KEY` — только в dev `.env`).
+Состав секретов SM cold-start loader'а (`SERVER_SIDE_SECRET_KEYS`, §10.3) фиксирован: `database_url` (§12.1 / §10.X), `resend_api_key` (§10.7), `ip_hash_salt` (§10.5), `sample_server_api_key` (server-side Anthropic key для sample-flow). `sentry_dsn` (§10.5) / `support_email` (§10.7) — не входят в cold-start loader-set (обычные env-config); `DEV_ANTHROPIC_API_KEY` — только в dev `.env`.
 
 ### 12.4 Требования к Environment runbook
 
