@@ -186,9 +186,13 @@ class FakeSampleBudgetRepo:
 class FakeEmbeddingModel:
     """Deterministic ``EmbeddingModel`` returning valid one-hot embeddings."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_input_tokens: int = 128) -> None:
         self.embed_one_calls: list[str] = []
         self.embed_many_calls: list[list[str]] = []
+        self._max_input_tokens = max_input_tokens
+
+    def max_input_tokens(self) -> int:
+        return self._max_input_tokens
 
     def embed_one(self, text: str) -> Embedding:
         self.embed_one_calls.append(text)
