@@ -55,6 +55,23 @@ def configure_logging(level: int = logging.INFO) -> None:
     _logger.propagate = False
 
 
+def get_logger(name: str) -> logging.Logger:
+    """Return a module logger namespaced under the configured ``holahost`` logger (§10.5).
+
+    Children of ``holahost`` propagate to its JSON handler (installed by :func:`configure_logging`),
+    while ``holahost.propagate = False`` prevents duplicate emission to root. Call as
+    ``get_logger(__name__)`` so per-module loggers still route through the structured-logging setup —
+    a bare ``logging.getLogger(__name__)`` would sit in the root hierarchy and bypass the handler.
+
+    Args:
+        name: Usually ``__name__`` of the calling module.
+
+    Returns:
+        The ``holahost.<name>`` child logger.
+    """
+    return logging.getLogger(f"{_LOGGER_NAME}.{name}")
+
+
 def _redact_value(key: str, value: object) -> object:
     """Redact one log field value (SecretStr → ``"<redacted>"``; sanitize the message field)."""
     if isinstance(value, SecretStr):

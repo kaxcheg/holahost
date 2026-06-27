@@ -19,6 +19,8 @@ dependencies = [
     "fastembed>=0.4,<1.0",
     "langchain-text-splitters>=0.3,<1.0",
     "langchain-anthropic>=0.3,<1.0",
+    "boto3>=1.35,<2",
+    "python-multipart>=0.0.20,<0.1",
 ]
 
 [tool.poetry]
@@ -30,6 +32,7 @@ ruff = ">=0.13"
 mypy = ">=1.17"
 testcontainers = {extras = ["postgres"], version = ">=4.0,<5"}
 import-linter = ">=2.0,<3"
+boto3-stubs = {extras = ["secretsmanager"], version = ">=1.35,<2"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -63,20 +66,21 @@ module = ["fastembed.*", "docx.*", "pymupdf.*", "langchain_text_splitters.*"]
 ignore_missing_imports = true
 
 [tool.importlinter]
-root_packages = ["application", "domain", "infrastructure", "config"]
+root_packages = ["application", "domain", "infrastructure", "config", "interface"]
 
 # Clean Architecture dependency rule, expressed by LAYER (not by framework): a higher layer may import
 # lower ones, never the reverse. application/domain therefore cannot import infrastructure/interface;
 # since the heavy frameworks (langchain, fastembed, anthropic, ...) are confined to infrastructure
 # adapters, this keeps them out of the pure layers without enumerating any framework. `config` is a
 # cross-cutting leaf (pure pydantic-settings) and stays out of the hierarchy.
-# `interface` (the web/API layer + composition root, which imports infrastructure to wire adapters) is
-# the outermost layer; it is parenthesised = OPTIONAL, so the contract holds before that package exists
-# (it lands in a later ticket) and activates automatically once it does.
+# `interface` (the web/API layer — handler/router/request-parsing/response-envelope, which imports
+# infrastructure to wire adapters) is the outermost layer. It now exists (B-46–B-50), so it is a
+# required (non-optional) layer in the contract. The composition root lives in `scripts/` and stays
+# OUTSIDE the layering (not a root_package): it legitimately imports every layer to assemble the DI graph.
 [[tool.importlinter.contracts]]
 name = "Clean Architecture layers (interface > infrastructure > application > domain)"
 type = "layers"
-layers = ["(interface)", "infrastructure", "application", "domain"]
+layers = ["interface", "infrastructure", "application", "domain"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

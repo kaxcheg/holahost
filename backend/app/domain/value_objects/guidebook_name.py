@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from domain.exceptions import DomainValidationError
 
-GUIDEBOOK_NAME_MAX_LENGTH = 100  # mirrors prod_hints.json property_name.max_length (§10.6); D6
+GUIDEBOOK_NAME_MAX_LENGTH = 100  # mirrors guidebook_template.json property_name.max_length (§10.6); D6
 
 
 @dataclass(frozen=True)
@@ -12,9 +12,9 @@ class GuidebookName:
     """Display name of a guidebook (spec §7.3; minimal domain invariants — D5/D6).
 
     Invariants: non-empty (rejects empty / whitespace-only) and
-    ``len(value) <= GUIDEBOOK_NAME_MAX_LENGTH`` (100). The 100 cap mirrors ``prod_hints.json``
+    ``len(value) <= GUIDEBOOK_NAME_MAX_LENGTH`` (100). The 100 cap mirrors ``guidebook_template.json``
     ``property_name.max_length`` (§10.6) into the backend as a defense-in-depth safety net (the
-    frontend cap can be bypassed); ``prod_hints.json`` remains the product source of truth. The
+    frontend cap can be bypassed); ``guidebook_template.json`` remains the product source of truth. The
     value is stored as given (no trimming).
 
     Args:

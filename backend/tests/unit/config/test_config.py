@@ -33,6 +33,7 @@ _VALID: dict[str, object] = dict(
     rate_limit_per_magic_link=60,
     rate_limit_window_seconds=3600,
     embedding_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    sample_guidebook_path="docs/sample_guidebook.md",
     max_chunk_tokens=128,
     chunk_window=120,
     chunk_overlap=16,
@@ -41,7 +42,9 @@ _VALID: dict[str, object] = dict(
     resend_api_key="re_test_key",
     resend_from="dev@hola.host",
     magic_link_base_url="https://app.test/claim",
+    magic_link_url_param="ml",
     email_timeout_seconds=10.0,
+    frontend_origin="https://app.test",
 )
 
 

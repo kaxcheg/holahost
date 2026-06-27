@@ -34,6 +34,7 @@ def _sender() -> SmtpEmailSender:
         port=1025,
         from_address="dev@hola.host",
         magic_link_base_url="https://app.test/claim",
+        magic_link_url_param="ml",
     )
 
 
@@ -44,7 +45,8 @@ def test_sends_message_with_html_url(monkeypatch: pytest.MonkeyPatch) -> None:
     [msg] = _RecordingSMTP.sent
     assert msg["To"] == "g@example.com" and msg["From"] == "dev@hola.host"
     body = msg.get_body(("html",)).get_content()
-    assert "https://app.test/claim/tok9" in body
+    assert "https://app.test/claim/?ml=tok9" in body  # query form (B-43)
+    assert "/claim/tok9" not in body  # old path form is gone
 
 
 def test_smtp_failure_maps_to_upstream(monkeypatch: pytest.MonkeyPatch) -> None:

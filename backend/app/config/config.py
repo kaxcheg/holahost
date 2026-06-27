@@ -24,6 +24,27 @@ class Settings(BaseSettings):
     bootstrap before ``Settings`` is built), so per-environment behaviour lives in ONE class via
     :meth:`_enforce_prod_guardrails` (branching on ``env``), not in per-env subclasses — which would
     only be warranted by *different config sources* per env (clarifications C-17 / C-18).
+
+    Environment-variable contract (source per deployment env)
+    ---------------------------------------------------------
+    All config is read from ``os.environ`` (single source). HOW a variable enters the
+    environment differs by ``ENV`` — this split is the contract the infrastructure
+    (Terraform / docker-compose) must honor:
+
+    * Non-secret config (everything except the four secrets below): plain env vars in every
+      env — dev: ``.env`` / docker-compose; staging|prod: Lambda env vars set by Terraform.
+    * Secrets — ``database_url``, ``resend_api_key``, ``ip_hash_salt``,
+      ``sample_server_api_key`` (all ``SecretStr``): dev — plain env vars from ``.env``;
+      staging|prod — stored in AWS Secrets Manager as ``holahost/{env}/<name>`` and fetched
+      into ``os.environ`` by the cold-start bootstrap (``scripts/bootstrap.py``) BEFORE
+      ``Settings`` is built. NEVER passed as Terraform-injected Lambda env values
+      (anti-pattern: secret material in the function config).
+    * ``ENV`` is read by the bootstrap before ``Settings`` to choose the secret-loading +
+      adapter branch (dev → no Secrets Manager, SMTP/Mailpit email; staging|prod → Secrets
+      Manager, Resend email).
+    * ``SMTP_HOST`` / ``SMTP_PORT`` are dev-only, consumed DIRECTLY by the dev email branch
+      of the bootstrap (defaults ``localhost`` / ``1025``); intentionally NOT ``Settings``
+      fields so the prod schema stays clean.
     """
 
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", protected_namespaces=())
@@ -54,6 +75,7 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = Field(gt=0)
     # Infrastructure adapter config (B-38…B-45). Co-located here per the one-class env model (§10.2).
     embedding_model_name: str
+    sample_guidebook_path: str
     max_chunk_tokens: int = Field(gt=0)
     chunk_window: int = Field(gt=0)
     chunk_overlap: int = Field(ge=0)
@@ -62,7 +84,9 @@ class Settings(BaseSettings):
     resend_api_key: SecretStr = Field(min_length=1)
     resend_from: str
     magic_link_base_url: str
+    magic_link_url_param: str
     email_timeout_seconds: float = Field(gt=0)
+    frontend_origin: str
 
     @property
     def magic_link_ttl(self) -> timedelta:

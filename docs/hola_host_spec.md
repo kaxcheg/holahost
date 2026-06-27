@@ -73,7 +73,7 @@ stateDiagram-v2
 | `capture_email` | text · field email · button Send |
 | `email_sent` | text «check your email» |
 | `guidebook` | text gb info (`name` / created · или «no guidebook yet») · field `name` (отображаемое имя гайдбука) · file chooser **OR** Generate by template · button Upload (disabled пока файл и `name` не заполнены) · button Next (disabled пока gb нет) |
-| `template` | text · form (6 required + 13 optional полей, schema из `docs/prod_hints.json` через CloudFront; см. §10.6) · button Generate |
+| `template` | text · form (6 required + 13 optional полей, schema из `docs/guidebook_template.json` через CloudFront; см. §10.6) · button Generate |
 | `llm_key_msg` | text · field API key (persistent in memory) · field guest_message (persistent) · button Send · response area |
 
 #### 1.3.3 Принципиальные интерфейсы
@@ -376,7 +376,7 @@ AWS-инфраструктура управляется Terraform; ручной 
 | Безопасность доступа к секретам и транспорта | §10.3 | BYOK через `X-Api-Key` header; magic_link через `X-Magic-Link` header; CORS-whitelist; strict CSP; server-side секреты — boto на cold start |
 | Защита от prompt injection | §10.4 | Anthropic role-разделение (system + user); без regex-санитизации; без post-moderation |
 | Observability | §10.5 | structured JSON; allowlist `log_event`; CloudWatch + Sentry; `IpHash` = 64 lowercase hex (SHA-256 + соль) |
-| Структура шаблона гайдбука | §10.6 | 6 required + 13 optional фиксированных полей в `docs/prod_hints.json`; фронт читает schema через CloudFront-статику, рендерит форму и plain text; backend не участвует, template-flow обслуживается через `POST /api/ingest/upload` |
+| Структура шаблона гайдбука | §10.6 | 6 required + 13 optional фиксированных полей в `docs/guidebook_template.json`; фронт читает schema через CloudFront-статику, рендерит форму и plain text; backend не участвует, template-flow обслуживается через `POST /api/ingest/upload` |
 | Email capture | §10.7 | упрощённый regex + `EMAIL_MAX_LENGTH=254`; honeypot; Resend single-attempt + rollback; single opt-in |
 | Таксономия error-кодов | §10.8 | envelope `{ error: { code, message, details } }`; 13 ERR_*-кодов с фиксированной `details`-структурой и client retry-семантикой |
 
@@ -1305,7 +1305,7 @@ class LeadFlow(StrEnum):
 from __future__ import annotations
 from dataclasses import dataclass
 
-GUIDEBOOK_NAME_MAX_LENGTH = 100  # зеркалит prod_hints.json property_name.max_length (§10.6)
+GUIDEBOOK_NAME_MAX_LENGTH = 100  # зеркалит guidebook_template.json property_name.max_length (§10.6)
 
 @dataclass(frozen=True)
 class GuidebookName:
@@ -1319,7 +1319,7 @@ class GuidebookName:
 ```
 
 - Минимальные доменные инварианты: непустое значение (после `.strip()`) и длина ≤ 100. Значение хранится **как есть** (без trim); длина считается по сырой строке.
-- `max_length = 100` дублирует фронтовое правило `property_name.max_length` из `prod_hints.json` (§10.6) как backend-страховку (defense-in-depth: клиентскую валидацию можно обойти — US-04). `prod_hints.json` остаётся product source of truth (бэкенд его не читает — доставка через S3/CloudFront, §10.6); при изменении правила обновлять оба места. Мягко отклоняется от §10.6 («бэкенд не валидирует длины полей») — осознанная защита.
+- `max_length = 100` дублирует фронтовое правило `property_name.max_length` из `guidebook_template.json` (§10.6) как backend-страховку (defense-in-depth: клиентскую валидацию можно обойти — US-04). `guidebook_template.json` остаётся product source of truth (бэкенд его не читает — доставка через S3/CloudFront, §10.6); при изменении правила обновлять оба места. Мягко отклоняется от §10.6 («бэкенд не валидирует длины полей») — осознанная защита.
 - Использование: атрибут `Guidebook.name` (§7.3). На границе use-case строит VO из примитива `UploadGuidebookCmd.name: str` (§8.1); `DomainValidationError(reason="empty")` → `ERR_INVALID_PAYLOAD` (§10.8).
 
 ### 7.3 `Guidebook` (`domain/entities/guidebook.py`) — persistent
@@ -3403,7 +3403,7 @@ for key in _SERVER_SIDE_SECRET_KEYS:
 
 **Контекст.** §2.8 отложил: обязательные/опциональные поля, лимиты длин, стратегию рендера в текст. §3.0 ссылается на «структуру полей шаблона и их лимиты». Решение: template-flow целиком переезжает на фронт; backend этого слоя не касается.
 
-**Source of truth — единый файл `docs/prod_hints.json`.** Массив объектов `{name, label, required, max_length, hint}` на каждое поле формы; имена / required-флаг / лимиты длин / human-readable label / production-хинты — всё в одном JSON. Канонический файл committed в репо.
+**Source of truth — единый файл `docs/guidebook_template.json`.** Массив объектов `{name, label, required, max_length, hint}` на каждое поле формы; имена / required-флаг / лимиты длин / human-readable label / production-хинты — всё в одном JSON. Канонический файл committed в репо.
 
 ```json
 [
@@ -3415,15 +3415,15 @@ for key in _SERVER_SIDE_SECRET_KEYS:
 ]
 ```
 
-Состав (фиксированный): 6 required (`property_name`, `address`, `contacts`, `check_in`, `check_out`, `wifi`) + 13 optional (`tourist_license`, `emergencies`, `pets`, `keys`, `basic_rules`, `garbage`, `appliances`, `transport`, `parking`, `restaurants`, `supermarkets`, `lockers`, `additional_info`). Расширение списка → правка `docs/prod_hints.json` + (при необходимости) изменение фронтового рендера.
+Состав (фиксированный): 6 required (`property_name`, `address`, `contacts`, `check_in`, `check_out`, `wifi`) + 13 optional (`tourist_license`, `emergencies`, `pets`, `keys`, `basic_rules`, `garbage`, `appliances`, `transport`, `parking`, `restaurants`, `supermarkets`, `lockers`, `additional_info`). Расширение списка → правка `docs/guidebook_template.json` + (при необходимости) изменение фронтового рендера.
 
-**Решение по обработке полей.** Фронт читает `docs/prod_hints.json` (через S3 → CloudFront, см. ниже), рендерит форму, host заполняет, на submit фронт собирает plain text вида `<label>: <value>\n\n` per filled поле и шлёт в существующий **`POST /api/ingest/upload`** (см. §5.6) с `mime_type = "text/plain"` и `name = <property_name value>`. Backend получает обычный text-upload, не отличает source (template vs file).
+**Решение по обработке полей.** Фронт читает `docs/guidebook_template.json` (через S3 → CloudFront, см. ниже), рендерит форму, host заполняет, на submit фронт собирает plain text вида `<label>: <value>\n\n` per filled поле и шлёт в существующий **`POST /api/ingest/upload`** (см. §5.6) с `mime_type = "text/plain"` и `name = <property_name value>`. Backend получает обычный text-upload, не отличает source (template vs file).
 
 Backend **не** валидирует структуру / длины / формат полей формы — нет domain-entity `TemplateFields`, нет порта `TemplateRenderer`, нет Jinja-шаблона `guidebook.j2`, нет use case'а `GenerateFromTemplateUseCase`, нет endpoint'а `/api/ingest/template`, нет `Settings.template_hints`, нет env-var `TEMPLATE_HINTS_JSON`. Бизнес-решение: продуктовая копия и UX-валидация — слой фронта; backend работает только с готовым текстом.
 
-Клиентская валидация (max_length, required) — на стороне фронта (§11), читает те же значения из `docs/prod_hints.json`. Защита от abuse — на уровне HTTP-payload-size (`MAX_UPLOAD_SIZE` §2.5).
+Клиентская валидация (max_length, required) — на стороне фронта (§11), читает те же значения из `docs/guidebook_template.json`. Защита от abuse — на уровне HTTP-payload-size (`MAX_UPLOAD_SIZE` §2.5).
 
-**Альтернативы по каналу доставки `prod_hints.json` во frontend.**
+**Альтернативы по каналу доставки `guidebook_template.json` во frontend.**
 
 | # | Канал | За | Против |
 |---|---|---|---|
@@ -3431,15 +3431,15 @@ Backend **не** валидирует структуру / длины / форм
 | C | **S3-объект + статика через CloudFront** | backend полностью независим от хинтов; нулевая Lambda invocation; CDN-кешированная статика; backend не нуждается в render-механике | нужна CloudFront cache-behavior для `/config/*` с короткой TTL + invalidation при обновлении |
 | E | Bundled в frontend bundle | нулевая runtime cost | frontend rebuild на каждую правку UX-текста — против build-once §11.6 |
 
-**Решение по каналу.** Вариант **C** — `docs/prod_hints.json` → S3 → CloudFront → frontend через статику. Backend в доставке не участвует.
+**Решение по каналу.** Вариант **C** — `docs/guidebook_template.json` → S3 → CloudFront → frontend через статику. Backend в доставке не участвует.
 
 - TF (часть модуля `s3_frontend` / `cloudfront`, §12.2):
   ```hcl
   resource "aws_s3_object" "template_schema" {
     bucket       = aws_s3_bucket.frontend.id
     key          = "config/template_schema.json"
-    source       = "${path.module}/../../docs/prod_hints.json"
-    etag         = filemd5("${path.module}/../../docs/prod_hints.json")
+    source       = "${path.module}/../../docs/guidebook_template.json"
+    etag         = filemd5("${path.module}/../../docs/guidebook_template.json")
     content_type = "application/json"
   }
   ```
@@ -3447,15 +3447,15 @@ Backend **не** валидирует структуру / длины / форм
 - Frontend фетчит `https://<host>/config/template_schema.json` через тот же CloudFront — same-origin, без CORS, без Lambda invocation. См. §11.2 / §11.3.
 
 Hot-update хинтов:
-1. Правка `docs/prod_hints.json` в репо.
-2. `terraform apply` (или ручная команда — `aws s3 cp docs/prod_hints.json s3://<bucket>/config/template_schema.json`).
+1. Правка `docs/guidebook_template.json` в репо.
+2. `terraform apply` (или ручная команда — `aws s3 cp docs/guidebook_template.json s3://<bucket>/config/template_schema.json`).
 3. (опц.) CloudFront invalidation для немедленного эффекта; иначе ≤ 5 мин propagation.
 
 Никаких новых Docker-образов, никаких Lambda update-function-code, никаких release-tags для правки UX-копии.
 
 **Последствия.**
 
-- §3.0 «Источник» для «структура полей шаблона и их лимиты» — `§10.6` + `docs/prod_hints.json`.
+- §3.0 «Источник» для «структура полей шаблона и их лимиты» — `§10.6` + `docs/guidebook_template.json`.
 - §5 — endpoint'ы `POST /api/ingest/template` и `GET /api/template/schema` удалены; template-flow обслуживается через `POST /api/ingest/upload` (§5.6) с `mime_type = "text/plain"`.
 - §5.6 `UploadGuidebookCmd` — добавлено required-поле `name: str` (host-supplied для file-upload; auto-filled из `property_name` для template).
 - §7.7 (`TemplateFields` entity) — удалён.
@@ -4281,5 +4281,5 @@ Strict с первого коммита; ослабление настроек �
 - `C-06` GitHub Actions `build-and-deploy-staging.yml` (build image, ECR push с digest capture, frontend bundle, Alembic migrate, Lambda `update-function-code`, CloudFront origin path, smoke) — §13.4 / §13.5
 - `C-07` GitHub Actions `promote-prod.yml` (resolve digest по `release-v<version>` ECR-тегу, Alembic migrate prod, Lambda update, CloudFront origin path switch, smoke) — §13.4 / §13.5
 - `C-08` OIDC IAM Role'ы `github-actions-deploy-staging` + `github-actions-deploy-prod` в TF (часть `I-14`-расширения) — §13.4
-- `C-09` Pre-commit hook `validate-template-schema`: проверка что `docs/prod_hints.json` парсится как valid JSON-array объектов с required-полями (`name`, `label`, `required`, `max_length`, `hint`) — §13.3 / §10.6
+- `C-09` Pre-commit hook `validate-template-schema`: проверка что `docs/guidebook_template.json` парсится как valid JSON-array объектов с required-полями (`name`, `label`, `required`, `max_length`, `hint`) — §13.3 / §10.6
 
