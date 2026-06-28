@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from typing import TypedDict
 
 from domain.exceptions import DomainValidationError
 
@@ -17,8 +18,12 @@ class ApplicationError(Exception):
 
     code: str = "ERR_INTERNAL"
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> Mapping[str, object]:
         """Return the ``details`` payload for the error envelope (§10.8).
+
+        Overrides return a precise ``TypedDict`` (the single source the OpenAPI exporter derives the
+        per-code ``details`` schema from, §11.3); the base return widens to ``Mapping[str, object]`` so
+        a ``TypedDict`` is a valid covariant override.
 
         Returns:
             Per-code detail keys; empty by default. ``ERR_INTERNAL``'s ``request_id`` is
@@ -39,6 +44,12 @@ class InvalidApiKeyError(ApplicationError):
     code = "ERR_INVALID_API_KEY"
 
 
+class NotFoundDetails(TypedDict):
+    """``details`` for ``ERR_NOT_FOUND`` (§10.8)."""
+
+    resource: str
+
+
 class NotFoundError(ApplicationError):
     """Requested resource not found (§10.3 / §10.8) → 404 ERR_NOT_FOUND."""
 
@@ -54,8 +65,15 @@ class NotFoundError(ApplicationError):
         super().__init__(message)
         self.resource = resource
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> NotFoundDetails:
         return {"resource": self.resource}
+
+
+class InvalidPayloadDetails(TypedDict):
+    """``details`` for ``ERR_INVALID_PAYLOAD`` (§10.8); ``field``/``reason`` may be null."""
+
+    field: str | None
+    reason: str | None
 
 
 class InvalidPayloadError(ApplicationError):
@@ -88,7 +106,7 @@ class InvalidPayloadError(ApplicationError):
         self.field = field
         self.reason = reason
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> InvalidPayloadDetails:
         return {"field": self.field, "reason": self.reason}
 
 
@@ -121,6 +139,12 @@ class EmailConflictError(ApplicationError):
         self.email = email
 
 
+class PayloadTooLargeDetails(TypedDict):
+    """``details`` for ``ERR_PAYLOAD_TOO_LARGE`` (§10.8)."""
+
+    max_bytes: int
+
+
 class PayloadTooLargeError(ApplicationError):
     """Uploaded file over the byte-size limit (§9.4 / §9.8) → 413 ERR_PAYLOAD_TOO_LARGE."""
 
@@ -136,8 +160,14 @@ class PayloadTooLargeError(ApplicationError):
         super().__init__(message)
         self.max_bytes = max_bytes
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> PayloadTooLargeDetails:
         return {"max_bytes": self.max_bytes}
+
+
+class TooManyChunksDetails(TypedDict):
+    """``details`` for ``ERR_TOO_MANY_CHUNKS`` (§10.8)."""
+
+    max_chunks: int
 
 
 class TooManyChunksError(ApplicationError):
@@ -159,8 +189,14 @@ class TooManyChunksError(ApplicationError):
         super().__init__(message)
         self.max_chunks = max_chunks
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> TooManyChunksDetails:
         return {"max_chunks": self.max_chunks}
+
+
+class UnsupportedMediaTypeDetails(TypedDict):
+    """``details`` for ``ERR_UNSUPPORTED_MEDIA_TYPE`` (§10.8)."""
+
+    allowed: list[str]
 
 
 class UnsupportedMediaTypeError(ApplicationError):
@@ -178,7 +214,7 @@ class UnsupportedMediaTypeError(ApplicationError):
         super().__init__(message)
         self.allowed = allowed
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> UnsupportedMediaTypeDetails:
         return {"allowed": self.allowed}
 
 
@@ -186,6 +222,13 @@ class EmptyDocumentError(ApplicationError):
     """Extracted text below the minimum (§9.4 / §9.8) → 422 ERR_EMPTY_DOCUMENT."""
 
     code = "ERR_EMPTY_DOCUMENT"
+
+
+class RateLimitDetails(TypedDict):
+    """``details`` for ``ERR_RATE_LIMIT`` (§10.8); ``retry_after_s`` is seconds."""
+
+    scope: str
+    retry_after_s: int
 
 
 class RateLimitExceededError(ApplicationError):
@@ -209,8 +252,14 @@ class RateLimitExceededError(ApplicationError):
         self.scope = scope
         self.retry_after_seconds = retry_after_seconds
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> RateLimitDetails:
         return {"scope": self.scope, "retry_after_s": self.retry_after_seconds}
+
+
+class SampleBudgetExhaustedDetails(TypedDict):
+    """``details`` for ``ERR_SAMPLE_BUDGET_EXHAUSTED`` (§10.8); ISO-8601 UTC reset instant."""
+
+    reset_at: str
 
 
 class SampleBudgetExhaustedError(ApplicationError):
@@ -228,8 +277,15 @@ class SampleBudgetExhaustedError(ApplicationError):
         super().__init__(message)
         self.reset_at = reset_at
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> SampleBudgetExhaustedDetails:
         return {"reset_at": self.reset_at}
+
+
+class UpstreamLLMDetails(TypedDict):
+    """``details`` for ``ERR_UPSTREAM_LLM`` (§10.8); ``retryable`` drives client backoff."""
+
+    upstream_status: int | None
+    retryable: bool
 
 
 class UpstreamLLMError(ApplicationError):
@@ -254,8 +310,14 @@ class UpstreamLLMError(ApplicationError):
         self.upstream_status = upstream_status
         self.retryable = retryable
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> UpstreamLLMDetails:
         return {"upstream_status": self.upstream_status, "retryable": self.retryable}
+
+
+class UpstreamEmailDetails(TypedDict):
+    """``details`` for ``ERR_UPSTREAM_EMAIL`` (§10.8); ``retryable`` drives client backoff."""
+
+    retryable: bool
 
 
 class UpstreamEmailError(ApplicationError):
@@ -273,7 +335,7 @@ class UpstreamEmailError(ApplicationError):
         super().__init__(message)
         self.retryable = retryable
 
-    def details_dict(self) -> dict[str, object]:
+    def details_dict(self) -> UpstreamEmailDetails:
         return {"retryable": self.retryable}
 
 

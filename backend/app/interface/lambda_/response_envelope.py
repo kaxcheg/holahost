@@ -10,12 +10,23 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from application.exceptions import ApplicationError
 
 if TYPE_CHECKING:
     from config.config import Settings
+
+
+class InternalDetails(TypedDict):
+    """``details`` for ``ERR_INTERNAL`` (§10.8).
+
+    ``ERR_INTERNAL`` has no dedicated ``ApplicationError`` subclass (it is the base default ``code``,
+    emitted by :func:`internal`), so its ``details`` schema is sourced from this ``TypedDict`` — the
+    single source the OpenAPI exporter derives the ``ERR_INTERNAL`` variant from (§11.3).
+    """
+
+    request_id: str
 
 # code → HTTP status (§10.8). The interface layer owns this mapping (no executable map in the
 # application layer); it is the source of truth for code ↔ status.
@@ -121,11 +132,12 @@ def from_application_error(err: ApplicationError, settings: Settings) -> dict[st
 
 def internal(request_id: str, settings: Settings) -> dict[str, object]:
     """Build the 500 ``ERR_INTERNAL`` response carrying ``request_id`` for correlation (§10.8)."""
+    details: InternalDetails = {"request_id": request_id}
     body: dict[str, object] = {
         "error": {
             "code": "ERR_INTERNAL",
             "message": "Internal server error",
-            "details": {"request_id": request_id},
+            "details": details,
         }
     }
     return _response(500, body, settings)
