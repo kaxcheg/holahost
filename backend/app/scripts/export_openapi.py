@@ -33,6 +33,7 @@ from application.dto.generate import GenerateResponseResult
 from application.dto.ingestion import IngestionResult
 from application.dto.leads import ResolveMagicLinkResult
 from application.dto.sample import SampleGenerateResult
+from application.exceptions import ApplicationError
 from interface.lambda_.request_parsing import (
     API_KEY_HEADER,
     MAGIC_LINK_HEADER,
@@ -40,7 +41,7 @@ from interface.lambda_.request_parsing import (
     _GenerateBody,
     _SampleBody,
 )
-from interface.lambda_.response_envelope import HTTP_STATUS_BY_CODE
+from interface.lambda_.response_envelope import HTTP_STATUS_BY_CODE, InternalDetails
 from interface.lambda_.router import _ROUTES
 
 # backend/app/scripts/export_openapi.py -> parents[3] == repo root.
@@ -152,23 +153,41 @@ def _type_schema(annotation: Any) -> dict[str, Any]:
         base = _primitive_name(non_none[0])
         nullable = len(non_none) != len(args)
         return {"type": [base, "null"]} if nullable else {"type": base}
+    if origin is list:
+        (item,) = typing.get_args(annotation)
+        return {"type": "array", "items": {"type": _primitive_name(item)}}
     return {"type": _primitive_name(annotation)}
 
 
-def _dataclass_schema(cls: type) -> dict[str, Any]:
-    """Build a JSON Schema object for a result dataclass, mirroring ``dataclasses.asdict``.
+def _object_schema(annotations: dict[str, Any]) -> dict[str, Any]:
+    """Build a JSON Schema object from an ordered ``name -> annotation`` map.
 
-    Every field is ``required`` (``asdict`` always emits the key); nullable fields carry a
-    ``["<type>", "null"]`` type array.
+    Every key is ``required`` (mirrors ``dataclasses.asdict`` / a total ``TypedDict``: the key is
+    always present); nullable fields carry a ``["<type>", "null"]`` type array.
     """
-    hints = typing.get_type_hints(cls)
-    props = {f.name: _type_schema(hints[f.name]) for f in dataclasses.fields(cls)}
+    props = {name: _type_schema(tp) for name, tp in annotations.items()}
     return {
         "type": "object",
         "properties": props,
         "required": list(props),
         "additionalProperties": False,
     }
+
+
+def _dataclass_schema(cls: type) -> dict[str, Any]:
+    """Build a JSON Schema object for a result dataclass, mirroring ``dataclasses.asdict``."""
+    hints = typing.get_type_hints(cls)
+    return _object_schema({f.name: hints[f.name] for f in dataclasses.fields(cls)})
+
+
+def _typeddict_schema(td: Any) -> dict[str, Any]:
+    """Build a JSON Schema object for a (total) ``TypedDict`` error-``details`` type (§10.8)."""
+    return _object_schema(typing.get_type_hints(td))
+
+
+def _empty_object_schema() -> dict[str, Any]:
+    """The ``details`` schema for codes that carry no detail keys (§10.8): an empty object."""
+    return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 def _request_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -181,22 +200,86 @@ def _request_schema(model: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
+def _application_error_subclasses() -> list[type[ApplicationError]]:
+    """All (transitive) ``ApplicationError`` subclasses, registered by importing the exceptions module."""
+    result: list[type[ApplicationError]] = []
+    seen: set[type[ApplicationError]] = set()
+    stack: list[type[ApplicationError]] = list(ApplicationError.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+        result.append(cls)
+        stack.extend(cls.__subclasses__())
+    return result
+
+
+def _details_schemas_by_code() -> dict[str, dict[str, Any]]:
+    """Per-code ``details`` JSON Schema, DERIVED from each error's ``details_dict`` return type (§10.8).
+
+    Each ``ApplicationError`` subclass annotates ``details_dict`` with a ``TypedDict`` (the single
+    source, §11.3); subclasses that do not override it inherit the base ``Mapping`` return → empty
+    details. ``ERR_INTERNAL`` has no subclass (base default ``code``; its ``details`` are built in
+    ``response_envelope.internal``) → sourced from ``InternalDetails``.
+
+    :raises RuntimeError: if two subclasses declare the same ``code``, if a subclass usurps the
+        ``ERR_INTERNAL`` code, or if the collected code set differs from ``HTTP_STATUS_BY_CODE`` --
+        forcing this exporter to stay in sync whenever an error code is added or removed.
+    """
+    by_code: dict[str, dict[str, Any]] = {}
+    for cls in _application_error_subclasses():
+        if cls.code in by_code:
+            raise RuntimeError(f"duplicate error code {cls.code!r} across ApplicationError subclasses")
+        ret = typing.get_type_hints(cls.details_dict).get("return")
+        by_code[cls.code] = (
+            _typeddict_schema(ret) if typing.is_typeddict(ret) else _empty_object_schema()
+        )
+    if "ERR_INTERNAL" in by_code:
+        raise RuntimeError("ERR_INTERNAL must not have a dedicated ApplicationError subclass")
+    by_code["ERR_INTERNAL"] = _typeddict_schema(InternalDetails)
+
+    if set(by_code) != set(HTTP_STATUS_BY_CODE):
+        raise RuntimeError(
+            "export_openapi error-details are out of sync with HTTP_STATUS_BY_CODE; "
+            f"only here: {set(by_code) - set(HTTP_STATUS_BY_CODE)}; "
+            f"only in status map: {set(HTTP_STATUS_BY_CODE) - set(by_code)}"
+        )
+    return by_code
+
+
+def _error_variant_name(code: str) -> str:
+    return f"Error_{code}"
+
+
+def _error_variant_schema(code: str, details: dict[str, Any]) -> dict[str, Any]:
+    """One discriminated ``{code, message, details}`` variant for a single error code (§10.8)."""
+    return {
+        "type": "object",
+        "required": ["code", "message", "details"],
+        "additionalProperties": False,
+        "properties": {
+            "code": {"type": "string", "enum": [code]},
+            "message": {"type": "string"},
+            "details": details,
+        },
+    }
+
+
 def _error_envelope_schema() -> dict[str, Any]:
-    """The shared error envelope ``{"error": {"code", "message", "details"}}`` (§5.0 / §10.8)."""
+    """The error envelope ``{"error": <discriminated union on code>}`` (§5.0 / §10.8).
+
+    ``error`` is a ``oneOf`` of one variant per code (each a ``$ref`` to ``Error_<CODE>``); the
+    single-value ``code`` enum is the discriminant, so ``openapi-typescript`` renders a TypeScript
+    discriminated union that narrows ``details`` by ``code`` (§11.3).
+    """
     return {
         "type": "object",
         "required": ["error"],
         "additionalProperties": False,
         "properties": {
             "error": {
-                "type": "object",
-                "required": ["code", "message", "details"],
-                "additionalProperties": False,
-                "properties": {
-                    "code": {"type": "string", "enum": sorted(HTTP_STATUS_BY_CODE)},
-                    "message": {"type": "string"},
-                    "details": {"type": "object", "additionalProperties": True},
-                },
+                "oneOf": [_ref(_error_variant_name(code)) for code in sorted(HTTP_STATUS_BY_CODE)],
             }
         },
     }
@@ -284,6 +367,7 @@ def _build_paths() -> dict[str, Any]:
 
 def _build_document() -> dict[str, Any]:
     """Assemble the full OpenAPI 3.1 document."""
+    details_by_code = _details_schemas_by_code()
     schemas: dict[str, Any] = {
         "SampleGenerateRequest": _request_schema(_SampleBody),
         "CaptureLeadRequest": _request_schema(_CaptureBody),
@@ -308,6 +392,8 @@ def _build_document() -> dict[str, Any]:
         },
         "ErrorEnvelope": _error_envelope_schema(),
     }
+    for code in sorted(HTTP_STATUS_BY_CODE):
+        schemas[_error_variant_name(code)] = _error_variant_schema(code, details_by_code[code])
     return {
         "openapi": "3.1.0",
         "info": {

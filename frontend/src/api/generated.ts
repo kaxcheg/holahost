@@ -133,13 +133,119 @@ export interface components {
             status: "sent";
         };
         ErrorEnvelope: {
-            error: {
-                /** @enum {string} */
-                code: "ERR_EMAIL_CONFLICT" | "ERR_EMPTY_DOCUMENT" | "ERR_INTERNAL" | "ERR_INVALID_API_KEY" | "ERR_INVALID_MAGIC_LINK" | "ERR_INVALID_PAYLOAD" | "ERR_NOT_FOUND" | "ERR_NO_GUIDEBOOK" | "ERR_PAYLOAD_TOO_LARGE" | "ERR_RATE_LIMIT" | "ERR_SAMPLE_BUDGET_EXHAUSTED" | "ERR_TOO_MANY_CHUNKS" | "ERR_UNSUPPORTED_MEDIA_TYPE" | "ERR_UPSTREAM_EMAIL" | "ERR_UPSTREAM_LLM";
-                message: string;
-                details: {
-                    [key: string]: unknown;
-                };
+            error: components["schemas"]["Error_ERR_EMAIL_CONFLICT"] | components["schemas"]["Error_ERR_EMPTY_DOCUMENT"] | components["schemas"]["Error_ERR_INTERNAL"] | components["schemas"]["Error_ERR_INVALID_API_KEY"] | components["schemas"]["Error_ERR_INVALID_MAGIC_LINK"] | components["schemas"]["Error_ERR_INVALID_PAYLOAD"] | components["schemas"]["Error_ERR_NOT_FOUND"] | components["schemas"]["Error_ERR_NO_GUIDEBOOK"] | components["schemas"]["Error_ERR_PAYLOAD_TOO_LARGE"] | components["schemas"]["Error_ERR_RATE_LIMIT"] | components["schemas"]["Error_ERR_SAMPLE_BUDGET_EXHAUSTED"] | components["schemas"]["Error_ERR_TOO_MANY_CHUNKS"] | components["schemas"]["Error_ERR_UNSUPPORTED_MEDIA_TYPE"] | components["schemas"]["Error_ERR_UPSTREAM_EMAIL"] | components["schemas"]["Error_ERR_UPSTREAM_LLM"];
+        };
+        Error_ERR_EMAIL_CONFLICT: {
+            /** @enum {string} */
+            code: "ERR_EMAIL_CONFLICT";
+            message: string;
+            details: Record<string, never>;
+        };
+        Error_ERR_EMPTY_DOCUMENT: {
+            /** @enum {string} */
+            code: "ERR_EMPTY_DOCUMENT";
+            message: string;
+            details: Record<string, never>;
+        };
+        Error_ERR_INTERNAL: {
+            /** @enum {string} */
+            code: "ERR_INTERNAL";
+            message: string;
+            details: {
+                request_id: string;
+            };
+        };
+        Error_ERR_INVALID_API_KEY: {
+            /** @enum {string} */
+            code: "ERR_INVALID_API_KEY";
+            message: string;
+            details: Record<string, never>;
+        };
+        Error_ERR_INVALID_MAGIC_LINK: {
+            /** @enum {string} */
+            code: "ERR_INVALID_MAGIC_LINK";
+            message: string;
+            details: Record<string, never>;
+        };
+        Error_ERR_INVALID_PAYLOAD: {
+            /** @enum {string} */
+            code: "ERR_INVALID_PAYLOAD";
+            message: string;
+            details: {
+                field: string | null;
+                reason: string | null;
+            };
+        };
+        Error_ERR_NOT_FOUND: {
+            /** @enum {string} */
+            code: "ERR_NOT_FOUND";
+            message: string;
+            details: {
+                resource: string;
+            };
+        };
+        Error_ERR_NO_GUIDEBOOK: {
+            /** @enum {string} */
+            code: "ERR_NO_GUIDEBOOK";
+            message: string;
+            details: Record<string, never>;
+        };
+        Error_ERR_PAYLOAD_TOO_LARGE: {
+            /** @enum {string} */
+            code: "ERR_PAYLOAD_TOO_LARGE";
+            message: string;
+            details: {
+                max_bytes: number;
+            };
+        };
+        Error_ERR_RATE_LIMIT: {
+            /** @enum {string} */
+            code: "ERR_RATE_LIMIT";
+            message: string;
+            details: {
+                scope: string;
+                retry_after_s: number;
+            };
+        };
+        Error_ERR_SAMPLE_BUDGET_EXHAUSTED: {
+            /** @enum {string} */
+            code: "ERR_SAMPLE_BUDGET_EXHAUSTED";
+            message: string;
+            details: {
+                reset_at: string;
+            };
+        };
+        Error_ERR_TOO_MANY_CHUNKS: {
+            /** @enum {string} */
+            code: "ERR_TOO_MANY_CHUNKS";
+            message: string;
+            details: {
+                max_chunks: number;
+            };
+        };
+        Error_ERR_UNSUPPORTED_MEDIA_TYPE: {
+            /** @enum {string} */
+            code: "ERR_UNSUPPORTED_MEDIA_TYPE";
+            message: string;
+            details: {
+                allowed: string[];
+            };
+        };
+        Error_ERR_UPSTREAM_EMAIL: {
+            /** @enum {string} */
+            code: "ERR_UPSTREAM_EMAIL";
+            message: string;
+            details: {
+                retryable: boolean;
+            };
+        };
+        Error_ERR_UPSTREAM_LLM: {
+            /** @enum {string} */
+            code: "ERR_UPSTREAM_LLM";
+            message: string;
+            details: {
+                upstream_status: number | null;
+                retryable: boolean;
             };
         };
     };

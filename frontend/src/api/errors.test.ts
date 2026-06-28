@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ApplicationError, isRetryable, messageFor, parseErrorEnvelope } from './errors';
+import { ApplicationError, hasCode, isRetryable, messageFor, parseErrorEnvelope } from './errors';
 
 describe('parseErrorEnvelope', () => {
   it('returns an ApplicationError for an error envelope', () => {
@@ -24,19 +24,39 @@ describe('parseErrorEnvelope', () => {
 
 describe('isRetryable', () => {
   it('is true only for retryable upstream errors', () => {
-    expect(isRetryable(new ApplicationError('ERR_UPSTREAM_LLM', 'x', { retryable: true }))).toBe(
-      true,
-    );
+    expect(
+      isRetryable(
+        new ApplicationError('ERR_UPSTREAM_LLM', 'x', { upstream_status: 502, retryable: true }),
+      ),
+    ).toBe(true);
     expect(isRetryable(new ApplicationError('ERR_UPSTREAM_EMAIL', 'x', { retryable: true }))).toBe(
       true,
     );
   });
 
   it('is false for non-retryable or other codes', () => {
-    expect(isRetryable(new ApplicationError('ERR_UPSTREAM_LLM', 'x', { retryable: false }))).toBe(
-      false,
-    );
-    expect(isRetryable(new ApplicationError('ERR_RATE_LIMIT', 'x', {}))).toBe(false);
+    expect(
+      isRetryable(
+        new ApplicationError('ERR_UPSTREAM_LLM', 'x', { upstream_status: 400, retryable: false }),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryable(new ApplicationError('ERR_RATE_LIMIT', 'x', { scope: 'ip', retry_after_s: 5 })),
+    ).toBe(false);
+  });
+});
+
+describe('hasCode', () => {
+  it('narrows code-specific details type-safely (no cast)', () => {
+    const err: ApplicationError = new ApplicationError('ERR_RATE_LIMIT', 'slow', {
+      scope: 'ip',
+      retry_after_s: 7,
+    });
+    expect(hasCode(err, 'ERR_RATE_LIMIT')).toBe(true);
+    expect(hasCode(err, 'ERR_NOT_FOUND')).toBe(false);
+    if (hasCode(err, 'ERR_RATE_LIMIT')) {
+      expect(err.details.retry_after_s).toBe(7);
+    }
   });
 });
 

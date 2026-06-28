@@ -1,15 +1,25 @@
 import type { components } from './generated';
 
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
-export type ErrorCode = ErrorEnvelope['error']['code'];
-type ErrorDetails = ErrorEnvelope['error']['details'];
+/** The discriminated error payload — one variant per code, with correlated `details` (§5.0 / §10.8). */
+export type ErrorPayload = ErrorEnvelope['error'];
+export type ErrorCode = ErrorPayload['code'];
+/** The `details` shape for a specific error code (narrowed out of the discriminated union, §10.8). */
+export type DetailsFor<C extends ErrorCode> = Extract<ErrorPayload, { code: C }>['details'];
 
-/** A typed backend error from the `{ error: { code, message, details } }` envelope (§5.0 / §10.8). */
+/**
+ * A typed backend error from the `{ error: { code, message, details } }` envelope (§5.0 / §10.8).
+ *
+ * `details` is the union of every code's detail shape; narrow a value with {@link hasCode} to read
+ * code-specific detail fields without a cast. (The class is not generic in the code: a constructor
+ * `code` parameter would make it invariant, so `ApplicationError` instances would not be mutually
+ * assignable.)
+ */
 export class ApplicationError extends Error {
   readonly code: ErrorCode;
-  readonly details: ErrorDetails;
+  readonly details: ErrorPayload['details'];
 
-  constructor(code: ErrorCode, message: string, details: ErrorDetails) {
+  constructor(code: ErrorCode, message: string, details: ErrorPayload['details']) {
     super(message);
     this.name = 'ApplicationError';
     this.code = code;
@@ -36,12 +46,29 @@ export function parseErrorEnvelope(body: unknown): ApplicationError | null {
   return null;
 }
 
+/**
+ * Narrow an error to a specific code, correlating `code` with its `details` shape (§10.8).
+ *
+ * The predicate is an intersection (always a subtype of the input `ApplicationError`) rather than
+ * `ApplicationError<C>`, which TS rejects for a generic `C` (a type predicate must be assignable to
+ * its parameter type).
+ */
+export function hasCode<C extends ErrorCode>(
+  error: ApplicationError,
+  code: C,
+): error is ApplicationError & { readonly code: C; readonly details: DetailsFor<C> } {
+  return error.code === code;
+}
+
 /** Whether the client should auto-retry with backoff: retryable upstream failures only (§10.8). */
 export function isRetryable(error: ApplicationError): boolean {
-  if (error.code !== 'ERR_UPSTREAM_LLM' && error.code !== 'ERR_UPSTREAM_EMAIL') {
-    return false;
+  if (hasCode(error, 'ERR_UPSTREAM_LLM')) {
+    return error.details.retryable === true;
   }
-  return (error.details as { retryable?: boolean }).retryable === true;
+  if (hasCode(error, 'ERR_UPSTREAM_EMAIL')) {
+    return error.details.retryable === true;
+  }
+  return false;
 }
 
 // UI copy per error code (MVP — English only, §2.7). Exhaustive over ErrorCode (compile-time checked).
