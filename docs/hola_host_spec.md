@@ -772,7 +772,7 @@ HTTP-контракт между фронтом (Vite TS bundle) и backend (Lam
 | `RATE_LIMIT_PER_IP` | каждый запрос; subject — `ip_hash` входящего IP; нарушение → `ERR_RATE_LIMIT` со scope=`ip` |
 | `RATE_LIMIT_PER_MAGIC_LINK` | каждый запрос **с** заголовком `MAGIC_LINK_HEADER`; subject — значение magic_link; нарушение → `ERR_RATE_LIMIT` со scope=`magic_link` |
 
-`ERR_RATE_LIMIT` возвращается с HTTP 429 и полем `details.retry_after_seconds` + `details.scope ∈ {ip, magic_link}`.
+`ERR_RATE_LIMIT` возвращается с HTTP 429 и полем `details.retry_after_s` + `details.scope ∈ {ip, magic_link}`.
 
 ### 5.2 Перечень endpoint'ов
 
@@ -944,7 +944,7 @@ Real-flow ответ на сообщение гостя (§1.3, US-06).
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | сообщение + список форматов |
 | `ERR_PAYLOAD_TOO_LARGE` | 413 | сообщение + фактический лимит |
 | `ERR_EMPTY_DOCUMENT` | 422 | сообщение + предложение Generate by template |
-| `ERR_RATE_LIMIT` | 429 | таймер `details.retry_after_seconds` + `details.scope` |
+| `ERR_RATE_LIMIT` | 429 | таймер `details.retry_after_s` + `details.scope` |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | таймер до `SAMPLE_BUDGET_RESET_AT`; sample-кнопки disabled |
 | `ERR_UPSTREAM_LLM` | 502 | один авто-retry через 2 с, далее ручной |
 | `ERR_INTERNAL` | 500 | ручной retry; без stack trace в `message` |
