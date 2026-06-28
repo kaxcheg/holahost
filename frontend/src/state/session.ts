@@ -36,3 +36,12 @@ export function initSession(): void {
     }
   });
 }
+
+/**
+ * Clear the resolved session (§11.4): drop the magic link and lead. Used on a 401
+ * `ERR_INVALID_MAGIC_LINK` from any workspace call; the mirror effect also wipes sessionStorage.
+ */
+export function clearSession(): void {
+  magicLink.value = null;
+  lead.value = null;
+}

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import { parse as parseEnvFile } from 'dotenv';
+import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
 // Non-secret config the frontend bakes into the bundle (a subset of infra/env/<env>/<env>.env).
@@ -46,11 +47,35 @@ function resolveConfig(mode: string): Record<string, string | undefined> {
   return resolved;
 }
 
+/**
+ * Dev-only static for the template form (F-16 / §10.6): serve the canonical
+ * `docs/guidebook_template.json` at `/config/template_schema.json`, read fresh per request (no copy,
+ * not bundled). In deployed envs this path is served from S3/CloudFront by Terraform (§10.6/§12), so
+ * the plugin is `apply: 'serve'` only — the canon stays the single source.
+ */
+function templateSchemaDevServer(): Plugin {
+  const schemaPath = resolve(import.meta.dirname, '..', 'docs', 'guidebook_template.json');
+  return {
+    name: 'serve-template-schema',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use('/config/template_schema.json', (_req, res, next) => {
+        if (!existsSync(schemaPath)) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', 'application/json');
+        res.end(readFileSync(schemaPath));
+      });
+    },
+  };
+}
+
 // Statics-only SPA: single bundle to dist/ (no code-splitting needed — screens are small, §11.6).
 export default defineConfig(({ mode }) => {
   const cfg = resolveConfig(mode);
   return {
-    plugins: [tailwindcss()],
+    plugins: [tailwindcss(), templateSchemaDevServer()],
     define: {
       'import.meta.env.VITE_APP_ENV': JSON.stringify(cfg.ENV ?? null),
       'import.meta.env.VITE_API_BASE_URL': JSON.stringify(cfg.API_BASE_URL ?? null),

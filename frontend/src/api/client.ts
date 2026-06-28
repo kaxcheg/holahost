@@ -4,17 +4,23 @@ import type { paths } from './generated';
 
 const MAGIC_LINK_HEADER = 'X-Magic-Link';
 const API_KEY_HEADER = 'X-Api-Key';
-// Client timeout, shorter than the Function URL hard timeout of 90s (§10.2).
+// Default client wait-for-response budget. Responses are fast (RESPONSE_P95 ~8s, §10.2).
 const TIMEOUT_MS = 30_000;
+// Frontend wait budget for the slow upload operation (parse + chunk + embed): a deliberate UI ceiling
+// above the typical worst case so a healthy slow upload isn't aborted client-side. Not synced to any
+// backend/infra setting — a frontend-owned UX value (§10.2 INGESTION_P95 is ~60s).
+export const UPLOAD_TIMEOUT_MS = 90_000;
 const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
 
 export interface RequestOptions {
   /** Magic-link token; injected as the X-Magic-Link header when present (§10.3). */
-  magicLink?: string;
+  magicLink?: string | undefined;
   /** BYOK Claude key; injected as the X-Api-Key header when present (only `/generate`, §11.4). */
-  byok?: string;
+  byok?: string | undefined;
   /** Caller abort signal, combined with the internal timeout. */
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
+  /** Override the wait-for-response budget (ms); defaults to {@link TIMEOUT_MS}. Used for uploads. */
+  timeoutMs?: number | undefined;
 }
 
 type PostOp<P extends keyof paths> = paths[P] extends { post: infer O } ? O : never;
@@ -47,7 +53,7 @@ async function request<R>(path: string, init: RequestInit, opts: RequestOptions)
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
-    TIMEOUT_MS,
+    opts.timeoutMs ?? TIMEOUT_MS,
   );
   opts.signal?.addEventListener('abort', () => controller.abort(opts.signal?.reason), {
     once: true,
