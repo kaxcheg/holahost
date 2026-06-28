@@ -18,9 +18,18 @@ const DEPLOY_ENVS = ['dev', 'staging', 'prod'] as const;
  * place that knows the path). Unknown modes (e.g. vitest's "test") resolve to nothing.
  */
 function resolveConfig(mode: string): Record<string, string | undefined> {
+  // Vitest runs in mode "test"; resolve it against the dev config so config values are non-null in tests.
+  const sourceMode = mode === 'test' ? 'dev' : mode;
   let fileEnv: Record<string, string> = {};
-  if ((DEPLOY_ENVS as readonly string[]).includes(mode)) {
-    const path = resolve(import.meta.dirname, '..', 'infra', 'env', mode, `${mode}.env`);
+  if ((DEPLOY_ENVS as readonly string[]).includes(sourceMode)) {
+    const path = resolve(
+      import.meta.dirname,
+      '..',
+      'infra',
+      'env',
+      sourceMode,
+      `${sourceMode}.env`,
+    );
     if (existsSync(path)) {
       fileEnv = parseEnvFile(readFileSync(path));
     }
@@ -29,9 +38,9 @@ function resolveConfig(mode: string): Record<string, string | undefined> {
   for (const key of CONFIG_KEYS) {
     resolved[key] = process.env[key] ?? fileEnv[key];
   }
-  if ((DEPLOY_ENVS as readonly string[]).includes(mode) && resolved.ENV === undefined) {
+  if ((DEPLOY_ENVS as readonly string[]).includes(sourceMode) && resolved.ENV === undefined) {
     throw new Error(
-      `no config for --mode ${mode}: set env vars or provide infra/env/${mode}/${mode}.env`,
+      `no config for --mode ${mode}: set env vars or provide infra/env/${sourceMode}/${sourceMode}.env`,
     );
   }
   return resolved;

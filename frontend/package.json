@@ -18,6 +18,9 @@
     "test": "vitest run",
     "generate-types": "openapi-typescript ../docs/openapi.yaml -o src/api/generated.ts"
   },
+  "dependencies": {
+    "@preact/signals-core": "^1.8.0"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
     "@tailwindcss/vite": "^4.0.0",
