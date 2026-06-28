@@ -6,7 +6,13 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!src/api/generated.ts", "!dist", "!**/*.css"]
+    "includes": [
+      "**",
+      "!src/api/generated.ts",
+      "!src/api/constants.generated.ts",
+      "!dist",
+      "!**/*.css"
+    ]
   },
   "formatter": {
     "enabled": true,
