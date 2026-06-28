@@ -843,19 +843,19 @@ Resolve magic_link при открытии URL `?ml=<token>` (§1.3, US-03). GET
 - Body: отсутствует.
 
 **Response (200):**
-- Body:
+- Body (**плоский** — только примитивы, без вложенных объектов; см. §8.1 `ResolveMagicLinkResult`):
   ```json
   {
-    "lead": { "email": "<string>", "flow": "guidebook" | "sample" },
-    "guidebook": null | {
-      "guidebook_id": "<uuid-string>",
-      "name": "<string>",
-      "created_at": "<iso-8601>"
-    }
+    "email": "<string>",
+    "flow": "guidebook" | "sample",
+    "guidebook_id": null | "<uuid-string>",
+    "guidebook_name": null | "<string>",
+    "guidebook_created_at": null | "<iso-8601>"
   }
   ```
-- `guidebook_id` — UUID-строка; примитивная сериализация (не объект); клиент передаёт её обратно в `/api/generate` без интерпретации.
-- `name` — отображаемое имя гайдбука (см. §4.2, §7.3), показывается в UI.
+  Гайдбука нет → `guidebook_id` / `guidebook_name` / `guidebook_created_at` все `null`.
+- `guidebook_id` — UUID-строка; примитивная сериализация; клиент передаёт её обратно в `/api/generate` без интерпретации.
+- `guidebook_name` — отображаемое имя гайдбука (см. §4.2, §7.3), показывается в UI.
 
 **Ошибки:**
 
@@ -946,7 +946,7 @@ Real-flow ответ на сообщение гостя (§1.3, US-06).
 | `ERR_EMPTY_DOCUMENT` | 422 | сообщение + предложение Generate by template |
 | `ERR_RATE_LIMIT` | 429 | таймер `details.retry_after_s` + `details.scope` |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | таймер до `SAMPLE_BUDGET_RESET_AT`; sample-кнопки disabled |
-| `ERR_UPSTREAM_LLM` | 502 | один авто-retry через 2 с, далее ручной |
+| `ERR_UPSTREAM_LLM` | 502 | авто-retry (exp backoff 1с/2с/4с, max 3) при `details.retryable=true`, далее ручной |
 | `ERR_INTERNAL` | 500 | ручной retry; без stack trace в `message` |
 
 ## Этап 6. Conceptual Sequence Flow
@@ -3688,18 +3688,23 @@ def to_response(err: ApplicationError) -> tuple[int, dict]:
 ```
 frontend/
   src/
-    main.ts                           # bundle entrypoint
-    config.ts                         # build-time const из VITE_*
+    main.ts                           # bundle entry: регистрация компонентов + bootstrap (initSession, landing, router.start) — F-19
+    config.ts                         # build-time const из VITE_* (ENV, API_BASE_URL, MAGIC_LINK_URL_PARAM)
     router/
       router.ts                       # History API + path-matcher
       routes.ts                       # маппинг path → screen-element-tag
+    boot/
+      magic-link-landing.ts           # landing-обработчик ?ml= (resolve, set session, strip URL) — §11.4
     api/
-      generated.ts                    # вывод openapi-typescript (генерируется, committed)
+      generated.ts                    # типы из docs/openapi.yaml (openapi-typescript; генерируется, committed)
+      constants.generated.ts          # доменные константы из бэка (EMAIL_REGEX, лимиты; генерируется, committed)
       client.ts                       # fetch-обёртка (§11.3)
-      errors.ts                       # ApplicationError → UI-сообщение (§10.8)
+      errors.ts                       # единый ApplicationError + messageFor/hasCode (§10.8)
     state/
-      session.ts                      # magic_link, Lead signals
-      sample-budget.ts                # exhausted signal
+      session.ts                      # magicLink, lead, templateSchema signals + initSession/clearSession
+      sample-budget.ts                # sampleBudgetExhausted signal
+      error-banner.ts                 # bannerMessage signal (глобальный баннер)
+      capture-flow.ts                 # captureFlow signal (точка захвата email для /capture-email)
     components/
       entrypoint-screen.ts            # экран entrypoint (§1.3.1)
       sample-response-screen.ts       # экран sample_response
@@ -3707,7 +3712,7 @@ frontend/
       guidebook-screen.ts             # экран guidebook (upload/template choice)
       template-screen.ts              # форма template (schema из /config/template_schema.json через CloudFront — §10.6)
       llm-key-msg-screen.ts           # экран llm_key_msg (BYOK + guest message)
-      processing-screen.ts            # промежуточный uploading/generating
+      processing-screen.ts            # inline loading-индикатор (НЕ роут; показывается во время upload/generate)
       error-banner.ts                 # глобальный error-banner
     styles/
       tailwind.css                    # entry для Tailwind v4
@@ -3736,7 +3741,7 @@ frontend/
 | `/workspace` | `<guidebook-screen>` или `<llm-key-msg-screen>` (зависит от `Lead.guidebook_id`, §1.3.4) | требует `session.magicLink` (см. §11.4) |
 | `/workspace/upload` | `<guidebook-screen>` upload-mode | требует `session.magicLink` |
 | `/workspace/template` | `<template-screen>` | требует `session.magicLink` |
-| `/?ml=<token>` | landing-handler в `main.ts` (не отдельный экран): извлекает token, вызывает `GET /api/magic-link/resolve`, `history.replaceState('/', ...)`, переход на `/workspace` | — |
+| `/?ml=<token>` | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/magic-link/resolve`, `history.replaceState`; `resolved` → `/workspace`, `expired` → error-banner | — |
 
 **Защищённые маршруты** (`/workspace/*`): guard в роутере проверяет `session.magicLink !== null`; при отсутствии — `history.replaceState('/')` и редирект на entrypoint (без error-сообщения, magic_link мог истечь).
 
@@ -3749,9 +3754,11 @@ frontend/
 | Файл | Signal | Содержимое |
 |---|---|---|
 | `state/session.ts` | `magicLink: Signal<string \| null>` | resolved magic_link, in-memory; `null` после tab-close или после `/api/magic-link/resolve` с 401 |
-| `state/session.ts` | `lead: Signal<ResolveMagicLinkResult \| null>` | данные Lead после resolve (email, flow, guidebook_id, guidebook_created_at) |
+| `state/session.ts` | `lead: Signal<ResolveMagicLinkResult \| null>` | данные Lead после resolve (email, flow, guidebook_id, guidebook_name, guidebook_created_at) |
 | `state/sample-budget.ts` | `sampleBudgetExhausted: Signal<boolean>` | устанавливается в `true` при получении `ERR_SAMPLE_BUDGET_EXHAUSTED` (§10.8), отключает sample-формы |
-| `state/session.ts` | `templateSchema: Signal<TemplateFieldSchema[] \| null>` | кэш ответа `fetch('/config/template_schema.json')` через CloudFront-статику (§10.6), грузится при mount template-экрана |
+| `state/session.ts` | `templateSchema: Signal<readonly unknown[] \| null>` | кэш ответа `fetch('/config/template_schema.json')` через CloudFront-статику (§10.6), грузится при mount template-экрана |
+| `state/error-banner.ts` | `bannerMessage: Signal<string \| null>` | текст глобального error-banner (§11.3/§11.4); `null` — баннер скрыт |
+| `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/leads/capture` |
 
 Подписка из компонента — через `effect()` внутри `connectedCallback` (cleanup через возвращаемую функцию в `disconnectedCallback`).
 
@@ -3767,14 +3774,14 @@ frontend/
 - inject `Content-Type: application/json` на POST'ах;
 - inject `X-Magic-Link: <session.magicLink>` если есть и endpoint требует MAGIC_LINK-scope (§10.3);
 - inject `X-Api-Key: <byok>` только на вызове `/api/generate` (BYOK передаётся аргументом, не из global state — см. §11.4);
-- парсит `Error envelope` (§10.8): если `response.json().error` — бросает типизированный `ApplicationError` подкласс с `code` + `details`; иначе возвращает `response.json()` как payload-объект;
-- timeout 30 с (короче, чем Function URL hard timeout 90 с из §10.2) — `AbortController`.
+- парсит `Error envelope` (§10.8): если `response.json().error` — бросает **единый** `ApplicationError` (поле `code` + типизированный per-code `details`); иначе возвращает `response.json()` как payload-объект;
+- timeout (`AbortController`): дефолт 30 с; upload-вызовы (`/ingest/upload`) передают увеличенный клиентский таймаут (`UPLOAD_TIMEOUT_MS`, frontend-константа), т.к. ingestion p95 ~60 с (§10.2) — иначе клиент оборвёт здоровую медленную загрузку. Это независимый frontend-слой, не зеркало серверного/инфра-таймаута.
 
-**Типизация — OpenAPI codegen.** Источник истины — `docs/openapi.yaml` (выгружается backend'ом в CI через pydantic-схемы DTO §8.1 + конкретные path'ы §5).
+**Типизация и константы — backend-эмиттеры (drift-free, вариант B).** Два committed-артефакта генерятся бэком из живых символов, фронт их потребляет:
 
-- `npm run generate-types` в `frontend/` запускает `openapi-typescript docs/openapi.yaml --output src/api/generated.ts`;
-- сгенерированный файл коммитится в репо (drift detection через `git diff`);
-- в CI (`ci.yml`, §13.4) добавляется шаг `npm run generate-types && git diff --exit-code src/api/generated.ts` — расхождение блокирует PR.
+- **Типы:** `docs/openapi.yaml` (бэк: `app/scripts/export_openapi.py` — из pydantic-DTO §8.1 + path'ов §5; error-envelope — discriminated union по `code` с типизированным per-code `details`) → `npm run generate-types` (`openapi-typescript`) → `src/api/generated.ts`.
+- **Доменные константы:** `app/scripts/export_frontend_constants.py` (из домена: `EMAIL_REGEX`, `EMAIL_MAX_LENGTH`, `MAX_GUEST_MESSAGE_LENGTH`) → `src/api/constants.generated.ts` (валидаторы F-05 импортят оттуда).
+- Оба файла коммитятся; drift-detection через `git diff`. В CI (`ci.yml`, §13.4) — `make check-openapi` / `make check-frontend-constants` (бэк: регенерация + `git diff --exit-code`) и `npm run generate-types && git diff --exit-code src/api/generated.ts` (фронт); расхождение блокирует PR.
 
 `client.ts` использует сгенерированные типы как параметры и возврат:
 ```typescript
@@ -3784,8 +3791,8 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 ```
 
 **Обработка ошибок:**
-- ApplicationError-подкласс (`ErrInvalidApiKey`, `ErrRateLimit`, `ErrNoGuidebook`, и т.д., 13 типов из §10.8) ловится на уровне экрана через `try/catch` в обработчике submit;
-- маппинг `code → UI-сообщение` — в `api/errors.ts`;
+- **единый** `ApplicationError` (не подклассы) ловится на уровне экрана через `try/catch` в обработчике submit; различение — по полю `code` (discriminated union из §10.8), не по типу подкласса;
+- `api/errors.ts`: `messageFor(code)` — каноничная UI-копия по коду; `hasCode(err, 'CODE')` — type-safe guard, сужающий `err.details` к форме конкретного кода (типизированный per-code `details`); `isRetryable(err)`;
 - retry-семантика — wrapper `withRetry(fn, opts)` читает `details.retryable` и `details.retry_after_s` (§10.8), делает backoff (1s, 2s, 4s; max 3 попытки) только для `ERR_UPSTREAM_LLM` / `ERR_UPSTREAM_EMAIL` с `retryable=true`. Остальные коды — без auto-retry, UI рисует «попробовать снова» кнопку или редирект.
 
 **Loading state:** на каждом экране-форме — boolean signal `submitting`, выставляется в `true` перед `await`, в `false` в `finally`. Кнопка submit `disabled` + spinner-индикатор.
@@ -3794,7 +3801,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 **magic_link** — токен сессии, identifies Lead:
 - источник: landing-URL `?ml=<token>` (§10.3 / §1.3.4);
-- handling: `main.ts` извлекает через `utils/url.ts`, выполняет `GET /api/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage; при 401 — редирект на `/` с error-banner «magic_link expired»;
+- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) извлекает через `utils/url.ts`, выполняет `GET /api/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
 - `history.replaceState('/', '')` сразу после извлечения — token не остаётся в URL;
 - storage: in-memory signal + `sessionStorage["magic_link"]` (для переживания reload в одной вкладке);
 - передача в API: `X-Magic-Link` header через `client.ts`, автоматически на всех endpoint'ах с MAGIC_LINK-scope;
@@ -3810,11 +3817,11 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 ### 11.5 Стилизация и UI
 
-**Tailwind CSS v4.** Конфигурация — `frontend/tailwind.config.ts`; entry — `src/styles/tailwind.css`:
+**Tailwind CSS v4 (CSS-first).** Подключается плагином `@tailwindcss/vite` (в `vite.config.ts`), **без** `tailwind.config.ts` (JS-конфига нет). Entry — `src/styles/tailwind.css`:
 ```css
-import "tailwindcss";
+@import "tailwindcss";
 ```
-Tailwind v4 использует CSS-first config (через `theme`-блок), не JS-объект.
+Конфигурация CSS-first: дизайн-токены через `@theme {…}` (генерят утилиты + CSS-vars), кастом-утилиты через `@utility name {…}`. `tailwind.css` импортится в `main.ts`, чтобы CSS попал в бандл.
 
 **Подход к стилям:**
 - утилитарные классы Tailwind на разметке Custom Elements (через `this.innerHTML` или template-literal);
@@ -3842,22 +3849,17 @@ Tailwind v4 использует CSS-first config (через `theme`-блок),
 
 Это достижимо за счёт same-origin-архитектуры (§2.1): CloudFront на каждом домене (`staging.hola.host` и `hola.host`) обслуживает один и тот же bundle и проксирует `/api/*` на соответствующую Lambda Function URL. Frontend не знает «своё» окружение на этапе сборки.
 
-**Переменные окружения фронта (Vite `VITE_*` prefix, baked at build-time):**
+**Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Источник истины — per-env файл **`infra/env/<env>/<env>.env`** (единый для фронта и бэка, см. §12), а не committed `.env` во фронте. Сборка `vite --mode <env>` берёт значения из env-vars (при деплое их объявляет CI из файла — фронт симметричен бэку) с fallback'ом на чтение файла напрямую для локальной one-command сборки; `vite.config.ts` инжектит их через `define`, `config.ts` читает `import.meta.env.VITE_*`.
 
-| Переменная | Значение (единое для всех окружений) | Назначение |
+| Ключ (в env-файле) | Значение | Назначение |
 |---|---|---|
-| `VITE_API_BASE_URL` | `/api` (relative, same-origin) | base URL backend'а; работает на любом домене (`staging.hola.host`, `hola.host`, `localhost` через CloudFront-emulator в dev) |
-| `VITE_MAGIC_LINK_URL_PARAM` | `ml` (фиксировано §10.3) | имя URL-параметра magic_link landing'а |
+| `ENV` | `dev` / `staging` / `prod` | окружение (дискриминатор, см. ниже) |
+| `API_BASE_URL` | `/api` (relative, same-origin) | base URL backend'а; работает на любом домене |
+| `MAGIC_LINK_URL_PARAM` | `ml` (фиксировано §10.3) | имя URL-параметра magic_link landing'а |
 
-Значения зафиксированы в `.env` (committed; нет per-env `.env.staging` / `.env.production`).
+**Определение окружения — по атрибуту `ENV` env-файла** (baked в `VITE_APP_ENV`), **не по hostname**: прежний `detectEnvironment(hostname)` удалён (надёжнее, не зависит от домена). `ENV` используется в error-banner-text и (опц.) Sentry environment-tag. Сегодня per-env различается **только** `ENV` (`API_BASE_URL`/`MAGIC_LINK_URL_PARAM` одинаковы во всех окружениях) — согласование с build-and-promote (§13.4/§13.5: один bundle staging+prod) решается в CI/CD-слое.
 
-**Определение окружения в runtime** — через `window.location.hostname` в `config.ts`:
-- `hola.host` → `"prod"`;
-- `staging.hola.host` → `"staging"`;
-- `localhost` / `127.0.0.1` → `"dev"`;
-- прочие → `"unknown"` (используется в error-banner-text и (опц.) Sentry environment-tag).
-
-**Не используется:** `dotenv` runtime, `process.env` runtime patching, server-injected config, per-env build-flags.
+**Не используется:** `dotenv` runtime, `process.env` runtime patching, server-injected runtime config, runtime hostname-detection.
 
 **Public env-vars** (видимы в bundle и DevTools) — только `VITE_*` выше; никаких токенов, ключей или секретов.
 
@@ -4269,7 +4271,7 @@ Strict с первого коммита; ослабление настроек �
 - `F-15` Component `<guidebook-screen>` (upload-mode имеет input `name`; template-mode — переход на template-screen) — §1.3.2
 - `F-16` Component `<template-screen>` (динамическая форма из `/config/template_schema.json`; на submit рендерит plain text по `<label>: <value>\n\n` и шлёт в `/api/ingest/upload` с auto-filled `name = property_name`) — §10.6
 - `F-17` Component `<llm-key-msg-screen>` (BYOK input + guest message) — §1.3.2 / §10.3
-- `F-18` Component `<processing-screen>` — §1.3.2
+- `F-18` Component `<processing-screen>` — inline loading-индикатор (НЕ роут/состояние; §11.3 loading-state), показывается экранами upload/generate во время in-flight
 - `F-19` `main.ts` (bootstrap, mount, router start, session init из sessionStorage) — §11.1
 
 ### 14.3 Infrastructure
