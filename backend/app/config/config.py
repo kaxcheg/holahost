@@ -102,11 +102,6 @@ class Settings(BaseSettings):
         """
         return timedelta(seconds=self.max_rate_limit_window_seconds)
 
-    @property
-    def rate_limit_window(self) -> timedelta:
-        """Per-window size for the fixed-window rate limiter, from ``rate_limit_window_seconds``."""
-        return timedelta(seconds=self.rate_limit_window_seconds)
-
     @model_validator(mode="after")
     def _enforce_prod_guardrails(self) -> Self:
         """Fail-fast guardrails that only apply in production (§10.1 — misconfig must not boot).
