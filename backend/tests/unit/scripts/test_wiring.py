@@ -2,7 +2,8 @@ import pytest
 
 from infrastructure.email.resend_email_sender import ResendEmailSender
 from infrastructure.email.smtp_email_sender import SmtpEmailSender
-from scripts.wiring import check_embedder_ceiling, make_email_sender
+from infrastructure.sample.source import FileSampleGuidebookSource, S3SampleGuidebookSource
+from scripts.wiring import check_embedder_ceiling, make_email_sender, make_sample_source
 from tests._support.fakes import FakeEmbeddingModel
 from tests._support.settings import make_settings
 
@@ -31,3 +32,19 @@ def test_ceiling_guard_passes_within_limit() -> None:
         make_settings(max_chunk_tokens=128, chunk_window=120),
         FakeEmbeddingModel(max_input_tokens=128),
     )
+
+
+def test_sample_source_dev_is_file() -> None:
+    assert isinstance(make_sample_source(make_settings(env="dev")), FileSampleGuidebookSource)
+
+
+def test_sample_source_staging_is_s3() -> None:
+    source = make_sample_source(
+        make_settings(
+            env="staging",
+            aws_resources_region="us-east-1",
+            sample_guidebook_s3_bucket="holahost-frontend",
+            sample_guidebook_s3_key="config/sample_guidebook.md",
+        )
+    )
+    assert isinstance(source, S3SampleGuidebookSource)

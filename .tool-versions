@@ -1,0 +1,5 @@
+# Pinned toolchain — single source for local dev, the Docker build, and CI (mise; asdf needs exact patches).
+python 3.12
+poetry 2.2.1
+nodejs 20
+terraform 1.10

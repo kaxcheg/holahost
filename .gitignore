@@ -18,7 +18,7 @@ venv/
 htmlcov/
 
 # Environment files
-.env
+*.env
 .env.*
 !.env.example
 
@@ -30,3 +30,15 @@ htmlcov/
 .build-state/
 .claude/
 settings.json
+
+# Node
+node_modules/
+frontend/dist/
+
+# Terraform (keep .terraform.lock.hcl tracked)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log

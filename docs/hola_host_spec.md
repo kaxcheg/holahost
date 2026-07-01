@@ -2426,7 +2426,7 @@ def build() -> Container:
     vector_search = NumpyVectorSearch()
     parser = CompositeFileParser()
     chunker = RecursiveTextChunker(settings.chunk_window, settings.chunk_overlap)
-    sample_source = FileSampleGuidebookSource(settings.sample_guidebook_path)  # docs/-документ (§6.1)
+    sample_source = make_sample_source(settings)  # dev → File (docs/), staging/prod → S3 (§6.1 / §12)
     sample_chunks = load_sample_chunks(sample_source, parser, chunker, embedder)  # cold-start preload
 
     return Container(
@@ -2474,7 +2474,7 @@ container: Container = build()  # module-level singleton (выполняется
 - **Lambda lifecycle**: `container` создаётся на cold start; SnapStart фризит инициализированный процесс с ONNX-моделью и preloaded sample-чанками (§2.1). Warm-invocation: handler → `dispatch(event, container)` → `use_case.execute(cmd)`.
 - **Request flow**: `lambda_handler(event, context)` → `handle(event, context, container)` → `router.dispatch` → `request_parsing.*Cmd` → `use_case.execute(cmd)` → `response_envelope.ok|from_application_error` → HTTP-ответ. Ошибки (`ApplicationError` и его подклассы) ловятся в handler'е, маппятся через `response_envelope.from_application_error` по таблице §5.8.
 - **UoW и repo**: реализации repo принимают `PostgresUnitOfWork` и используют его текущее соединение/транзакцию. Use case оборачивает write-блок в `with uow.transaction():` (детали — §9).
-- **Sample-чанки preload**: `load_sample_chunks(sample_source, parser, chunker, embedder)` читает бизнес-документ из `docs/` через порт `FileSampleGuidebookSource(settings.sample_guidebook_path)` (sample-гайдбук — не код приложения, лежит в `docs/`, как `guidebook_template.json`), парсит + чанкит + эмбеддит один раз на cold start, возвращает `list[Chunk]`. SnapStart фризит результат — на warm-вызовы embed не запускается.
+- **Sample-чанки preload**: `load_sample_chunks(sample_source, parser, chunker, embedder)` читает бизнес-документ через порт `SampleGuidebookSource`, выбираемый по env фабрикой `make_sample_source`: dev → `FileSampleGuidebookSource(settings.sample_guidebook_path)` из `docs/` (как `guidebook_template.json`); staging/prod → `S3SampleGuidebookSource` (бакет/ключ — `sample_guidebook_s3_bucket`/`_key`, регион — `aws_resources_region`; все три — Nullable Settings-поля, sample обновляем без редеплоя). Парсит + чанкит + эмбеддит один раз на cold start, возвращает `list[Chunk]`. SnapStart фризит результат — на warm-вызовы embed не запускается.
 
 ---
 
@@ -3849,7 +3849,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 Это достижимо за счёт same-origin-архитектуры (§2.1): CloudFront на каждом домене (`staging.hola.host` и `hola.host`) обслуживает один и тот же bundle и проксирует `/api/*` на соответствующую Lambda Function URL. Frontend не знает «своё» окружение на этапе сборки.
 
-**Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Источник истины — per-env файл **`infra/env/<env>/<env>.env`** (единый для фронта и бэка, см. §12), а не committed `.env` во фронте. Сборка `vite --mode <env>` берёт значения из env-vars (при деплое их объявляет CI из файла — фронт симметричен бэку) с fallback'ом на чтение файла напрямую для локальной one-command сборки; `vite.config.ts` инжектит их через `define`, `config.ts` читает `import.meta.env.VITE_*`.
+**Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Источник истины — per-env файл **`infra/envs/<env>/<env>.env`** (единый для фронта и бэка, см. §12; gitignored — копируется из версионируемого шаблона `infra/envs/<env>/.env.example`), а не committed `.env` во фронте. Сборка `vite --mode <env>` берёт значения из env-vars (при деплое их объявляет CI из файла — фронт симметричен бэку) с fallback'ом на чтение файла напрямую для локальной one-command сборки; `vite.config.ts` инжектит их через `define`, `config.ts` читает `import.meta.env.VITE_*`.
 
 | Ключ (в env-файле) | Значение | Назначение |
 |---|---|---|
@@ -3903,9 +3903,9 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 Описание Terraform лежит в `infra/` репо `holahost/` (предварительная структура — модули per ресурс в `infra/modules/`, по одному инстансу каждого модуля per env в `infra/envs/{staging,prod}/`).
 
-Backend state — S3 + DynamoDB lock, отдельный bucket per env. Применение — `terraform init && terraform plan && terraform apply` из соответствующего `envs/<env>/` каталога.
+Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated), отдельный bucket per env. Применение — `terraform init && terraform plan && terraform apply` из соответствующего `envs/<env>/` каталога.
 
-Исключение «chicken-and-egg»: ресурсы backend state'а (S3-bucket'ы, DynamoDB-таблицы) создаются вручную один раз; задокументированы в Environment runbook.
+Исключение «chicken-and-egg»: ресурсы backend state'а (S3-bucket'ы) создаются вручную один раз; задокументированы в Environment runbook.
 
 Managed-платформы (Vercel, Render, Fly.io и пр.) не используются.
 
@@ -3913,9 +3913,11 @@ Managed-платформы (Vercel, Render, Fly.io и пр.) не использ
 
 Runtime-канал доступа Lambda к server-side секретам (boto на cold start), IAM-форма (`secretsmanager:GetSecretValue` ограниченный `Resource` policy), запрет TF-инжекции значений в env — зафиксированы как архитектурное решение в §10.3 (server-side secrets runtime channel). Настоящий раздел — storage-location, состав ключей per env, ротация, модель доступа.
 
+**Регион boto-клиентов приложения** (Secrets Manager на cold start, S3 для sample-гайдбука) — параметр приложения `AWS_RESOURCES_REGION` (Settings-поле; на cold start читается из env напрямую, до сборки `Settings`). Отличается от зарезервированного Lambda-runtime `AWS_REGION` (= регион деплоя, задаётся CI/Terraform — переопределить нельзя): регион ресурсов приложения и регион деплоя могут различаться.
+
 | Окружение | Где лежат | Кто имеет доступ |
 |---|---|---|
-| **dev** | локальный `.env` файл на машине разработчика; `.env` в `.gitignore`; `.env.example` (шаблон с placeholder'ами) — версионируется в репо | сам разработчик; внешние участники не имеют доступа |
+| **dev** | локальный файл `infra/envs/dev/dev.env` на машине разработчика (в `.gitignore`); копируется из версионируемого шаблона `infra/envs/dev/.env.example` (все переменные; секреты — пустые) | сам разработчик; внешние участники не имеют доступа |
 | **staging** | AWS Secrets Manager, prefix `holahost/staging/` (`database_url`, `resend_api_key` sandbox, `ip_hash_salt`, `sample_server_api_key` — cold-start loader-set, §10.3) | владелец проекта; deploy-IAM-Role `terraform-deploy-staging` (для записи); Lambda execution role `holahost-staging-api` (read-only по prefix, §10.3) |
 | **prod** | AWS Secrets Manager, prefix `holahost/prod/` (тот же набор ключей, production-значения) | владелец проекта только под MFA через deploy-IAM-Role `terraform-deploy-prod`; Lambda execution role `holahost-prod-api` (read-only по prefix, §10.3); консольный доступ к значениям требует MFA |
 
@@ -4279,7 +4281,7 @@ Strict с первого коммита; ослабление настроек �
 - `I-01` Monorepo init: layout, `.gitignore`, `.env.example`, top-level `Makefile` — §12.4 / §13
 - `I-02` Local dev stack: `docker-compose.yml` (Postgres + Mailpit + Lambda runtime emulator) + Make-цели `dev-up`/`dev-down`/`migrate-dev`/`dev-test` — §12.1
 - `I-03` AWS account setup: IAM admin user с MFA, AWS CLI профайлы — §12.0
-- `I-04` Manual: создание Terraform-backend ресурсов (S3 state bucket + DynamoDB lock table) — §12.2 / §12.4
+- `I-04` Manual: создание Terraform-backend ресурсов (S3 state bucket; нативный S3-лок `use_lockfile`, без DynamoDB) — §12.2 / §12.4
 - `I-05` Terraform `infra/` layout: `modules/` + `envs/{staging,prod}/{main.tf,terraform.tfvars,backend.tf}` — §12.2
 - `I-06` TF module `secrets` (`aws_secretsmanager_secret` без `secret_string` + Lambda IAM policy `GetSecretValue`) — §10.3 / §12.3
 - `I-07` Neon project + ветки `staging`/`prod`, connection strings → Secrets Manager — §12.0

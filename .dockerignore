@@ -1,0 +1,28 @@
+# Backend image build context = repo root (to bake docs/sample_guidebook.md). Keep only backend/app +
+# pyproject + lock + the sample asset; trim everything else so the context stays small.
+.git/
+.build-state/
+.claude/
+**/__pycache__/
+**/*.py[cod]
+**/.mypy_cache/
+**/.ruff_cache/
+**/.pytest_cache/
+**/.coverage
+
+# Frontend and IaC are not part of the backend image.
+frontend/
+infra/
+environments/
+
+# Backend: keep app/ + pyproject + lock; drop the rest.
+backend/.venv/
+backend/tests/
+backend/migrations/
+backend/Makefile
+backend/alembic.ini
+backend/Dockerfile
+backend/.dockerignore
+
+# docs/ is not part of the image — the sample guidebook is mounted in dev / read from S3 in prod.
+docs/

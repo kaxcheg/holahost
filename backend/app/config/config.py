@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     fields (DB / Resend / embedding / observability / CORS) are added by their own tickets
     (B-31+), co-located with the adapters that read them.
 
-    No field has a Python default: a missing env var fails fast at construction (§10.1). Numeric
+    Almost no field has a Python default — a missing env var fails fast at construction (§10.1); the
+    env-specific sample-source params are Nullable, since each env sets only the source it uses:
+    ``sample_guidebook_path`` (dev, local file) vs ``sample_guidebook_s3_*`` + ``aws_resources_region``
+    (staging/prod, S3). Numeric
     invariants (``> 0``, non-empty secret) are enforced here so the application layer never
     re-checks them (§8.2.4 / §9.0). The ``model_id_*`` fields opt out of pydantic's ``model_``
     protected namespace.
@@ -75,7 +78,15 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = Field(gt=0)
     # Infrastructure adapter config (B-38…B-45). Co-located here per the one-class env model (§10.2).
     embedding_model_name: str
-    sample_guidebook_path: str
+    # Sample-guidebook source — env-specific & mutually exclusive, so each param is Nullable; the wiring
+    # (``make_sample_source``) picks one by ``env`` and fail-fasts if its params are unset. dev → the local
+    # file ``sample_guidebook_path``; staging/prod → S3 (``sample_guidebook_s3_bucket``/``_key``).
+    # ``aws_resources_region`` is the app's boto region (SM/S3); ALSO read raw in bootstrap.py for the
+    # pre-Settings Secrets Manager client. Distinct from the Lambda-runtime AWS_REGION (= deploy region, CI).
+    sample_guidebook_path: str | None = None
+    aws_resources_region: str | None = None
+    sample_guidebook_s3_bucket: str | None = None
+    sample_guidebook_s3_key: str | None = None
     max_chunk_tokens: int = Field(gt=0)
     chunk_window: int = Field(gt=0)
     chunk_overlap: int = Field(ge=0)

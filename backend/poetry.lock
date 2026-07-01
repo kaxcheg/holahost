@@ -170,6 +170,7 @@ files = [
 
 [package.dependencies]
 botocore-stubs = "*"
+mypy-boto3-s3 = {version = ">=1.43.0,<1.44.0", optional = true, markers = "extra == \"s3\""}
 mypy-boto3-secretsmanager = {version = ">=1.43.0,<1.44.0", optional = true, markers = "extra == \"secretsmanager\""}
 types-s3transfer = "*"
 
@@ -2335,6 +2336,18 @@ mypyc = ["setuptools (>=50)"]
 reports = ["lxml"]
 
 [[package]]
+name = "mypy-boto3-s3"
+version = "1.43.31"
+description = "Type annotations for boto3 S3 1.43.31 service generated with mypy-boto3-builder 8.12.0"
+optional = false
+python-versions = ">=3.9"
+groups = ["dev"]
+files = [
+    {file = "mypy_boto3_s3-1.43.31-py3-none-any.whl", hash = "sha256:b21c97c0db23cffcf0704625b42cf369366ad4bbdf84a4eb2fa265431c60ae83"},
+    {file = "mypy_boto3_s3-1.43.31.tar.gz", hash = "sha256:fb8674063f3a491f1364c025371c3155077cd780bd04176497f8b31b5a8dd34f"},
+]
+
+[[package]]
 name = "mypy-boto3-secretsmanager"
 version = "1.43.0"
 description = "Type annotations for boto3 SecretsManager 1.43.0 service generated with mypy-boto3-builder 8.12.0"
@@ -4409,4 +4422,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "a70e65136ce605a276bee1fcb99008af485bb95e9d22b0fd1cbf518439dc417a"
+content-hash = "7229e316ddb2e19dbfe1b661c6bf85638dd5cafc0de18acfd4c2fec77c2a3110"
