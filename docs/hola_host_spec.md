@@ -3238,7 +3238,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
         os.environ[key.upper()] = secret["SecretString"]
 ```
 
-Вариант **A** — anti-pattern, явно запрещён: Terraform-модуль `secrets` создаёт только `aws_secretsmanager_secret` (resource без `secret_string`), значения секретов заполняются вне IaC. Вариант **C** — не используется на MVP.
+Вариант **A** — anti-pattern, явно запрещён: Terraform-модуль `sm` создаёт только `aws_secretsmanager_secret` (resource без `secret_string`), значения секретов заполняются вне IaC. Вариант **C** — не используется на MVP.
 
 Состав `SERVER_SIDE_SECRET_KEYS` (`app/scripts/sm_loader.py`) фиксирован: `database_url`, `resend_api_key`, `ip_hash_salt`, `sample_server_api_key`. BYOK end-user'а в список не входит (приходит per-request в HTTP-заголовке `X-Api-Key`, см. выше); `sentry_dsn` / `support_email` через SM-канал не загружаются (обычные env-vars, не часть cold-start secret-loader'а).
 
@@ -3249,7 +3249,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
 - §5.8 — маппинг «чужой `guidebook_id` → 401 vs 404» — решение: 404 как для ресурса не существующего (предотвращает enumeration); fixed в §10.3 как часть transport-design (добавляется код `ERR_NOT_FOUND` в таксономию §10.8).
 - §8.0/Settings — добавляются: `frontend_origin: str` (env), `env: str` (env, `"dev"|"prod"`); в `interface/lambda_/response_envelope.py` — middleware, добавляющий security headers + CORS-ответ.
 - §8.0 — `app/scripts/bootstrap.py` на cold start (только `staging`/`prod`) загружает server-side секреты через `sm_loader.load_secrets_into_env` (boto3) в `os.environ` до инициализации `Settings`; Lambda execution role получает inline policy `secretsmanager:GetSecretValue` с `Resource: arn:aws:secretsmanager:*:*:secret:holahost/{env}/*`.
-- §2.6 (IaC) — CloudFront response-headers policy для статики; Lambda Function URL CORS settings (если поддерживаются — иначе headers добавляются в `response_envelope.py`); Terraform-модуль `secrets` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
+- §2.6 (IaC) — CloudFront response-headers policy для статики; Lambda Function URL CORS settings (если поддерживаются — иначе headers добавляются в `response_envelope.py`); Terraform-модуль `sm` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
 - §12 — раздел инфраструктуры ссылается на §10.3 за runtime-каналом и IAM-формой доступа Lambda к секретам; сам §12 фиксирует storage-backend (Secrets Manager) и storage-location per env.
 - AC §3 US-07 «обработка ошибок без утечки `api_key`» становится численно верифицируемым: e2e-тест с `X-Api-Key: invalid` ожидает в CloudWatch-логах отсутствие подстроки `invalid`.
 
@@ -4283,13 +4283,13 @@ Strict с первого коммита; ослабление настроек �
 - `I-03` AWS account setup: IAM admin user с MFA, AWS CLI профайлы — §12.0
 - `I-04` Manual: создание Terraform-backend ресурсов (S3 state bucket; нативный S3-лок `use_lockfile`, без DynamoDB) — §12.2 / §12.4
 - `I-05` Terraform `infra/` layout: `modules/` + `envs/{staging,prod}/{main.tf,terraform.tfvars,backend.tf}` — §12.2
-- `I-06` TF module `secrets` (`aws_secretsmanager_secret` без `secret_string` + Lambda IAM policy `GetSecretValue`) — §10.3 / §12.3
+- `I-06` TF module `sm` (`aws_secretsmanager_secret` без значений, value-less; значения заполняются вне IaC, §10.3) — §10.3 / §12.3
 - `I-07` Neon project + ветки `staging`/`prod`, connection strings → Secrets Manager — §12.0
 - `I-08` TF module `ecr` (`holahost-api`, lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
 - `I-09` TF module `s3_frontend` (единый bucket `holahost-frontend` + bucket policy + OAC) — §12.0 / §13.4
 - `I-10` TF module `route53` (hosted zone `hola.host`, ACM cert в us-east-1, DKIM/SPF/DMARC) — §10.3 / §10.7
 - `I-11` TF module `cloudfront` (staging + prod distributions с response headers policy + origin path) — §10.3 / §13.4
-- `I-12` TF module `lambda` (`holahost-{env}-api` + `holahost-{env}-cleanup` + EventBridge schedule `cron(30 0 * * ? *)`) — §10.1 / §10.2 / §8.6
+- `I-12` TF module `lambda` (`holahost-{env}-api` + `holahost-{env}-cleanup` + EventBridge schedule `cron(30 0 * * ? *)` + Lambda IAM policy `GetSecretValue` на ARN'ы модуля `sm`; инжектит `AWS_RESOURCES_REGION = var.aws_region`) — §10.1 / §10.2 / §8.6 / §10.3
 - `I-13` TF module `observability` (log groups, metric filters, CloudWatch alarms, SNS + email subscription) — §10.5
 - `I-14` TF module `github_repo` (settings, branch protection для `main` + `develop`, GitHub Environments staging/prod) — §13.7
 - `I-15` Environment runbook `infra/README.md` (prereq, initial setup, dev/staging/prod секции, rollback, access) — §12.4
