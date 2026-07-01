@@ -1,6 +1,6 @@
 /**
  * Build-time configuration, injected by Vite from the per-environment non-secret source file
- * `infra/env/<env>/<env>.env` (single source of truth, shared with the backend). Values are baked at
+ * `infra/envs/<env>/<env>.env` (single source of truth, shared with the backend). Values are baked at
  * build via `vite --mode <env>` — there are no config literals in this module. The runtime
  * environment comes from the `ENV` attribute of that file, not from the hostname (supersedes §11.6's
  * hostname detection — see clarifications).
@@ -19,7 +19,7 @@ export function isEnvironment(value: unknown): value is Environment {
   return value === 'dev' || value === 'staging' || value === 'prod';
 }
 
-/** Current deployment environment (from `infra/env/<env>/<env>.env` via Vite). */
+/** Current deployment environment (from `infra/envs/<env>/<env>.env` via Vite). */
 export const ENVIRONMENT = import.meta.env.VITE_APP_ENV as Environment;
 
 /** Backend API base URL (same-origin via CloudFront). */

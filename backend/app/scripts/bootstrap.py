@@ -11,14 +11,15 @@ from __future__ import annotations
 import os
 
 from config.logging import configure_logging
-from scripts.sm_loader import load_secrets_into_env
+from scripts.sm_loader import load_secrets_into_env, make_secrets_client
 from scripts.wiring import Container, build
 
 _env = os.environ["ENV"]  # required; missing ENV → KeyError fail-fast (matches Settings.env)
 if _env in ("staging", "prod"):
-    import boto3
-
-    load_secrets_into_env(_env, boto3.session.Session().client("secretsmanager"))
+    # AWS_RESOURCES_REGION — the app's boto region (where SM / S3 live), an app param (Settings field
+    # ``aws_resources_region``); read RAW here because the SM client runs before Settings is built. Distinct
+    # from the Lambda-runtime AWS_REGION (= the deploy region, set in CI).
+    load_secrets_into_env(_env, make_secrets_client(os.environ["AWS_RESOURCES_REGION"]))
 
 configure_logging()
 container: Container = build()

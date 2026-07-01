@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+import time
 import warnings
 from typing import TYPE_CHECKING
 
@@ -7,6 +10,7 @@ import numpy as np
 import numpy.typing as npt
 from fastembed import TextEmbedding
 
+from config.logging import log_event
 from domain.value_objects.embedding import Embedding
 
 
@@ -43,6 +47,11 @@ class FastEmbedEmbeddingModel:
         Args:
             model_name: fastembed registry id (must yield 384-dim vectors to match ``Embedding``).
         """
+        # Baked-model cache observability (§2.1): an empty FASTEMBED_CACHE_PATH or a long load means the
+        # weights were fetched from the network (cold-start cache miss), not reused from the baked image.
+        cache_dir = os.environ.get("FASTEMBED_CACHE_PATH")
+        cache_present = cache_dir is not None and os.path.isdir(cache_dir) and bool(os.listdir(cache_dir))
+        start = time.monotonic()
         # Mean pooling is this model's native trained strategy (C-10); fastembed's version-change
         # notice (CLS -> mean) is expected -> silence only that one UserWarning, nothing else.
         with warnings.catch_warnings():
@@ -50,6 +59,14 @@ class FastEmbedEmbeddingModel:
                 "ignore", message=".*now uses mean pooling.*", category=UserWarning
             )
             self._model = TextEmbedding(model_name=model_name)
+        # Event name says cache HIT vs MISS; duration_ms (allowlisted, §10.5) is the load time. A miss is
+        # logged at WARNING so the CloudWatch warning filter surfaces a cold start that re-downloaded the
+        # model instead of reusing the baked image cache.
+        log_event(
+            "embedding_cache_hit" if cache_present else "embedding_cache_miss",
+            level=logging.INFO if cache_present else logging.WARNING,
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
 
     def embed_one(self, text: str) -> Embedding:
         """Embed a single text (see port)."""

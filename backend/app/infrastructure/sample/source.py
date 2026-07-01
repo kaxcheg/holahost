@@ -9,7 +9,10 @@ case consumes it, so the port stays here in infrastructure rather than ``applica
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3Client
 
 
 class SampleGuidebookSource(Protocol):
@@ -37,3 +40,49 @@ class FileSampleGuidebookSource:
         :raises FileNotFoundError: if the path does not exist (cold-start misconfiguration).
         """
         return self._path.read_bytes()
+
+
+def make_s3_client(region: str) -> S3Client:
+    """Build an S3 client bound to an explicit region (staging/prod sample source).
+
+    ``boto3`` is imported lazily so the dev cold start (file source) never pays for it; the region is
+    explicit (the Lambda runtime provides ``AWS_REGION``), mirroring ``scripts.sm_loader.make_secrets_client``.
+
+    :returns: a boto3 S3 client bound to ``region``.
+    """
+    import boto3
+
+    # Explicit annotation: mypy resolves the boto3-stubs overload to S3Client; the annotation also keeps
+    # editors (Pyright) from treating the client as partially-unknown — without a mypy-redundant cast.
+    client: S3Client = boto3.session.Session().client("s3", region_name=region)
+    return client
+
+
+class S3SampleGuidebookSource:
+    """Reads the sample guidebook from an S3 object (staging/prod).
+
+    The sample is business content: storing it in S3 (instead of baking it into the Lambda image) lets
+    it change without a redeploy — the next cold start picks up the new object. This adapter DEFINES the
+    infra contract: a bucket holding the object (I-09), ``s3:GetObject`` on it for the Lambda execution
+    role (I-06/I-12), and the bucket/key injected as Lambda env (I-12).
+    """
+
+    def __init__(self, client: S3Client, bucket: str, key: str) -> None:
+        """Init.
+
+        Args:
+            client: S3 client (see :func:`make_s3_client`).
+            bucket: S3 bucket holding the sample-guidebook object.
+            key: Object key of the sample guidebook within ``bucket``.
+        """
+        self._client = client
+        self._bucket = bucket
+        self._key = key
+
+    def read(self) -> bytes:
+        """Fetch the object bytes from S3.
+
+        :raises botocore.exceptions.ClientError: if the object is missing or access is denied (cold-start
+            misconfiguration — bucket, key, or IAM).
+        """
+        return self._client.get_object(Bucket=self._bucket, Key=self._key)["Body"].read()

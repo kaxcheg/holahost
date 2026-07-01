@@ -39,7 +39,12 @@ from infrastructure.ingestion.composite_file_parser import CompositeFileParser
 from infrastructure.ingestion.recursive_text_chunker import RecursiveTextChunker
 from infrastructure.llm.anthropic_llm_client import AnthropicLLMClient
 from infrastructure.sample.preload import load_sample_chunks
-from infrastructure.sample.source import FileSampleGuidebookSource
+from infrastructure.sample.source import (
+    FileSampleGuidebookSource,
+    S3SampleGuidebookSource,
+    SampleGuidebookSource,
+    make_s3_client,
+)
 from infrastructure.vector.numpy_vector_search import NumpyVectorSearch
 
 
@@ -91,6 +96,32 @@ def make_email_sender(settings: Settings) -> EmailSender:
     )
 
 
+def make_sample_source(settings: Settings) -> SampleGuidebookSource:
+    """Select the sample-guidebook source by env: dev → local file, staging|prod → S3 (#5 / §8.6).
+
+    The sample is business content; staging/prod read it from S3 so it is updatable without a redeploy.
+    The source params are env-specific Nullable ``Settings`` fields — each env sets only the one it uses:
+    dev → ``sample_guidebook_path``; staging/prod → ``sample_guidebook_s3_bucket`` / ``_key`` +
+    ``aws_resources_region`` (Terraform-injected). ``AWS_RESOURCES_REGION`` is also read raw in the bootstrap
+    for the pre-Settings Secrets Manager client.
+
+    :raises ValueError: if the selected env is missing its sample-source params.
+    """
+    if settings.env == "dev":
+        path = settings.sample_guidebook_path
+        if path is None:
+            raise ValueError("sample_guidebook_path is required for dev")
+        return FileSampleGuidebookSource(path)
+    region = settings.aws_resources_region
+    bucket = settings.sample_guidebook_s3_bucket
+    key = settings.sample_guidebook_s3_key
+    if region is None or bucket is None or key is None:
+        raise ValueError(
+            "aws_resources_region + sample_guidebook_s3_bucket/_key are required for staging/prod"
+        )
+    return S3SampleGuidebookSource(make_s3_client(region), bucket=bucket, key=key)
+
+
 def check_embedder_ceiling(settings: Settings, embedder: FastEmbedEmbeddingModel) -> None:
     """Fail fast if ``max_chunk_tokens`` exceeds the embedder's real token ceiling (§2.5 / C-11).
 
@@ -129,7 +160,7 @@ def build() -> Container:
         chunk_window=settings.chunk_window,
         chunk_overlap=settings.chunk_overlap,
     )
-    sample_source = FileSampleGuidebookSource(settings.sample_guidebook_path)
+    sample_source = make_sample_source(settings)
     sample_chunks = load_sample_chunks(sample_source, parser, chunker, embedder)
     return Container(
         settings=settings,

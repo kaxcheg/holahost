@@ -17,6 +17,21 @@ if TYPE_CHECKING:
 SERVER_SIDE_SECRET_KEYS = ("database_url", "resend_api_key", "ip_hash_salt", "sample_server_api_key")
 
 
+def make_secrets_client(region: str) -> SecretsManagerClient:
+    """Build a Secrets Manager client bound to an explicit region (spec §10.3 / §12.3).
+
+    The region is passed explicitly (the caller reads the ``AWS_RESOURCES_REGION`` app param), so
+    secret loading never depends on ambient region discovery — distinct from the reserved
+    Lambda-runtime ``AWS_REGION`` (deploy region). ``boto3`` is imported lazily so the dev cold start
+    (which never reaches Secrets Manager) does not pay for it.
+
+    :returns: a boto3 Secrets Manager client bound to ``region``.
+    """
+    import boto3
+
+    return boto3.session.Session().client("secretsmanager", region_name=region)
+
+
 def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
     """Fetch each server-side secret and set ``os.environ[KEY.upper()]`` (cold start, §10.3)."""
     for key in SERVER_SIDE_SECRET_KEYS:

@@ -6,7 +6,7 @@ import { parse as parseEnvFile } from 'dotenv';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
-// Non-secret config the frontend bakes into the bundle (a subset of infra/env/<env>/<env>.env).
+// Non-secret config the frontend bakes into the bundle (a subset of infra/envs/<env>/<env>.env).
 const CONFIG_KEYS = ['ENV', 'API_BASE_URL', 'MAGIC_LINK_URL_PARAM'] as const;
 const DEPLOY_ENVS = ['dev', 'staging', 'prod'] as const;
 
@@ -14,7 +14,7 @@ const DEPLOY_ENVS = ['dev', 'staging', 'prod'] as const;
  * Resolve the non-secret config for a build.
  *
  * The frontend consumes config from the ENVIRONMENT — at deploy, CI (frontend) / Terraform (backend)
- * populate it from infra/env/<env>/<env>.env, so the frontend is a pure env consumer, symmetric with
+ * populate it from infra/envs/<env>/<env>.env, so the frontend is a pure env consumer, symmetric with
  * the backend. For local one-command builds it falls back to reading that file directly (the single
  * place that knows the path). Unknown modes (e.g. vitest's "test") resolve to nothing.
  */
@@ -23,14 +23,7 @@ function resolveConfig(mode: string): Record<string, string | undefined> {
   const sourceMode = mode === 'test' ? 'dev' : mode;
   let fileEnv: Record<string, string> = {};
   if ((DEPLOY_ENVS as readonly string[]).includes(sourceMode)) {
-    const path = resolve(
-      import.meta.dirname,
-      '..',
-      'infra',
-      'env',
-      sourceMode,
-      `${sourceMode}.env`,
-    );
+    const path = resolve(import.meta.dirname, '..', 'infra', 'envs', sourceMode, `${sourceMode}.env`);
     if (existsSync(path)) {
       fileEnv = parseEnvFile(readFileSync(path));
     }
@@ -41,7 +34,7 @@ function resolveConfig(mode: string): Record<string, string | undefined> {
   }
   if ((DEPLOY_ENVS as readonly string[]).includes(sourceMode) && resolved.ENV === undefined) {
     throw new Error(
-      `no config for --mode ${mode}: set env vars or provide infra/env/${sourceMode}/${sourceMode}.env`,
+      `no config for --mode ${mode}: set env vars or provide infra/envs/${sourceMode}/${sourceMode}.env`,
     );
   }
   return resolved;
