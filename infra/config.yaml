@@ -8,7 +8,7 @@
 #   - app runtime settings                → infra/envs/<env>/<env>.env  (read by the Lambda at
 #                                            cold start and by vite at build)
 #   - server-side secret VALUES           → AWS Secrets Manager (out of IaC, §10.3)
-# See docs/settings-inventory.md for the full app-vs-infra settings map.
+# See the spec §10.9 (Settings inventory) for the full app-vs-infra settings map.
 
 project:         holahost
 aws_region:      eu-west-3

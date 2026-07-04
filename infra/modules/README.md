@@ -8,7 +8,7 @@ modules are built.
 
 Static config (region, bucket/domain, per-env prefix/recovery/price) is centralized in
 `infra/config.yaml` and passed to modules as **explicit** inputs (no implicit module defaults for
-config values); see `docs/settings-inventory.md` for the full app-vs-infra settings map.
+config values); see spec **§10.9 Settings inventory** for the full app-vs-infra settings map.
 
 | Module          | Ticket | Root       | Purpose                                                          |
 |-----------------|--------|------------|------------------------------------------------------------------|

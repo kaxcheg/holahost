@@ -3151,7 +3151,7 @@ ADR фиксируют принятые архитектурные решени�
 - §4.4 — алгоритм fixed-window формализован.
 - §5.1 — числа подставляются.
 - §7.6 `MAX_GUEST_MESSAGE_LENGTH = 4000` (уже 4000, остаётся).
-- §8.0 / `app/config/config.py` — добавляются поля (`Settings` читает их из env-vars; конкретные значения задаёт Terraform, §2.6; Python defaults НЕ задаются — fail-fast при cold start, если env отсутствует): `rate_limit_per_ip: int`, `rate_limit_per_magic_link: int`, `rate_limit_window_seconds: int`, `max_output_tokens: int`, `sample_budget_daily_cap_tokens: int`, `max_rate_limit_window_seconds: int`, `cleanup_batch_size: int`, `magic_link_ttl_days: int`, `min_upload_size_bytes: int`, `min_chunks_per_guidebook: int`. **НЕ** `Settings`-поля (нет рантайм-консьюмера в приложении — исключены из `config.py`): `max_guest_message_length` — доменная константа (`domain/entities/guest_message.py`, как `EMAIL_MAX_LENGTH` в `domain/value_objects/email.py`; во фронт идёт через constants-эмиттер); `ingestion_p95_budget_s` / `response_p95_budget_s` / `lambda_max_duration_s` — инфра-значения в Terraform (CloudWatch alarm thresholds / Function URL hard timeout). Длительности задаются целочисленными env-полями (`*_seconds` / `*_days`) и отдаются use case'ам как `timedelta`-property (`max_rate_limit_window`, `magic_link_ttl`) — ops задают целые числа, без ISO-8601 в env. `max_chunk_tokens` (= фактический max input эмбеддера, **128** у MiniLM-L12, §2.5) — инфра-тикетом B-38–B-45 стал отдельным Settings-полем; валидаторы `chunk_window ≤ max_chunk_tokens` и `chunk_overlap < chunk_window` живут в `Settings` (`_validate_chunking_window`). Тем же тикетом добавлены adapter-поля: `embedding_model_name`, `chunk_window`, `chunk_overlap`, `anthropic_base_url`, `llm_timeout_seconds`, `resend_api_key: SecretStr`, `resend_from`, `magic_link_base_url`, `email_timeout_seconds`, и дискриминатор окружения `env: Literal["dev","staging","prod"]` (prod-guardrail `_enforce_prod_guardrails`). Реальный max input эмбеддера ловится fail-fast в composition root (B-46) через `FastEmbedEmbeddingModel.max_input_tokens()`. SLO `INGESTION_P95_BUDGET`/`RESPONSE_P95_BUDGET` дополнительно настраивают CloudWatch alarm threshold'ы в Terraform.
+- §8.0 / `app/config/config.py` — добавляются поля (`Settings` читает их из env-vars; конкретные значения задаёт Terraform, §2.6; Python defaults НЕ задаются — fail-fast при cold start, если env отсутствует): `rate_limit_per_ip: int`, `rate_limit_per_magic_link: int`, `rate_limit_window_seconds: int`, `max_output_tokens: int`, `sample_budget_daily_cap_tokens: int`, `max_rate_limit_window_seconds: int`, `cleanup_batch_size: int`, `magic_link_ttl_days: int`, `min_upload_size_bytes: int`, `min_chunks_per_guidebook: int`. **НЕ** `Settings`-поля (нет рантайм-консьюмера в приложении — исключены из `config.py`): `max_guest_message_length` — доменная константа (`domain/entities/guest_message.py`, как `EMAIL_MAX_LENGTH` в `domain/value_objects/email.py`; во фронт идёт через constants-эмиттер); `ingestion_p95_budget_s` / `response_p95_budget_s` / `lambda_max_duration_s` — инфра-значения в Terraform (CloudWatch alarm thresholds / Function URL hard timeout). Длительности задаются целочисленными env-полями (`*_seconds` / `*_days`) и отдаются use case'ам как `timedelta`-property (`max_rate_limit_window`, `magic_link_ttl`) — ops задают целые числа, без ISO-8601 в env. `max_chunk_tokens` (= фактический max input эмбеддера, **128** у MiniLM-L12, §2.5) — инфра-тикетом B-38–B-45 стал отдельным Settings-полем; валидаторы `chunk_window ≤ max_chunk_tokens` и `chunk_overlap < chunk_window` живут в `Settings` (`_validate_chunking_window`). Тем же тикетом добавлены adapter-поля: `embedding_model_name`, `chunk_window`, `chunk_overlap`, `anthropic_base_url`, `llm_timeout_seconds`, `resend_api_key: SecretStr`, `resend_from`, `magic_link_path` (URL-контракт magic-link — `magic_link_path` + `magic_link_url_param` — frontend-owned, живёт в `frontend/.env`; §11.6 / §10.9), `email_timeout_seconds`, и дискриминатор окружения `env: Literal["dev","staging","prod"]` (prod-guardrail `_enforce_prod_guardrails`). Реальный max input эмбеддера ловится fail-fast в composition root (B-46) через `FastEmbedEmbeddingModel.max_input_tokens()`. SLO `INGESTION_P95_BUDGET`/`RESPONSE_P95_BUDGET` дополнительно настраивают CloudWatch alarm threshold'ы в Terraform.
 - §2.4 (stack) — Sonnet 4.6 при `MAX_OUTPUT_TOKENS=1000` укладывается в 8s p95 при стандартном Anthropic API latency (≈ 200 ms TTFT + ~0.5s/100 tok).
 - §9.1 `_estimate_cost(output_tokens)` фиксируется как `output_tokens * settings.haiku_output_price_per_mtok / 1_000_000`.
 - AC §3.0 — все параметры из §10.2 становятся численно верифицируемыми.
@@ -3661,6 +3661,75 @@ def to_response(err: ApplicationError) -> tuple[int, dict]:
 - §8.0 — `response_envelope.py` и `request_parsing.py` остаются; envelope-маппинг конкретизируется.
 - AC §3 US-07 «обработка ошибок» — численно верифицируема (per-code `details` schema, retry-семантика).
 
+### 10.9 Settings inventory (by consumer and source)
+
+**Статус:** `accepted (MVP)`.
+
+Every configuration value in the project, grouped by its **consumer** (backend / frontend / infra); each row names the **source** the value comes from.
+
+#### Sources
+
+| Source | What it is |
+|---|---|
+| **be-env** | `infra/envs/<env>/<env>.env` — the per-env backend config file (dev: live, gitignored, + committed `.env.example`; staging/prod: values are Terraform-injected into the Lambda, I-12) |
+| **fe-env** | `frontend/.env` — the frontend-owned config file (gitignored, + committed `frontend/.env.example`) |
+| **config.yaml** | `infra/config.yaml` — the single source of truth for infra static config |
+| **SM** | AWS Secrets Manager — the four secret *values* (staging/prod; out-of-IaC, §10.3). In dev they sit blank in be-env. |
+
+A value's **source can differ from its consumer** — the backend consumes `frontend_origin` (from config.yaml) and `magic_link_path` (from fe-env); the frontend consumes `ENV` (from be-env). Those are the rows below where source ≠ consumer.
+
+---
+
+#### 1 — Backend
+
+Consumes the `app/config/config.py` `Settings` fields (full list in `config.py`) + a few raw env vars.
+
+| Setting(s) | Source |
+|---|---|
+| `env`, `model_id_sample`/`model_id_real`, `embedding_model_name`, `system_prompt`, `anthropic_base_url`, `resend_from`, `haiku_output_price_per_mtok`, `allowed_mime_types`, all numeric size/rate/chunk/token limits + `*_timeout_seconds`, `magic_link_ttl_days`, `magic_link_token_bytes`, `cleanup_batch_size`, `sample_guidebook_path` (dev only) | **be-env** |
+| `database_url`, `resend_api_key`, `ip_hash_salt`, `sample_server_api_key` | **SM** (dev: be-env, blank) |
+| `frontend_origin` (← config.yaml `domain`/`subdomain`), `aws_resources_region` (← config.yaml `aws_region`), `sample_guidebook_s3_bucket` (← config.yaml `frontend_bucket`) | **config.yaml** — Terraform computes + injects (I-12) |
+| `sample_guidebook_s3_key` | **`s3_frontend`** module — the published object's key (`config/sample_guidebook.md`, `sample_guidebook_key` output); Terraform injects (I-12) |
+| `magic_link_path`, `magic_link_url_param` | **fe-env** — dev: docker-compose 2nd `env_file`; staging/prod: Terraform injects (I-12) |
+| `SMTP_HOST`/`SMTP_PORT` (dev only) | be-env |
+| `FASTEMBED_CACHE_PATH` | Docker image `ENV` (constant) |
+| `AWS_REGION` | Lambda runtime (reserved; not app-read) |
+
+> Each of these has its **single source of value** in config.yaml (or `s3_frontend` for the object key) — **no literal is duplicated** in staging/prod be-env (all removed; Terraform injects them at deploy, I-12). In **dev** `frontend_origin` genuinely lives in be-env (`http://localhost:5173` — its own single source, no Terraform); `sample_guidebook_s3_*` are unset in dev (the backend reads the local `sample_guidebook_path`).
+
+#### 2 — Frontend
+
+Consumes `src/config.ts` values, baked into the bundle at `vite build`.
+
+| Setting | Source |
+|---|---|
+| `ENV`, `API_BASE_URL` | **be-env** |
+| `MAGIC_LINK_URL_PARAM`, `MAGIC_LINK_PATH` | **fe-env** |
+
+(vite bakes each into the bundle as `import.meta.env.*`; the frontend reads `MAGIC_LINK_URL_PARAM` to pull `?<param>=` and `MAGIC_LINK_PATH` to scope the magic-link landing — `boot/magic-link-landing`.)
+
+#### 3 — Infra (Terraform)
+
+Consumes root/module inputs.
+
+| Setting | Source |
+|---|---|
+| `aws_region`, `project`, `frontend_bucket`, `domain`, `email_dns_records`, `guidebook_template_path`, `sample_guidebook_path`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` | **config.yaml** |
+| `secret_keys` (the SM secret names) | backend `sm_loader.SERVER_SIDE_SECRET_KEYS` — infra mirrors the contract (a module default synced by hand) |
+| the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md`; their **paths** come from config.yaml `guidebook_template_path`/`sample_guidebook_path`) | app data files |
+| state-bucket names `holahost-tfstate-{shared,staging,prod}` | literals in each `backend.tf` (Terraform forbids interpolation in the backend block) |
+| CSP / security-header values | `cloudfront` module constants (§10.3, verbatim) |
+
+---
+
+#### Single-source, no hand-sync
+
+The cross-consumer values each have **one** source of truth; Terraform relays them so there is no duplicated literal to keep in sync (the exception is `secret_keys`, mirrored by hand from the backend contract):
+
+- infra-owned, consumed by the backend (`frontend_origin`, `aws_resources_region`, `sample_guidebook_s3_bucket`) → **config.yaml**; `sample_guidebook_s3_key` → **`s3_frontend`** object key. All TF-injected (I-12) — no literal duplicated in staging/prod be-env.
+- frontend-owned, consumed by **both** the frontend (landing) and the backend (link build) (`magic_link_path`, `magic_link_url_param`) → **fe-env**; the frontend bakes them at build, the backend gets them via docker-compose (dev) / TF (staging/prod, I-12).
+- `AWS_REGION` (Lambda runtime, deploy region) numerically equals config.yaml `aws_region` but is a separate reserved channel — not app-read, distinct from `aws_resources_region`.
+
 ---
 
 ## Этап 11. Фронтенд
@@ -3800,8 +3869,8 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 ### 11.4 Аутентификация на клиенте
 
 **magic_link** — токен сессии, identifies Lead:
-- источник: landing-URL `?ml=<token>` (§10.3 / §1.3.4);
-- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) извлекает через `utils/url.ts`, выполняет `GET /api/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
+- источник: landing-URL `{MAGIC_LINK_PATH}?{MAGIC_LINK_URL_PARAM}=<token>` (по умолчанию `/claim?ml=<token>`; путь и имя параметра — frontend-owned контракт, §11.6 / §10.9);
+- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) срабатывает только на пути `MAGIC_LINK_PATH`, извлекает токен через `utils/url.ts`, выполняет `GET /api/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
 - `history.replaceState('/', '')` сразу после извлечения — token не остаётся в URL;
 - storage: in-memory signal + `sessionStorage["magic_link"]` (для переживания reload в одной вкладке);
 - передача в API: `X-Magic-Link` header через `client.ts`, автоматически на всех endpoint'ах с MAGIC_LINK-scope;
@@ -3849,15 +3918,20 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 Это достижимо за счёт same-origin-архитектуры (§2.1): CloudFront на каждом домене (`staging.hola.host` и `hola.host`) обслуживает один и тот же bundle и проксирует `/api/*` на соответствующую Lambda Function URL. Frontend не знает «своё» окружение на этапе сборки.
 
-**Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Источник истины — per-env файл **`infra/envs/<env>/<env>.env`** (единый для фронта и бэка, см. §12; gitignored — копируется из версионируемого шаблона `infra/envs/<env>/.env.example`), а не committed `.env` во фронте. Сборка `vite --mode <env>` берёт значения из env-vars (при деплое их объявляет CI из файла — фронт симметричен бэку) с fallback'ом на чтение файла напрямую для локальной one-command сборки; `vite.config.ts` инжектит их через `define`, `config.ts` читает `import.meta.env.VITE_*`.
+**Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Два источника (см. §10.9):
+- **per-env** — файл **`infra/envs/<env>/<env>.env`** (единый для фронта и бэка, см. §12; gitignored — копируется из версионируемого шаблона `infra/envs/<env>/.env.example`): `ENV`, `API_BASE_URL`;
+- **frontend-owned** — файл **`frontend/.env`** (gitignored, + committed `frontend/.env.example`): magic-link URL-контракт `MAGIC_LINK_URL_PARAM` + `MAGIC_LINK_PATH` (инвариантные константы, не per-env; Terraform ретранслирует их и в бекенд-Lambda, I-12).
 
-| Ключ (в env-файле) | Значение | Назначение |
-|---|---|---|
-| `ENV` | `dev` / `staging` / `prod` | окружение (дискриминатор, см. ниже) |
-| `API_BASE_URL` | `/api` (relative, same-origin) | base URL backend'а; работает на любом домене |
-| `MAGIC_LINK_URL_PARAM` | `ml` (фиксировано §10.3) | имя URL-параметра magic_link landing'а |
+Сборка `vite --mode <env>` берёт значения из env-vars (при деплое их объявляет CI / Terraform — фронт симметричен бэку) с fallback'ом на чтение обоих файлов напрямую для локальной one-command сборки (`resolveConfig` / `resolveContract`); `vite.config.ts` инжектит их через `define`, `config.ts` читает `import.meta.env.VITE_*`.
 
-**Определение окружения — по атрибуту `ENV` env-файла** (baked в `VITE_APP_ENV`), **не по hostname**: прежний `detectEnvironment(hostname)` удалён (надёжнее, не зависит от домена). `ENV` используется в error-banner-text и (опц.) Sentry environment-tag. Сегодня per-env различается **только** `ENV` (`API_BASE_URL`/`MAGIC_LINK_URL_PARAM` одинаковы во всех окружениях) — согласование с build-and-promote (§13.4/§13.5: один bundle staging+prod) решается в CI/CD-слое.
+| Ключ | Значение | Источник | Назначение |
+|---|---|---|---|
+| `ENV` | `dev` / `staging` / `prod` | be-env | окружение (дискриминатор, см. ниже) |
+| `API_BASE_URL` | `/api` (relative, same-origin) | be-env | base URL backend'а; работает на любом домене |
+| `MAGIC_LINK_URL_PARAM` | `ml` (§10.3) | `frontend/.env` | имя URL-параметра magic_link landing'а |
+| `MAGIC_LINK_PATH` | `/claim` | `frontend/.env` | путь SPA-landing'а magic-link'а (скоуп `boot/magic-link-landing`, §11.4) |
+
+**Определение окружения — по атрибуту `ENV` env-файла** (baked в `VITE_APP_ENV`), **не по hostname**: прежний `detectEnvironment(hostname)` удалён (надёжнее, не зависит от домена). `ENV` используется в error-banner-text и (опц.) Sentry environment-tag. Сегодня per-env (`infra/envs/<env>/<env>.env`) различается **только** `ENV` (`API_BASE_URL` одинаков во всех окружениях); magic-link-контракт (`MAGIC_LINK_URL_PARAM` / `MAGIC_LINK_PATH`) — frontend-owned и от окружения не зависит вовсе — согласование с build-and-promote (§13.4/§13.5: один bundle staging+prod) решается в CI/CD-слое.
 
 **Не используется:** `dotenv` runtime, `process.env` runtime patching, server-injected runtime config, runtime hostname-detection.
 
@@ -3901,7 +3975,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 | **dev** | вручную через `docker-compose up` (один `docker-compose.yml` в репо); миграции — Alembic-команда |
 | **staging / prod** | IaC через Terraform |
 
-Описание Terraform лежит в `infra/` репо `holahost/` (предварительная структура — модули per ресурс в `infra/modules/`, по одному инстансу каждого модуля per env в `infra/envs/{staging,prod}/`).
+Описание Terraform лежит в `infra/` репо `holahost/`. Структура: модули per ресурс в `infra/modules/`; статический инфра-конфиг — единый файл **`infra/config.yaml`** (single source of truth, читается каждым root'ом через `yamldecode`; §10.9). Single-instance-ресурсы (общий frontend-bucket `holahost-frontend`, зона `hola.host`, ACM-сертификат) вынесены в отдельный root **`infra/envs/shared/`**; per-env root'ы `infra/envs/{staging,prod}/` читают их через `data`-источники и добавляют свои per-env-ресурсы (CloudFront). Модули получают значения из `config.yaml` явными входами (без module-default'ов для конфиг-значений).
 
 Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated), отдельный bucket per env. Применение — `terraform init && terraform plan && terraform apply` из соответствующего `envs/<env>/` каталога.
 
@@ -4282,13 +4356,13 @@ Strict с первого коммита; ослабление настроек �
 - `I-02` Local dev stack: `docker-compose.yml` (Postgres + Mailpit + Lambda runtime emulator) + Make-цели `dev-up`/`dev-down`/`migrate-dev`/`dev-test` — §12.1
 - `I-03` AWS account setup: IAM admin user с MFA, AWS CLI профайлы — §12.0
 - `I-04` Manual: создание Terraform-backend ресурсов (S3 state bucket; нативный S3-лок `use_lockfile`, без DynamoDB) — §12.2 / §12.4
-- `I-05` Terraform `infra/` layout: `modules/` + `envs/{staging,prod}/{main.tf,terraform.tfvars,backend.tf}` — §12.2
+- `I-05` Terraform `infra/` layout: `modules/` + `envs/{staging,prod}/{main.tf,backend.tf}` + единый `infra/config.yaml` (single-source, §10.9; `terraform.tfvars` не используется — заменён config.yaml в I-09…I-11; `shared`-root добавлен там же) — §12.2
 - `I-06` TF module `sm` (`aws_secretsmanager_secret` без значений, value-less; значения заполняются вне IaC, §10.3) — §10.3 / §12.3
 - `I-07` Neon project + ветки `staging`/`prod`, connection strings → Secrets Manager — §12.0
 - `I-08` TF module `ecr` (`holahost-api`, lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
-- `I-09` TF module `s3_frontend` (единый bucket `holahost-frontend` + bucket policy + OAC) — §12.0 / §13.4
-- `I-10` TF module `route53` (hosted zone `hola.host`, ACM cert в us-east-1, DKIM/SPF/DMARC) — §10.3 / §10.7
-- `I-11` TF module `cloudfront` (staging + prod distributions с response headers policy + origin path) — §10.3 / §13.4
+- `I-09` TF module `s3_frontend` (единый bucket `holahost-frontend` в `shared`-root + PAB/versioning/SSE + bucket policy OAC-only через account-scoped `AWS:SourceArn` + публикация `config/template_schema.json` и `config/sample_guidebook.md`) — §12.0 / §13.4 / §10.6
+- `I-10` TF module `route53` (hosted zone `hola.host` в `shared`-root + ACM cert us-east-1 DNS-validated + `email_dns_records` passthrough — DKIM/SPF/DMARC пусты до I-16) — §10.3 / §10.7 / §12.4
+- `I-11` TF module `cloudfront` (per-env distribution staging/prod + response-headers policy §10.3 + cache-behavior `/config/*` TTL 300 + OAC к shared-bucket + SPA-fallback 403/404→index + origin path `releases/<git-sha>/`) — §10.3 / §13.4 / §10.6
 - `I-12` TF module `lambda` (`holahost-{env}-api` + `holahost-{env}-cleanup` + EventBridge schedule `cron(30 0 * * ? *)` + Lambda IAM policy `GetSecretValue` на ARN'ы модуля `sm`; инжектит `AWS_RESOURCES_REGION = var.aws_region`) — §10.1 / §10.2 / §8.6 / §10.3
 - `I-13` TF module `observability` (log groups, metric filters, CloudWatch alarms, SNS + email subscription) — §10.5
 - `I-14` TF module `github_repo` (settings, branch protection для `main` + `develop`, GitHub Environments staging/prod) — §13.7

@@ -11,8 +11,8 @@ Context: serverless on a **single AWS account**; staging/prod isolated by the na
 **Configuration.** Infra static config (region, bucket/domain names, per-env prefix/recovery/price)
 lives in a single [`infra/config.yaml`](config.yaml), read by every Terraform root (`yamldecode`);
 modules receive it as explicit inputs. App runtime settings live in `infra/envs/<env>/<env>.env`. The
-full app-vs-infra map (and the few overlapping values) is in
-[`docs/settings-inventory.md`](../docs/settings-inventory.md).
+full app-vs-infra map (every setting → its single source) is spec **§10.9 Settings inventory**
+([`docs/hola_host_spec.md`](../docs/hola_host_spec.md)).
 
 ## Prerequisites
 
