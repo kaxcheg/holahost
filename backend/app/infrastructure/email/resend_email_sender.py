@@ -31,8 +31,7 @@ class ResendEmailSender:
         self,
         api_key: SecretStr,
         from_address: str,
-        magic_link_base_url: str,
-        magic_link_url_param: str,
+        path: str,
         timeout_seconds: float,
         client: httpx.Client | None = None,
     ) -> None:
@@ -41,15 +40,14 @@ class ResendEmailSender:
         Args:
             api_key: Resend API key (SecretStr).
             from_address: Verified sender address.
-            magic_link_base_url: Base URL the token is appended to (§10.7, D5).
-            magic_link_url_param: Query-param name carrying the token: ``{base}/?<param>=<token>``.
+            path: Magic-link URL prefix the token is appended to — composed by the wiring as
+                ``{frontend_origin}{magic_link_path}?{magic_link_url_param}=`` (§10.7, D-21).
             timeout_seconds: Per-request timeout.
             client: Optional injected httpx client (tests pass a MockTransport client).
         """
         self._api_key = api_key
         self._from = from_address
-        self._base_url = magic_link_base_url.rstrip("/")
-        self._magic_link_url_param = magic_link_url_param
+        self._path = path
         self._client = client if client is not None else httpx.Client(timeout=timeout_seconds)
         self._env = Environment(
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
@@ -65,7 +63,7 @@ class ResendEmailSender:
 
         :raises UpstreamEmailError: on any non-2xx response or transport failure (§9.2 / §9.8).
         """
-        url = f"{self._base_url}/?{self._magic_link_url_param}={magic_link.value.get_secret_value()}"
+        url = f"{self._path}{magic_link.value.get_secret_value()}"
         html = self._env.get_template("magic_link.html.j2").render(magic_link_url=url)
         payload: dict[str, Any] = {
             "from": self._from,

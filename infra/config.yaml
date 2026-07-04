@@ -1,0 +1,38 @@
+# Single source of truth for infra static config (Terraform). Read by every root under
+# infra/envs/<root>/ via `yamldecode(file(...))` into locals; modules receive these as explicit
+# inputs (no implicit module defaults for config values).
+#
+# NOT here (different mechanism / consumer):
+#   - Terraform state-bucket names        → each infra/envs/<root>/backend.tf (TF forbids
+#                                            interpolation in the backend block)
+#   - app runtime settings                → infra/envs/<env>/<env>.env  (read by the Lambda at
+#                                            cold start and by vite at build)
+#   - server-side secret VALUES           → AWS Secrets Manager (out of IaC, §10.3)
+# See docs/settings-inventory.md for the full app-vs-infra settings map.
+
+project:         holahost
+aws_region:      eu-west-3
+frontend_bucket: holahost-frontend
+domain:          hola.host
+
+# Data files s3_frontend publishes to the frontend bucket (paths relative to the repo root; the root
+# resolves them). guidebook_template → config/template_schema.json (§10.6); sample_guidebook →
+# config/sample_guidebook.md (§8.6).
+guidebook_template_path: docs/guidebook_template.json
+sample_guidebook_path:   docs/sample_guidebook.md
+
+# Email-auth DNS (SPF/DKIM/DMARC): keyed by record name. Empty until Resend is set up (I-16),
+# then filled here and re-applied by the `shared` root.
+email_dns_records: {}
+
+envs:
+  staging:
+    name_prefix:             holahost-staging
+    subdomain:               staging.hola.host
+    recovery_window_in_days: 0 # staging: recreate secrets freely while iterating
+    price_class:             PriceClass_100
+  prod:
+    name_prefix:             holahost-prod
+    subdomain:               hola.host
+    recovery_window_in_days: 30 # prod: 30-day recovery window
+    price_class:             PriceClass_100

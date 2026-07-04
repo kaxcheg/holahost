@@ -1,5 +1,6 @@
 import { get } from '../api/client';
 import { ApplicationError } from '../api/errors';
+import { MAGIC_LINK_PATH } from '../config';
 import { lead, magicLink } from '../state/session';
 import { extractMagicLink, stripQuery } from '../utils/url';
 
@@ -7,14 +8,23 @@ import { extractMagicLink, stripQuery } from '../utils/url';
 export type LandingOutcome = 'none' | 'resolved' | 'expired';
 
 /**
- * Handle the magic-link landing (`/?ml=<token>`, §11.4 / §10.3): strip the token from the URL,
- * resolve it, and populate the session.
+ * Handle the magic-link landing (`<MAGIC_LINK_PATH>?<param>=<token>`, §11.4 / §10.3): only when the SPA
+ * is on the frontend-owned landing path, strip the token from the URL, resolve it, and populate the
+ * session.
  *
- * @returns `'none'` if no token was present, `'resolved'` on success (session populated), or
- *   `'expired'` on `ERR_INVALID_MAGIC_LINK` (session cleared). Other errors propagate.
+ * @param landingPath - The SPA landing path magic links point to (default: the configured
+ *   {@link MAGIC_LINK_PATH}); the flow is a no-op on any other path.
+ * @returns `'none'` if not on the landing path or no token was present, `'resolved'` on success
+ *   (session populated), or `'expired'` on `ERR_INVALID_MAGIC_LINK` (session cleared). Other errors
+ *   propagate.
  * @throws ApplicationError for non-auth failures (rate limit, internal), handled by the caller.
  */
-export async function handleMagicLinkLanding(): Promise<LandingOutcome> {
+export async function handleMagicLinkLanding(
+  landingPath: string = MAGIC_LINK_PATH,
+): Promise<LandingOutcome> {
+  if (window.location.pathname !== landingPath) {
+    return 'none';
+  }
   const token = extractMagicLink();
   if (!token) {
     return 'none';

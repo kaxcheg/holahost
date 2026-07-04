@@ -11,6 +11,5 @@ variable "secret_keys" {
 
 variable "recovery_window_in_days" {
   type        = number
-  description = "Secrets Manager recovery window before permanent deletion. 30 = prod-safe default; override to 0 in staging tfvars for immediate delete during iteration."
-  default     = 30
+  description = "Secrets Manager recovery window before permanent deletion (supplied per env from infra/config.yaml: prod 30, staging 0)."
 }

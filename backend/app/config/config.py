@@ -94,7 +94,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(gt=0)
     resend_api_key: SecretStr = Field(min_length=1)
     resend_from: str
-    magic_link_base_url: str
+    # Magic-link URL contract is frontend-owned (the SPA's landing route + token query param, §11);
+    # Terraform relays both into this backend (D-21). The wiring composes the URL prefix
+    # ``{frontend_origin}{magic_link_path}?{magic_link_url_param}=`` for the EmailSender.
+    magic_link_path: str
     magic_link_url_param: str
     email_timeout_seconds: float = Field(gt=0)
     frontend_origin: str

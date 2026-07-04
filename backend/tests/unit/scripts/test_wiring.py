@@ -19,6 +19,21 @@ def test_email_sender_prod_is_resend() -> None:
     assert isinstance(sender, ResendEmailSender)
 
 
+def test_email_sender_composes_magic_link_prefix() -> None:
+    sender = make_email_sender(
+        make_settings(
+            env="prod",
+            database_url="postgresql://prod.db/app",
+            frontend_origin="https://app.test",
+            magic_link_path="/claim",
+            magic_link_url_param="ml",
+        )
+    )
+    assert isinstance(sender, ResendEmailSender)
+    # {frontend_origin}{magic_link_path}?{magic_link_url_param}= (D-21)
+    assert sender._path == "https://app.test/claim?ml="
+
+
 def test_ceiling_guard_raises() -> None:
     with pytest.raises(ValueError, match="max_chunk_tokens"):
         check_embedder_ceiling(

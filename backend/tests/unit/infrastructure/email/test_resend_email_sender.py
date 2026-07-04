@@ -14,8 +14,7 @@ def _sender(handler: Callable[[httpx.Request], httpx.Response]) -> ResendEmailSe
     return ResendEmailSender(
         api_key=SecretStr("re_secret"),
         from_address="noreply@hola.host",
-        magic_link_base_url="https://app.test/claim",
-        magic_link_url_param="ml",
+        path="https://app.test/claim?ml=",
         timeout_seconds=5.0,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
@@ -35,8 +34,8 @@ def test_success_posts_bearer_and_renders_url() -> None:
 
     _send(_sender(handler))
     assert seen["auth"] == "Bearer re_secret"
-    assert "https://app.test/claim/?ml=tok123" in seen["body"]  # query form (B-43)
-    assert "/claim/tok123" not in seen["body"]  # old path form is gone
+    assert "https://app.test/claim?ml=tok123" in seen["body"]  # composed prefix + token (D-21)
+    assert "/claim/tok123" not in seen["body"]  # token is a query value, not a path segment
     assert "guest@example.com" in seen["body"]
 
 
