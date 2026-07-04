@@ -8,6 +8,12 @@ deploy · smoke · rollback · rotation steps land in **I-15**.
 Context: serverless on a **single AWS account**; staging/prod isolated by the name-prefix
 `holahost-{env}-*`, separate Terraform state, and separate IAM deploy roles (spec §12).
 
+**Configuration.** Infra static config (region, bucket/domain names, per-env prefix/recovery/price)
+lives in a single [`infra/config.yaml`](config.yaml), read by every Terraform root (`yamldecode`);
+modules receive it as explicit inputs. App runtime settings live in `infra/envs/<env>/<env>.env`. The
+full app-vs-infra map (and the few overlapping values) is in
+[`docs/settings-inventory.md`](../docs/settings-inventory.md).
+
 ## Prerequisites
 
 | Tool | Version | Purpose |
@@ -62,7 +68,7 @@ the state + lock safe; keep it enabled.
 export AWS_PROFILE=holahost
 REGION=us-east-1
 
-for ENV in staging prod; do
+for ENV in shared staging prod; do
   BUCKET="holahost-tfstate-$ENV"
 
   # us-east-1 needs no LocationConstraint (other regions do).
@@ -126,10 +132,39 @@ Mailpit UI: <http://localhost:8025> · API (RIE invoke): <http://localhost:9000>
 
 ---
 
+## shared
+
+Single-instance resources used by **both** cloud envs — the frontend S3 bucket `holahost-frontend`, the
+Route 53 hosted zone `hola.host`, and the ACM certificate (us-east-1). Owned by a dedicated Terraform
+root/state (`holahost-tfstate-shared`). **Apply this before `staging` / `prod`** — their configs read
+these via data sources.
+
+1. **Terraform init + apply.** Creates the private, versioned `holahost-frontend` bucket (OAC-only read)
+   + the `config/template_schema.json` object (from `docs/guidebook_template.json`), the hosted zone
+   `hola.host`, and the ACM cert for `hola.host` + `staging.hola.host` (DNS-validated).
+   ```bash
+   cd infra/envs/shared
+   terraform init
+   terraform apply
+   ```
+2. **Delegate the domain to Route 53** (one-time). Copy the `route53_name_servers` output and set them as
+   the NS records for `hola.host` at your domain registrar. ACM DNS-validation then completes
+   automatically once the delegation propagates (minutes–hours); a follow-up `terraform apply` finishes
+   `aws_acm_certificate_validation`.
+   ```bash
+   terraform output route53_name_servers
+   ```
+3. **Email DNS (SPF/DKIM/DMARC)** stays empty until Resend is configured (I-16): populate the
+   `email_dns_records` variable with the values from the Resend dashboard and re-apply.
+
+*(Per-env CloudFront distributions are added in the `staging` / `prod` roots — see below.)*
+
+---
+
 ## staging
 
-Terraform deploys into the region set by `aws_region` in this env's `terraform.tfvars` (`us-east-1`); run the
-`aws` CLI commands below in that same region (`export AWS_PROFILE=holahost AWS_REGION=us-east-1`). The app's
+Terraform deploys into the region set by `aws_region` in `infra/config.yaml` (`eu-west-3`); run the
+`aws` CLI commands below in that same region (`export AWS_PROFILE=holahost AWS_REGION=eu-west-3`). The app's
 `AWS_RESOURCES_REGION` — the region its cold-start boto client uses for Secrets Manager — is **injected by
 Terraform equal to `aws_region`** (in the `lambda` module, I-12), so the app always reads from its own deploy
 region (§12.3).
@@ -144,8 +179,11 @@ region (§12.3).
    terraform init
    terraform apply
    ```
-   *(The `ecr`, `s3_frontend`, `route53`, `cloudfront`, `lambda`, `observability` modules are added to
-   this env in I-08 … I-14; their apply/deploy steps land in I-15.)*
+   Also provisions this env's **CloudFront distribution** (`cloudfront` module) + its `staging.hola.host`
+   alias record, reading the shared bucket / zone / cert via data sources — so the **`shared` root must be
+   applied first**.
+   *(The `ecr`, `lambda`, `observability` modules are added to this env in I-08 / I-12 / I-13; their
+   apply/deploy steps land in I-15.)*
 2. **Neon `staging` branch → connection string** (manual). In the Neon console create branch `staging`
    under project `holahost`, copy its **pooled** connection string (host contains `-pooler`):
    `postgresql://<user>:<pass>@<host>-pooler.<region>.aws.neon.tech/<db>?sslmode=require`. Store the plain
@@ -178,7 +216,9 @@ Same shape as `staging` (same `AWS_PROFILE` / `AWS_REGION` exports), with a sepa
 
 1. **Terraform init + apply.** Provisions
    `holahost/prod/{database_url,resend_api_key,ip_hash_salt,sample_server_api_key}` (value-less;
-   `recovery_window_in_days = 30` → 30-day recovery window before permanent deletion).
+   `recovery_window_in_days = 30` → 30-day recovery window before permanent deletion), plus this env's
+   **CloudFront distribution** + `hola.host` alias record (reads the shared bucket / zone / cert — the
+   **`shared` root must be applied first**).
    ```bash
    cd infra/envs/prod
    terraform init

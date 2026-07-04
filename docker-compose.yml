@@ -30,7 +30,7 @@ services:
       args:
         PYTHON_VERSION: ${PYTHON_VERSION:-3.12}   # sourced from .tool-versions by `make dev-up`
     image: holahost-api:dev
-    env_file: [infra/envs/dev/dev.env]   # local dev config, gitignored (also the frontend build source)
+    env_file: [infra/envs/dev/dev.env, frontend/.env]   # dev config (gitignored) + frontend-owned magic-link contract (D-21)
     environment:
       # the one real secret — supplied from the shell by `make dev-up` (prompt); empty otherwise.
       SAMPLE_SERVER_API_KEY: ${SAMPLE_SERVER_API_KEY:-}

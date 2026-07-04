@@ -25,5 +25,8 @@ export const ENVIRONMENT = import.meta.env.VITE_APP_ENV as Environment;
 /** Backend API base URL (same-origin via CloudFront). */
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
 
-/** Magic-link landing URL parameter name. */
+/** Magic-link token query-param name (frontend-owned contract, from `frontend/.env`). */
 export const MAGIC_LINK_URL_PARAM = import.meta.env.VITE_MAGIC_LINK_URL_PARAM as string;
+
+/** Magic-link landing path — the route magic links point to (frontend-owned, from `frontend/.env`). */
+export const MAGIC_LINK_PATH = import.meta.env.VITE_MAGIC_LINK_PATH as string;

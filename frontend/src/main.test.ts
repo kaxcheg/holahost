@@ -5,7 +5,8 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0
 describe('main bootstrap', () => {
   it('registers the screens and mounts the entrypoint + error banner', async () => {
     document.body.innerHTML = '<main id="root"></main>';
-    // No `?ml=` in the test URL → magic-link landing is a no-op; the router renders the entrypoint.
+    // The test URL is not the magic-link landing path (and has no `?ml=`) → landing is a no-op; the
+    // router renders the entrypoint.
     await import('./main');
     await tick();
 

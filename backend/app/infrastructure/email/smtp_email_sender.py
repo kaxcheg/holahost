@@ -30,8 +30,7 @@ class SmtpEmailSender:
         host: str,
         port: int,
         from_address: str,
-        magic_link_base_url: str,
-        magic_link_url_param: str,
+        path: str,
     ) -> None:
         """Init.
 
@@ -39,14 +38,13 @@ class SmtpEmailSender:
             host: Mailpit SMTP host.
             port: Mailpit SMTP port (e.g. 1025).
             from_address: Sender address.
-            magic_link_base_url: Base URL the token is appended to.
-            magic_link_url_param: Query-param name carrying the token: ``{base}/?<param>=<token>``.
+            path: Magic-link URL prefix the token is appended to — composed by the wiring as
+                ``{frontend_origin}{magic_link_path}?{magic_link_url_param}=`` (§10.7, D-21).
         """
         self._host = host
         self._port = port
         self._from = from_address
-        self._base_url = magic_link_base_url.rstrip("/")
-        self._magic_link_url_param = magic_link_url_param
+        self._path = path
         self._env = Environment(
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
             autoescape=select_autoescape(["html", "j2"]),
@@ -57,7 +55,7 @@ class SmtpEmailSender:
 
         :raises UpstreamEmailError: on any SMTP / socket failure (§9.2 / §9.8).
         """
-        url = f"{self._base_url}/?{self._magic_link_url_param}={magic_link.value.get_secret_value()}"
+        url = f"{self._path}{magic_link.value.get_secret_value()}"
         html = self._env.get_template("magic_link.html.j2").render(magic_link_url=url)
         message = EmailMessage()
         message["From"] = self._from

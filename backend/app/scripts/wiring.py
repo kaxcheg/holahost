@@ -78,20 +78,23 @@ def make_email_sender(settings: Settings) -> EmailSender:
 
     Dev SMTP host/port come from ``SMTP_HOST`` / ``SMTP_PORT`` env vars (defaults localhost:1025) —
     intentionally not ``Settings`` fields, to keep the prod schema clean.
+
+    The magic-link URL prefix the token is appended to is composed here from the infra-owned origin
+    and the frontend-owned landing path + token param (D-21):
+    ``{frontend_origin}{magic_link_path}?{magic_link_url_param}=``.
     """
+    path = f"{settings.frontend_origin}{settings.magic_link_path}?{settings.magic_link_url_param}="
     if settings.env == "dev":
         return SmtpEmailSender(
             host=os.environ.get("SMTP_HOST", "localhost"),
             port=int(os.environ.get("SMTP_PORT", "1025")),
             from_address=settings.resend_from,
-            magic_link_base_url=settings.magic_link_base_url,
-            magic_link_url_param=settings.magic_link_url_param,
+            path=path,
         )
     return ResendEmailSender(
         api_key=settings.resend_api_key,
         from_address=settings.resend_from,
-        magic_link_base_url=settings.magic_link_base_url,
-        magic_link_url_param=settings.magic_link_url_param,
+        path=path,
         timeout_seconds=settings.email_timeout_seconds,
     )
 
