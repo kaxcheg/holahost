@@ -10,10 +10,11 @@ variable "subject_alternative_names" {
 
 variable "email_dns_records" {
   type = map(object({
+    name    = string
     type    = string
     ttl     = number
     records = list(string)
   }))
-  description = "Email-auth DNS records (SPF/DKIM/DMARC). Keyed by record name. Values come from Resend (I-16); empty until then (D-13)."
+  description = "Email-auth DNS records (SPF/DKIM/DMARC). Keyed by a free-form label; `name` is the DNS record name — labels allow several record types on one name (Resend puts MX + SPF TXT both on send.<domain>). Values come from Resend (I-16); empty until then (D-13)."
   default     = {}
 }

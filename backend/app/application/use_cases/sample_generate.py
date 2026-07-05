@@ -12,6 +12,7 @@ from application.ports.repos import SampleBudgetRepo
 from application.ports.uow import UnitOfWork
 from application.ports.vector import VectorSearch
 from config.config import Settings
+from config.logging import log_event
 from domain.entities.chunk import Chunk
 from domain.entities.guest_message import GuestMessage
 
@@ -77,6 +78,8 @@ class SampleGenerateUseCase:
             state = self.sample_budget_repo.get_or_create_for_update(today)
             state.add_usage(reply.output_tokens, dollars)
             self.sample_budget_repo.save(state)
+        # §10.5: the CloudWatch sample-budget metric filter reads this event (I-13).
+        log_event("sample_response_completed", sample_tokens_used=reply.output_tokens)
         return SampleGenerateResult(response_text=reply.text)
 
     def _estimate_cost(self, output_tokens: int) -> float:

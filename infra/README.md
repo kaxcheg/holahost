@@ -1,10 +1,10 @@
 # hola.host — Environment Runbook
 
 Operational runbook for provisioning and operating hola.host environments, organised **per environment**
-(`dev` / `staging` / `prod`, spec §12.4). Built incrementally: shared one-time bootstrap (AWS account I-03,
-Terraform backend I-04), the `sm` secrets module (I-06 / I-07), the shared `ecr` repo (I-08), and the
-per-env `lambda` functions (I-12) are covered below; the full staging/prod deploy · smoke · rollback ·
-rotation steps land in **I-15**.
+(`dev` / `staging` / `prod`, plus the `shared` and `repo` Terraform roots; spec §12.4). Covers the
+one-time bootstrap (AWS account I-03, Terraform backend I-04, Neon I-07), every Terraform root
+(`shared` / `repo` / `staging` / `prod` — modules I-06 … I-14), the manual deploy · smoke · rollback ·
+access procedures (I-15), and the Resend email setup (I-16).
 
 Context: serverless on a **single AWS account**; staging/prod isolated by the name-prefix
 `holahost-{env}-*`, separate Terraform state, and separate IAM deploy roles (spec §12).
@@ -70,7 +70,7 @@ the state + lock safe; keep it enabled.
 export AWS_PROFILE=holahost
 REGION=us-east-1
 
-for ENV in shared staging prod; do
+for ENV in shared staging prod repo; do
   BUCKET="holahost-tfstate-$ENV"
 
   # us-east-1 needs no LocationConstraint (other regions do).
@@ -88,6 +88,9 @@ for ENV in shared staging prod; do
     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 done
 ```
+
+The `repo` bucket backs the GitHub-settings root (`infra/envs/repo/`, I-14); the other three back the
+same-named AWS roots.
 
 > S3 bucket names are globally unique. If `holahost-tfstate-<env>` is taken, append a short account
 > suffix (e.g. `holahost-tfstate-<env>-<account-id>`) and update the `bucket` value in the matching
@@ -158,8 +161,9 @@ these via data sources.
    ```bash
    terraform output route53_name_servers
    ```
-3. **Email DNS (SPF/DKIM/DMARC)** stays empty until Resend is configured (I-16): populate the
-   `email_dns_records` variable with the values from the Resend dashboard and re-apply.
+3. **Email DNS (SPF/DKIM/DMARC)** stays empty until Resend is configured: follow the
+   **Resend (email) setup** section below (fills `email_dns_records` in `config.yaml`, re-applies
+   this root).
 4. **Push a bootstrap API image** (one-time, before the first per-env `lambda` apply — the `lambda`
    module creates its functions from `holahost-api:latest`, so that tag must exist first):
    ```bash
@@ -172,6 +176,36 @@ these via data sources.
    CI later replaces the running image per deploy via `update-function-code` (§13.5, I-15).
 
 *(Per-env CloudFront distributions + Lambda functions are added in the `staging` / `prod` roots — see below.)*
+
+---
+
+## repo
+
+GitHub repository settings (`infra/envs/repo/` → `github_repo` module, I-14): repo options, branch
+protection for `main` / `develop`, and the GitHub Environments `staging` / `prod` (§13.7). A separate
+root/state (`holahost-tfstate-repo`) — the repository is a single instance tied to neither AWS env.
+
+1. **Create a fine-grained PAT** (GitHub → Settings → Developer settings → Fine-grained tokens):
+   Repository access = `holahost` only; permissions **Administration: Read and write** +
+   **Environments: Read and write**. Export it for the provider:
+   ```bash
+   export GITHUB_TOKEN=<fine-grained PAT>
+   ```
+2. **Init + import the pre-existing repo** (one-time — Terraform manages it, never creates it):
+   ```bash
+   cd infra/envs/repo
+   terraform init
+   terraform import module.github_repo.github_repository.this holahost
+   ```
+3. **Apply:**
+   ```bash
+   terraform apply
+   ```
+   ⚠️ The first apply **flips the repository private → public** (spec §10.3 assumes a public repo)
+   and activates branch protection. Protection is **staged** (single-maintainer reality, ticket
+   clarifications): PRs are required but approvals are not (`required_approving_review_count = 0`;
+   raise to 1 per §13.7 once a second maintainer exists), required status checks land with CI (C-04),
+   and `restrict_pushes` is intentionally not set — GitHub push restriction would also block PR merges.
 
 ---
 
@@ -198,7 +232,9 @@ region (§12.3).
    (`cloudfront` module: static + `/config/*` + `/api/*` → the Function URL) + the `staging.hola.host`
    alias record. It reads the shared bucket / zone / cert / **ECR repo** via data sources — so the
    **`shared` root must be applied first** and its bootstrap image pushed (shared step 4).
-   *(The `observability` module is added in I-13; the full image/frontend deploy sequence is I-15.)*
+   And the env's **observability contour** (`observability` module, I-13): the
+   `holahost-staging-alarms` SNS topic + email subscription, metric filters over the two Lambda log
+   groups, and the four CloudWatch alarms (§10.2 / §10.5).
 2. **Neon `staging` branch → connection string** (manual). In the Neon console create branch `staging`
    under project `holahost`, copy its **pooled** connection string (host contains `-pooler`):
    `postgresql://<user>:<pass>@<host>-pooler.<region>.aws.neon.tech/<db>?sslmode=require`. Store the plain
@@ -217,10 +253,82 @@ region (§12.3).
    aws secretsmanager put-secret-value --secret-id holahost/staging/sample_server_api_key \
      --secret-string 'sk-ant-…'
 
-   # resend_api_key — left empty here; populated in I-16 (Resend account + domain verification).
+   # resend_api_key — left empty here; populated per the Resend section below (I-16).
    ```
+4. **Confirm the SNS alarm subscription** (once per env): after the first apply, the `alert_email`
+   inbox receives "AWS Notification - Subscription Confirmation" — click **Confirm subscription**.
+   Alarms do not deliver until confirmed
+   (check: `aws sns list-subscriptions-by-topic --topic-arn <holahost-staging-alarms ARN>` shows no
+   `PendingConfirmation`).
 
-*(Deploy image / frontend bundle / post-deploy smoke / rollback — I-15.)*
+### Deploy (manual, until CI C-06/C-07)
+
+The manual mirror of the build-and-promote pipeline (§13.4 / §13.5): image → digest, migrate **before**
+the code switch, both Lambdas by digest, frontend under a versioned prefix, CloudFront origin-path
+switch, smoke.
+
+```bash
+export AWS_PROFILE=holahost AWS_REGION=eu-west-3
+GIT_SHA=$(git rev-parse --short=12 HEAD)
+ECR_URL=$(cd infra/envs/shared && terraform output -raw ecr_repository_url)
+
+# 1. Backend image: build once, tag by commit, push, capture the immutable digest (§13.5).
+aws ecr get-login-password --region eu-west-3 | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
+docker build -f backend/Dockerfile -t "$ECR_URL:git-$GIT_SHA" .
+docker push "$ECR_URL:git-$GIT_SHA"
+DIGEST=$(aws ecr describe-images --repository-name holahost-api \
+  --image-ids imageTag=git-$GIT_SHA --query 'imageDetails[0].imageDigest' --output text)
+
+# 2. DB migrate BEFORE the code switch (§13.5); DATABASE_URL from Secrets Manager.
+export DATABASE_URL=$(aws secretsmanager get-secret-value \
+  --secret-id holahost/staging/database_url --query SecretString --output text)
+(cd backend && poetry run alembic upgrade head)
+
+# 3. Lambda code switch — both functions, by digest (update-function-code is atomic).
+for FN in holahost-staging-api holahost-staging-cleanup; do
+  aws lambda update-function-code --function-name "$FN" --image-uri "$ECR_URL@$DIGEST"
+done
+
+# 4. Frontend bundle -> versioned release prefix (previous prefixes stay = rollback path).
+npm run build:staging --prefix frontend
+aws s3 sync frontend/dist/ "s3://holahost-frontend/releases/$GIT_SHA/"
+
+# 5. CloudFront origin path -> the new release, then invalidate.
+DIST_ID=$(aws cloudfront list-distributions --query \
+  "DistributionList.Items[?Aliases.Items[0]=='staging.hola.host'].Id" --output text)
+aws cloudfront get-distribution-config --id "$DIST_ID" > /tmp/cf.json
+ETAG=$(jq -r .ETag /tmp/cf.json)
+jq '.DistributionConfig | (.Origins.Items[] | select(.Id=="s3-releases").OriginPath) = "/releases/'$GIT_SHA'"' \
+  /tmp/cf.json > /tmp/cf-new.json
+aws cloudfront update-distribution --id "$DIST_ID" --if-match "$ETAG" \
+  --distribution-config file:///tmp/cf-new.json
+aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
+
+# 6. Smoke: static 200 + a live API round-trip (sample flow, no auth needed).
+curl -fsS https://staging.hola.host/ >/dev/null && echo STATIC_OK
+curl -fsS -X POST https://staging.hola.host/api/sample/generate \
+  -H 'Content-Type: application/json' -d '{"message":"When is check-in?"}' | head -c 300
+```
+
+After the smoke, check CloudWatch (`/aws/lambda/holahost-staging-api`) for a fresh `INIT_START` and a
+`http_request_completed` event with `status: 200`.
+
+### Rollback
+
+- **Backend**: point both functions at the previous digest (release prefixes / tags are never
+  deleted; §13.5):
+  ```bash
+  aws ecr describe-images --repository-name holahost-api \
+    --query 'sort_by(imageDetails,&imagePushedAt)[-5:].{tags:imageTags,digest:imageDigest}'
+  for FN in holahost-staging-api holahost-staging-cleanup; do
+    aws lambda update-function-code --function-name "$FN" --image-uri "$ECR_URL@<previous-digest>"
+  done
+  ```
+- **Frontend**: switch the CloudFront `s3-releases` origin path back to the previous
+  `releases/<git-sha>` prefix (deploy step 5 with the old sha) + invalidation.
+- **DB**: `(cd backend && poetry run alembic downgrade -1)` for a reversible migration; for a
+  destructive one — Neon PITR restore (prod retention 7 days, §13.5), then re-point
+  `holahost/<env>/database_url` if the restore produced a new branch.
 
 ---
 
@@ -257,15 +365,35 @@ Same shape as `staging` (same `AWS_PROFILE` / `AWS_REGION` exports), with a sepa
    aws secretsmanager put-secret-value --secret-id holahost/prod/sample_server_api_key \
      --secret-string 'sk-ant-…'
 
-   # resend_api_key — left empty here; populated in I-16.
+   # resend_api_key — left empty here; populated per the Resend section below (I-16).
    ```
+4. **Confirm the SNS alarm subscription** — same as staging step 4, topic `holahost-prod-alarms`.
 
 > **Recreate a secret that is still inside its recovery window** (prod, or staging if the window is > 0):
 > `aws secretsmanager delete-secret --secret-id holahost/<env>/<key> --force-delete-without-recovery`, then re-apply.
 
-*(Deploy image / frontend bundle / post-deploy smoke / rollback — I-15.)*
+### Deploy / rollback
+
+Same procedure as the staging **Deploy** / **Rollback** sections with the prod substitutions:
+secrets `holahost/prod/*`, functions `holahost-prod-api` / `holahost-prod-cleanup`, CloudFront alias
+`hola.host`, frontend build `npm run build --prefix frontend` (prod mode). The frontend bucket and the
+ECR repo are shared — a digest already validated on staging is promoted as-is (build-and-promote,
+§13.5): skip deploy step 1 and reuse the staging digest + the same `releases/<git-sha>/` prefix.
+Smoke: `curl -fsS https://hola.host/`.
 
 ---
+
+## Access
+
+Single-host model (§12.3): one project owner holds all credentials.
+
+- **AWS**: the `holahost` CLI profile (bootstrap section 1). Staging access is self-serve; **prod
+  secret values require MFA** — console reads of `holahost/prod/*` and the prod deploy role enforce
+  it (§12.3). Deploys move to the GitHub OIDC roles with C-08 (no long-lived keys in CI).
+- **GitHub**: `GITHUB_TOKEN` (fine-grained PAT, repo section) is needed **only** for the `repo` root —
+  day-to-day git uses your normal credentials.
+- **Neon / Resend / Sentry**: dashboard logins of the project owner; their machine-readable secrets
+  live in Secrets Manager (`database_url`, `resend_api_key`) or env (`sentry_dsn`).
 
 ## Hot-updating a prompt / sample-guidebook / secret (force re-read)
 
@@ -295,9 +423,48 @@ rebuild, no `update-function-code`):
 3. Verify: the next request logs a fresh `INIT_START` in CloudWatch (`/aws/lambda/holahost-<env>-api`)
    and serves the new value. Warm containers not yet recycled drain naturally.
 
-## Next (I-15)
+## Resend (email) setup (I-16, manual)
 
-The full Environment runbook — per-env deploy sequence (image build/push, frontend bundle, Alembic
-migrate, Lambda update, CloudFront origin switch), post-deploy smoke checks, rollback (image tag /
-S3 version / Alembic revision), secret rotation, and access procedures — is completed in **I-15**,
-building on the sections above.
+One-time email-provider setup (§10.7). Prerequisite: the `shared` root applied and the `hola.host`
+zone delegated (shared step 2) — Resend verifies records against live DNS.
+
+1. **Create the Resend account** and add the domain: Resend dashboard → Domains → Add domain →
+   `hola.host` (pick the EU region). The dashboard shows the records to create (SPF TXT + MX on the
+   send subdomain, DKIM TXT `resend._domainkey`).
+2. **Copy the records into `infra/config.yaml` → `email_dns_records`** (keyed by a free-form label;
+   `name` is the DNS record name — MX and SPF TXT share `send.hola.host`). Shapes below are examples,
+   use the dashboard values verbatim; the DMARC monitoring policy is ours:
+   ```yaml
+   email_dns_records:
+     send-mx:
+       name: send.hola.host
+       type: MX
+       ttl: 300
+       records: ["10 feedback-smtp.eu-west-1.amazonses.com"]
+     send-spf:
+       name: send.hola.host
+       type: TXT
+       ttl: 300
+       records: ["v=spf1 include:amazonses.com ~all"]
+     dkim:
+       name: resend._domainkey.hola.host
+       type: TXT
+       ttl: 300
+       records: ["p=<DKIM public key from the dashboard>"]
+     dmarc:
+       name: _dmarc.hola.host
+       type: TXT
+       ttl: 300
+       records: ["v=DMARC1; p=none; rua=mailto:kaxcheg@gmail.com"]
+   ```
+3. **Apply the `shared` root** (owns the zone): `cd infra/envs/shared && terraform apply`.
+4. **Verify** in the Resend dashboard (Domains → `hola.host` → Verify; propagation may take minutes).
+5. **Create two API keys** (dashboard → API Keys): `holahost-staging` and `holahost-prod`, permission
+   **Sending access** restricted to `hola.host`. Store each in Secrets Manager:
+   ```bash
+   aws secretsmanager put-secret-value --secret-id holahost/staging/resend_api_key --secret-string 're_…'
+   aws secretsmanager put-secret-value --secret-id holahost/prod/resend_api_key    --secret-string 're_…'
+   ```
+   (then force a cold start per the hot-update section above if the env is already live).
+6. **Check `RESEND_FROM`** in `infra/envs/staging/staging.env` / `infra/envs/prod/prod.env` — it must
+   be an address on the verified domain (e.g. `no-reply@hola.host`).

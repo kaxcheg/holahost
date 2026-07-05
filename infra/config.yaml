@@ -14,6 +14,8 @@ project:         holahost
 aws_region:      eu-west-3
 frontend_bucket: holahost-frontend
 domain:          hola.host
+alert_email:     kaxcheg@gmail.com # per-env SNS alarm topics subscribe this one address (I-13)
+github_owner:    kaxcheg           # github provider owner + prod deploy reviewer (I-14, repo root)
 
 # Data files s3_frontend publishes to the frontend bucket (paths relative to the repo root; the root
 # resolves them). guidebook_template → config/template_schema.json (§10.6); sample_guidebook →
@@ -26,8 +28,9 @@ sample_guidebook_path:   docs/sample_guidebook.md
 # private (no CloudFront behavior) and per-env — its key lives explicitly under envs.<env>.system_prompt_key.
 sample_guidebook_key: config/sample_guidebook.md
 
-# Email-auth DNS (SPF/DKIM/DMARC): keyed by record name. Empty until Resend is set up (I-16),
-# then filled here and re-applied by the `shared` root.
+# Email-auth DNS (SPF/DKIM/DMARC): keyed by a free-form label, record name in `name` (several types
+# can share one name — Resend's MX + SPF TXT both sit on send.<domain>). Empty until Resend is set
+# up (I-16), then filled here and re-applied by the `shared` root; see infra/README.md "Resend".
 email_dns_records: {}
 
 envs:
