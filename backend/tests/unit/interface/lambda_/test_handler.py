@@ -14,7 +14,10 @@ class _Ctx:
 
 
 def _evt(
-    *, method: str = "POST", path: str = "/api/sample/generate", body: str | None = None,
+    *,
+    method: str = "POST",
+    path: str = "/api/sample/generate",
+    body: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -64,5 +67,7 @@ def test_handle_unhandled_returns_500_with_request_id() -> None:
 
 
 def test_handle_options_preflight() -> None:
-    resp = handle(_evt(method="OPTIONS", path="/api/generate"), _Ctx(), _container(lambda cmd: None))
+    resp = handle(
+        _evt(method="OPTIONS", path="/api/generate"), _Ctx(), _container(lambda cmd: None)
+    )
     assert resp["statusCode"] == 204

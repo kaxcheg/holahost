@@ -34,6 +34,7 @@ make dev-down                 # stop the stack
 
 ```bash
 make help          # list all targets
+make hooks-install # one-time: install the git hooks (pre-commit + commit-msg, §13.3)
 make test          # backend unit tests          make lint / typecheck / lint-imports
 make fe-test       # frontend tests               make fe-build
 make ci-local      # full local CI parity (§13.4)
@@ -43,4 +44,4 @@ make dev-test      # backend integration tests (testcontainers; needs Docker)
 ## Branching
 
 GitFlow: feature/bugfix/chore/… branch off `develop` (squash-merge back); `release/v*` and
-`hotfix/v*` → `main`. See `CONTRIBUTING.md` (added in C-02) and spec §13.0.
+`hotfix/v*` → `main`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and spec §13.0.

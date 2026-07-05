@@ -1,0 +1,69 @@
+# Local quality gates (§13.3). CI re-runs the same set (C-04); bypassing hooks with
+# `git commit --no-verify` is forbidden by policy. Hosted hooks are rev-pinned (pre-commit
+# autoupdate); checks needing the project graph (mypy, import-linter, biome, tsc) run as local
+# system hooks through the existing make/npm entry points — single source of invocation.
+default_install_hook_types: [pre-commit, commit-msg]
+# Hooks without an explicit `stages` run only at pre-commit (otherwise they'd re-run at the
+# commit-msg stage too); conventional-pre-commit opts into commit-msg explicitly.
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^backend/(app|tests)/
+      - id: ruff-format
+        files: ^backend/(app|tests)/
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, chore, refactor, docs, test, build, ci]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (backend, strict)
+        entry: make typecheck
+        language: system
+        files: ^backend/app/.*\.py$
+        pass_filenames: false
+      - id: lint-imports
+        name: import-linter (clean architecture)
+        entry: make lint-imports
+        language: system
+        files: ^backend/app/.*\.py$
+        pass_filenames: false
+      - id: biome
+        name: biome check --write (frontend)
+        entry: npm run --prefix frontend format
+        language: system
+        files: ^frontend/
+        pass_filenames: false
+      - id: tsc
+        name: tsc --noEmit (frontend)
+        entry: npm run --prefix frontend typecheck
+        language: system
+        files: ^frontend/.*\.ts$
+        pass_filenames: false

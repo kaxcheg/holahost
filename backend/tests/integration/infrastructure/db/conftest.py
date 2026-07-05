@@ -16,7 +16,9 @@ from infrastructure.db.sqlalchemy.postgres_uow import PostgresUnitOfWork
 _BACKEND_ROOT = Path(__file__).resolve().parents[4]
 _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 # Truncated after every integration test (TRUNCATE isolation, C-04). CASCADE covers the FKs.
-_TRUNCATE_SQL = "TRUNCATE TABLE guidebooks, leads, chunks, sample_budget, rate_limit_counters CASCADE"
+_TRUNCATE_SQL = (
+    "TRUNCATE TABLE guidebooks, leads, chunks, sample_budget, rate_limit_counters CASCADE"
+)
 
 
 def _run_migrations(dsn: str) -> None:

@@ -50,7 +50,9 @@ class FastEmbedEmbeddingModel:
         # Baked-model cache observability (§2.1): an empty FASTEMBED_CACHE_PATH or a long load means the
         # weights were fetched from the network (cold-start cache miss), not reused from the baked image.
         cache_dir = os.environ.get("FASTEMBED_CACHE_PATH")
-        cache_present = cache_dir is not None and os.path.isdir(cache_dir) and bool(os.listdir(cache_dir))
+        cache_present = (
+            cache_dir is not None and os.path.isdir(cache_dir) and bool(os.listdir(cache_dir))
+        )
         start = time.monotonic()
         # Mean pooling is this model's native trained strategy (C-10); fastembed's version-change
         # notice (CLS -> mean) is expected -> silence only that one UserWarning, nothing else.

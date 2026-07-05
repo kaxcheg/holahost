@@ -52,7 +52,5 @@ def load_sample_chunks(
             page=segment.page,
             embedding=embedding,
         )
-        for ordinal, (segment, embedding) in enumerate(
-            zip(chunk_segments, embeddings, strict=True)
-        )
+        for ordinal, (segment, embedding) in enumerate(zip(chunk_segments, embeddings, strict=True))
     ]

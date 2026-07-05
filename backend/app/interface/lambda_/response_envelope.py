@@ -28,6 +28,7 @@ class InternalDetails(TypedDict):
 
     request_id: str
 
+
 # code → HTTP status (§10.8). The interface layer owns this mapping (no executable map in the
 # application layer); it is the source of truth for code ↔ status.
 HTTP_STATUS_BY_CODE: dict[str, int] = {

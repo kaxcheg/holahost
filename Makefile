@@ -4,7 +4,7 @@
         export-openapi check-openapi export-frontend-constants check-frontend-constants \
         fe-install fe-lint fe-typecheck fe-test fe-build fe-generate-types \
         dev-up dev-down dev-down-v dev-logs migrate-dev dev-test \
-        migrate-staging migrate-prod ci-local
+        migrate-staging migrate-prod ci-local hooks-install
 
 DEV_DATABASE_URL ?= postgresql://holahost:holahost@localhost:5432/holahost
 
@@ -64,9 +64,11 @@ migrate-staging: ; cd backend && poetry run alembic upgrade head
 migrate-prod: ; cd backend && poetry run alembic upgrade head
 
 ## ── Aggregate ────────────────────────────────────────────────────────────────
+hooks-install: ## install git hooks (pre-commit + commit-msg stages, §13.3)
+	cd backend && poetry run pre-commit install
 ci-local: ## §13.4 local CI parity
 	$(MAKE) check-versions
-	@command -v pre-commit >/dev/null 2>&1 && pre-commit run --all-files || echo "skip pre-commit (C-01 not installed yet)"
+	cd backend && poetry run pre-commit run --all-files
 	cd backend && poetry run pytest
 	npm test --prefix frontend
 	npm run build --prefix frontend

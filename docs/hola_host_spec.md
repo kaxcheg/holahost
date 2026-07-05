@@ -4388,4 +4388,3 @@ Strict с первого коммита; ослабление настроек �
 - `C-07` GitHub Actions `promote-prod.yml` (resolve digest по `release-v<version>` ECR-тегу, Alembic migrate prod, Lambda update, CloudFront origin path switch, smoke) — §13.4 / §13.5
 - `C-08` OIDC IAM Role'ы `github-actions-deploy-staging` + `github-actions-deploy-prod` в TF (часть `I-14`-расширения) — §13.4
 - `C-09` Pre-commit hook `validate-template-schema`: проверка что `docs/guidebook_template.json` парсится как valid JSON-array объектов с required-полями (`name`, `label`, `required`, `max_length`, `hint`) — §13.3 / §10.6
-

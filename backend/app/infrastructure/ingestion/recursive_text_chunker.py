@@ -52,8 +52,7 @@ class RecursiveTextChunker:
         ]
         pieces = self._splitter.split_documents(documents)
         return [
-            ParsedSegment(text=piece.page_content, page=piece.metadata["page"])
-            for piece in pieces
+            ParsedSegment(text=piece.page_content, page=piece.metadata["page"]) for piece in pieces
         ]
 
 

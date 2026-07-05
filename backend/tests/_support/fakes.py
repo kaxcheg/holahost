@@ -299,7 +299,6 @@ class FakeTextChunker:
         self.calls.append(segments)
         if self.pages is not None:
             return [
-                ParsedSegment(text=t, page=p)
-                for t, p in zip(self.chunks, self.pages, strict=True)
+                ParsedSegment(text=t, page=p) for t, p in zip(self.chunks, self.pages, strict=True)
             ]
         return [ParsedSegment(text=t, page=None) for t in self.chunks]
