@@ -4122,21 +4122,21 @@ Strict с первого коммита; ослабление настроек �
 
 ### 13.3 Pre-commit хуки
 
-Фреймворк — [`pre-commit`](https://pre-commit.com/) (Python). Конфигурация — `.pre-commit-config.yaml` в корне репо. Хуки запускаются локально перед каждым `git commit` и дублируются в CI (см. §13.4).
+Фреймворк — [`pre-commit`](https://pre-commit.com/) (Python; dev-зависимость backend-poetry, установка хуков — `make hooks-install`, оба stage'а: `pre-commit` + `commit-msg`). Конфигурация — `.pre-commit-config.yaml` в корне репо; `default_stages: [pre-commit]` — хуки без явного `stages` не дублируются на commit-msg-стейдже. Хуки запускаются локально перед каждым `git commit` и дублируются в CI (см. §13.4). Hosted-хуки пиннятся ревизиями (`pre-commit autoupdate`); проверки, которым нужен граф проекта, — local-хуки через существующие make/npm-инвокации (C-01).
 
 Состав:
 
-| Hook | Назначение |
-|---|---|
-| `ruff check --fix` | Python lint |
-| `ruff format` | Python format |
-| `mypy backend/` | Python type check |
-| `biome check --apply frontend/` | TS lint + format |
-| `tsc --noEmit` | TS type check |
-| `commitlint` | Conventional Commits валидация (`@commitlint/config-conventional`) |
-| `gitleaks` | детектор credentials в коммите (AWS keys, Anthropic keys, generic secrets) |
-| `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-json`, `check-merge-conflict` | базовые проверки `pre-commit-hooks` |
-| `check-added-large-files` | блокирует файлы > 1 MB |
+| Hook | Реализация | Назначение |
+|---|---|---|
+| `ruff check --fix` + `ruff format` | hosted `astral-sh/ruff-pre-commit`, scope `backend/(app\|tests)` | Python lint + format |
+| `mypy` | local: `make typecheck` (strict, только `app`) | Python type check |
+| `lint-imports` | local: `make lint-imports` | clean-architecture контракт импортов |
+| `biome check --write` | local: `npm run --prefix frontend format` (`--apply` устарел в biome 2.x) | TS lint + format |
+| `tsc --noEmit` | local: `npm run --prefix frontend typecheck` | TS type check |
+| `conventional-pre-commit` | hosted `compilerla/conventional-pre-commit`, `commit-msg`-stage | Conventional Commits: форма + допустимые type'ы §13.0. Заменил commitlint — решение «без Node» (C-01): pre-commit-nodeenv не разворачивается; длины subject/body (72/100) хук не меряет — конвенция + review |
+| `gitleaks` | hosted `gitleaks/gitleaks` | детектор credentials в коммите (AWS keys, Anthropic keys, generic secrets) |
+| `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-json`, `check-merge-conflict` | hosted `pre-commit-hooks` | базовые проверки |
+| `check-added-large-files` | hosted `pre-commit-hooks` (`--maxkb=1024`) | блокирует файлы > 1 MB |
 
 Обход хуков (`git commit --no-verify`) запрещён политикой; CI повторно прогоняет полный набор и блокирует PR при несоответствии.
 
@@ -4184,32 +4184,32 @@ Strict с первого коммита; ослабление настроек �
 
 ### 13.6 PR-шаблон
 
-`.github/PULL_REQUEST_TEMPLATE.md` версионируется в репо. Структура:
+`.github/PULL_REQUEST_TEMPLATE.md` версионируется в репо. Файл — **на английском** (репозиторий публичный; все VCS-артефакты — en; C-03). Структура:
 
 ```markdown
-## Что сделано
-<bullet-list изменений в одну строку каждый; ссылки на §X.Y спеки если применимо>
+## What was done
+<!-- one-line bullets; reference spec §X.Y where applicable -->
 
-## Зачем
-<одна-две строки контекста: почему именно сейчас, какая боль решена>
+## Why
+<!-- one-two lines of context: why now, what pain it solves -->
 
-## Как проверить
-<пошаговая инструкция воспроизведения: команды Makefile, ожидаемое поведение, URL'ы>
+## How to verify
+<!-- step-by-step: make commands, expected behavior, URLs -->
 
 ## Branch / merge target
-- [ ] Source branch соответствует §13.0 (`feature/`, `bugfix/`, `refactor/`, `chore/`, `docs/`, `test/`, `release/v*`, `hotfix/v*`)
-- [ ] Target branch корректен: feature/bugfix/refactor/chore/docs/test → `develop`; release/v* → `main` + back-merge в `develop`; hotfix/v* → `main` + back-merge в `develop`
+- [ ] Source branch conforms to §13.0 (`feature/`, `bugfix/`, `refactor/`, `chore/`, `docs/`, `test/`, `release/v*`, `hotfix/v*`)
+- [ ] Target branch is correct: feature/bugfix/refactor/chore/docs/test → `develop`; release/v* and hotfix/v* → `main` + back-merge to `develop`
 
 ## DB / API / breaking changes
-- [ ] Миграции Alembic backward-compatible (один релиз — добавление nullable, следующий — переключение кода, ещё следующий — удаление старого; см. §13.5)
-- [ ] Изменения в HTTP API задокументированы в §5
-- [ ] Изменения в DB схеме задокументированы в §4
-- [ ] Breaking change для frontend — отдельно отмечен в коммит-footer `BREAKING CHANGE:`
+- [ ] Alembic migrations are backward-compatible (add nullable → switch code → drop old; §13.5)
+- [ ] HTTP API changes are documented in spec §5
+- [ ] DB schema changes are documented in spec §4
+- [ ] Frontend-breaking change is flagged with a `BREAKING CHANGE:` commit footer
 
-## Чек-лист
-- [ ] pre-commit прошёл локально
+## Checklist
+- [ ] pre-commit passed locally
 - [ ] CI green
-- [ ] Если меняется spec — `docs/hola_host_spec.md` обновлён в этом же PR
+- [ ] If the spec changes — `docs/hola_host_spec.md` is updated in this PR
 ```
 
 Шаблон обязателен для всех PR; отсутствие заполненного блока — повод для review-замечания.
