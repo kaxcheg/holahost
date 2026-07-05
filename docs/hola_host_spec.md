@@ -3226,7 +3226,7 @@ ADR фиксируют принятые архитектурные решени�
 | B | **`boto3.client("secretsmanager").get_secret_value(...)` на cold start в `app/scripts/bootstrap.py`, выставление в `os.environ[key]` до инициализации `Settings`** | секрет НЕ виден ни в Lambda Configuration, ни в TF state; стандартная IAM-граница через `Resource` policy; pydantic-settings подхватывает значения как обычные env | ~100–300 мс cold-start на каждый ключ (mitigation — один общий JSON-secret или `BatchGetSecretValue`); зависимость от Secrets Manager API доступности на cold start |
 | C | AWS Parameters and Secrets Lambda Extension (HTTP `localhost:2773` с in-extension cache) | переживает warm-инвокации без повторных API-вызовов; меньше cold-start latency на повторных холодных стартах | дополнительный Lambda layer; ещё одна точка отказа; для MVP-нагрузки overhead не оправдан |
 
-**Решение по server-side секретам.** Вариант **B**. На cold start `app/scripts/bootstrap.py` читает `os.environ["ENV"]` и для `staging`/`prod` вызывает `load_secrets_into_env(env, boto3.session.Session().client("secretsmanager"))` из `app/scripts/sm_loader.py` (модуль назван `sm_loader`, не `secrets`, — последнее имя зарезервировано) **до** первой инициализации `Settings`; pydantic-settings подхватывает значения как обычные env-vars. В `dev` SM не вызывается (секреты приходят из локального `.env`):
+**Решение по server-side секретам.** Вариант **B**. На cold start `app/scripts/bootstrap.py` читает `os.environ["ENV"]` и для `staging`/`prod` вызывает `load_secrets_into_env(env, make_secrets_client(region))` (`load_secrets_into_env` из `app/scripts/sm_loader.py`, модуль назван `sm_loader`, не `secrets`, — последнее имя зарезервировано; фабрика `make_secrets_client` вынесена в `app/infrastructure/boto/clients.py`, туда же `make_s3_client` — I-12) **до** первой инициализации `Settings`; pydantic-settings подхватывает значения как обычные env-vars. В `dev` SM не вызывается (секреты приходят из локального `.env`):
 
 ```python
 # app/scripts/sm_loader.py
@@ -3242,6 +3242,10 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
 
 Состав `SERVER_SIDE_SECRET_KEYS` (`app/scripts/sm_loader.py`) фиксирован: `database_url`, `resend_api_key`, `ip_hash_salt`, `sample_server_api_key`. BYOK end-user'а в список не входит (приходит per-request в HTTP-заголовке `X-Api-Key`, см. выше); `sentry_dsn` / `support_email` через SM-канал не загружаются (обычные env-vars, не часть cold-start secret-loader'а).
 
+**System prompt — тот же cold-start-канал, но НЕ секрет (I-12, D-30).** `system_prompt` для `staging`/`prod` не запекается в образ и не идёт TF-env'ом, а лежит приватным S3-объектом `system-prompt/<env>.md` (префикс `system-prompt/` не матчится ни одним CloudFront-behavior'ом → наружу не раздаётся). На cold start `app/scripts/prompt_loader.load_system_prompt_into_env` (зеркало `sm_loader`; S3-клиент из `infrastructure/boto`) дочитывает его в `os.environ["SYSTEM_PROMPT"]` **до** `Settings`; в `dev` `SYSTEM_PROMPT` — inline в `.env`. Меняется без редеплоя: `aws s3 cp` объекта + `update-function-configuration` форсирует cold-start-перечитку (аналогично ротации секретов, §12.3). Sample-гайдбук читается из S3 тем же способом в рантайме (`S3SampleGuidebookSource`, staging/prod).
+
+**Транспорт `/api/*` (I-11/I-12).** Lambda Function URL — `authorization_type = AWS_IAM`; CloudFront достаёт её через OAC (`origin_access_control_origin_type = "lambda"`, sigv4), так что Function URL публично не инвокится; root-level `aws_lambda_permission` (`lambda:InvokeFunctionUrl`, principal `cloudfront.amazonaws.com`, точный distribution ARN). SPA-fallback переведён с глобального `custom_error_response` на `aws_cloudfront_function` (viewer-request, только default-behavior) — иначе он перехватывал бы и JSON-4xx `/api/*`.
+
 **Последствия.**
 
 - §3.0 «Источник» для `API_KEY_HEADER` обновляется на `§10.3 ("X-Api-Key")`; добавляется параметр `MAGIC_LINK_HEADER = "X-Magic-Link"` со ссылкой на §10.3; `MAGIC_LINK_URL_PARAM = "ml"` подтверждается.
@@ -3249,7 +3253,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
 - §5.8 — маппинг «чужой `guidebook_id` → 401 vs 404» — решение: 404 как для ресурса не существующего (предотвращает enumeration); fixed в §10.3 как часть transport-design (добавляется код `ERR_NOT_FOUND` в таксономию §10.8).
 - §8.0/Settings — добавляются: `frontend_origin: str` (env), `env: str` (env, `"dev"|"prod"`); в `interface/lambda_/response_envelope.py` — middleware, добавляющий security headers + CORS-ответ.
 - §8.0 — `app/scripts/bootstrap.py` на cold start (только `staging`/`prod`) загружает server-side секреты через `sm_loader.load_secrets_into_env` (boto3) в `os.environ` до инициализации `Settings`; Lambda execution role получает inline policy `secretsmanager:GetSecretValue` с `Resource: arn:aws:secretsmanager:*:*:secret:holahost/{env}/*`.
-- §2.6 (IaC) — CloudFront response-headers policy для статики; Lambda Function URL CORS settings (если поддерживаются — иначе headers добавляются в `response_envelope.py`); Terraform-модуль `sm` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
+- §2.6 (IaC) — CloudFront response-headers policy для статики; `/api/*` — отдельный CloudFront-behavior к Lambda Function URL (OAC `lambda`, managed `CachingDisabled` + `AllViewerExceptHostHeader`), security-headers/CORS на API добавляет `response_envelope.py`; SPA-fallback — `aws_cloudfront_function` (viewer-request, default-behavior), не `custom_error_response`; Terraform-модуль `sm` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
 - §12 — раздел инфраструктуры ссылается на §10.3 за runtime-каналом и IAM-формой доступа Lambda к секретам; сам §12 фиксирует storage-backend (Secrets Manager) и storage-location per env.
 - AC §3 US-07 «обработка ошибок без утечки `api_key`» становится численно верифицируемым: e2e-тест с `X-Api-Key: invalid` ожидает в CloudWatch-логах отсутствие подстроки `invalid`.
 
@@ -3671,8 +3675,8 @@ Every configuration value in the project, grouped by its **consumer** (backend /
 
 | Source | What it is |
 |---|---|
-| **be-env** | `infra/envs/<env>/<env>.env` — the per-env backend config file (dev: live, gitignored, + committed `.env.example`; staging/prod: values are Terraform-injected into the Lambda, I-12) |
-| **fe-env** | `frontend/.env` — the frontend-owned config file (gitignored, + committed `frontend/.env.example`) |
+| **be-env** | `infra/envs/<env>/<env>.env` — the per-env backend config file (dev: live, gitignored, + committed `.env.example`; staging/prod: **committed** non-secret file, read + parsed directly by Terraform in each env root and injected into the Lambda, I-12) |
+| **fe-env** | `frontend/.env` — the frontend-owned config file (**committed**, non-secret; no `.env.example`) |
 | **config.yaml** | `infra/config.yaml` — the single source of truth for infra static config |
 | **SM** | AWS Secrets Manager — the four secret *values* (staging/prod; out-of-IaC, §10.3). In dev they sit blank in be-env. |
 
@@ -3686,16 +3690,17 @@ Consumes the `app/config/config.py` `Settings` fields (full list in `config.py`)
 
 | Setting(s) | Source |
 |---|---|
-| `env`, `model_id_sample`/`model_id_real`, `embedding_model_name`, `system_prompt`, `anthropic_base_url`, `resend_from`, `haiku_output_price_per_mtok`, `allowed_mime_types`, all numeric size/rate/chunk/token limits + `*_timeout_seconds`, `magic_link_ttl_days`, `magic_link_token_bytes`, `cleanup_batch_size`, `sample_guidebook_path` (dev only) | **be-env** |
+| `env`, `model_id_sample`/`model_id_real`, `embedding_model_name`, `system_prompt` (dev only — staging/prod fetch it from S3, see below), `anthropic_base_url`, `resend_from`, `haiku_output_price_per_mtok`, `allowed_mime_types`, all numeric size/rate/chunk/token limits + `*_timeout_seconds`, `magic_link_ttl_days`, `magic_link_token_bytes`, `cleanup_batch_size`, `sample_guidebook_path` (dev only) | **be-env** |
 | `database_url`, `resend_api_key`, `ip_hash_salt`, `sample_server_api_key` | **SM** (dev: be-env, blank) |
 | `frontend_origin` (← config.yaml `domain`/`subdomain`), `aws_resources_region` (← config.yaml `aws_region`), `sample_guidebook_s3_bucket` (← config.yaml `frontend_bucket`) | **config.yaml** — Terraform computes + injects (I-12) |
-| `sample_guidebook_s3_key` | **`s3_frontend`** module — the published object's key (`config/sample_guidebook.md`, `sample_guidebook_key` output); Terraform injects (I-12) |
+| `sample_guidebook_s3_key` | **config.yaml** `sample_guidebook_key` (the published object's key `config/sample_guidebook.md` — `s3_frontend` publishes there and the Lambda reads it, one source); Terraform injects (I-12) |
+| `system_prompt` (staging/prod), via `SYSTEM_PROMPT_S3_BUCKET` (← config.yaml `frontend_bucket`) + `SYSTEM_PROMPT_S3_KEY` (← config.yaml `envs.<env>.system_prompt_key`) | **S3** — a private object `system-prompt/<env>.md` (no CloudFront behavior serves it), seeded by `s3_frontend` (`ignore_changes`) from `docs/<env>_system_prompt.md`, fetched at cold start by `scripts/prompt_loader.py` into `os.environ["SYSTEM_PROMPT"]` **before** `Settings` (mirrors the SM loader). Not baked into the image → changeable without a redeploy (`update-function-configuration` forces re-read). Terraform injects the bucket + key (I-12) |
 | `magic_link_path`, `magic_link_url_param` | **fe-env** — dev: docker-compose 2nd `env_file`; staging/prod: Terraform injects (I-12) |
 | `SMTP_HOST`/`SMTP_PORT` (dev only) | be-env |
 | `FASTEMBED_CACHE_PATH` | Docker image `ENV` (constant) |
 | `AWS_REGION` | Lambda runtime (reserved; not app-read) |
 
-> Each of these has its **single source of value** in config.yaml (or `s3_frontend` for the object key) — **no literal is duplicated** in staging/prod be-env (all removed; Terraform injects them at deploy, I-12). In **dev** `frontend_origin` genuinely lives in be-env (`http://localhost:5173` — its own single source, no Terraform); `sample_guidebook_s3_*` are unset in dev (the backend reads the local `sample_guidebook_path`).
+> Each of these has its **single source of value** in config.yaml — **no literal is duplicated** in staging/prod be-env (Terraform injects them at deploy, I-12); the S3 object keys (`sample_guidebook_key`, per-env `system_prompt_key`) live in config.yaml too, so the `s3_frontend` publisher and the Lambda reader share one source. In **dev** `frontend_origin` genuinely lives in be-env (`http://localhost:5173` — its own single source, no Terraform); `sample_guidebook_s3_*` + `system_prompt_s3_*` are unset in dev (the backend reads the local `sample_guidebook_path` and the inline `system_prompt`).
 
 #### 2 — Frontend
 
@@ -3714,9 +3719,9 @@ Consumes root/module inputs.
 
 | Setting | Source |
 |---|---|
-| `aws_region`, `project`, `frontend_bucket`, `domain`, `email_dns_records`, `guidebook_template_path`, `sample_guidebook_path`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` | **config.yaml** |
-| `secret_keys` (the SM secret names) | backend `sm_loader.SERVER_SIDE_SECRET_KEYS` — infra mirrors the contract (a module default synced by hand) |
-| the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md`; their **paths** come from config.yaml `guidebook_template_path`/`sample_guidebook_path`) | app data files |
+| `aws_region`, `project`, `frontend_bucket`, `domain`, `email_dns_records`, `guidebook_template_path`, `sample_guidebook_path`, `sample_guidebook_key`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` / `system_prompt_key` / `system_prompt_path` / Lambda sizing (`lambda_api_memory_mb` / `lambda_api_timeout_s` / `lambda_cleanup_*`) / `log_retention_days` | **config.yaml** |
+| `secret_keys` (the SM secret names) | backend `sm_loader.SERVER_SIDE_SECRET_KEYS` — the `sm` module mirrors it as a default and re-exports it (`secret_keys` output); the per-env lambda env-parse consumes that output (uppercased) to drop the secrets from be-env, so no third hardcoded copy exists |
+| the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` + per-env `docs/<env>_system_prompt.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md` / `system-prompt/<env>.md`; their **paths** come from config.yaml `guidebook_template_path` / `sample_guidebook_path` / `envs.<env>.system_prompt_path`) | app data files |
 | state-bucket names `holahost-tfstate-{shared,staging,prod}` | literals in each `backend.tf` (Terraform forbids interpolation in the backend block) |
 | CSP / security-header values | `cloudfront` module constants (§10.3, verbatim) |
 
@@ -3726,7 +3731,7 @@ Consumes root/module inputs.
 
 The cross-consumer values each have **one** source of truth; Terraform relays them so there is no duplicated literal to keep in sync (the exception is `secret_keys`, mirrored by hand from the backend contract):
 
-- infra-owned, consumed by the backend (`frontend_origin`, `aws_resources_region`, `sample_guidebook_s3_bucket`) → **config.yaml**; `sample_guidebook_s3_key` → **`s3_frontend`** object key. All TF-injected (I-12) — no literal duplicated in staging/prod be-env.
+- infra-owned, consumed by the backend (`frontend_origin`, `aws_resources_region`, `sample_guidebook_s3_bucket`, `sample_guidebook_s3_key`, `system_prompt_s3_bucket`/`_key`) → **config.yaml** (the S3 keys are shared by the `s3_frontend` publisher and the Lambda reader, no drift). All TF-injected (I-12) — no literal duplicated in staging/prod be-env.
 - frontend-owned, consumed by **both** the frontend (landing) and the backend (link build) (`magic_link_path`, `magic_link_url_param`) → **fe-env**; the frontend bakes them at build, the backend gets them via docker-compose (dev) / TF (staging/prod, I-12).
 - `AWS_REGION` (Lambda runtime, deploy region) numerically equals config.yaml `aws_region` but is a separate reserved channel — not app-read, distinct from `aws_resources_region`.
 
@@ -3919,8 +3924,8 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 Это достижимо за счёт same-origin-архитектуры (§2.1): CloudFront на каждом домене (`staging.hola.host` и `hola.host`) обслуживает один и тот же bundle и проксирует `/api/*` на соответствующую Lambda Function URL. Frontend не знает «своё» окружение на этапе сборки.
 
 **Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Два источника (см. §10.9):
-- **per-env** — файл **`infra/envs/<env>/<env>.env`** (единый для фронта и бэка, см. §12; gitignored — копируется из версионируемого шаблона `infra/envs/<env>/.env.example`): `ENV`, `API_BASE_URL`;
-- **frontend-owned** — файл **`frontend/.env`** (gitignored, + committed `frontend/.env.example`): magic-link URL-контракт `MAGIC_LINK_URL_PARAM` + `MAGIC_LINK_PATH` (инвариантные константы, не per-env; Terraform ретранслирует их и в бекенд-Lambda, I-12).
+- **per-env** — файл **`infra/envs/<env>/<env>.env`** (единый для фронта и бэка, см. §12; **dev** — gitignored, копируется из `infra/envs/dev/.env.example`; **staging/prod** — **committed** non-secret, Terraform читает его напрямую): `ENV`, `API_BASE_URL`;
+- **frontend-owned** — файл **`frontend/.env`** (**committed**, non-secret; без `.env.example`): magic-link URL-контракт `MAGIC_LINK_URL_PARAM` + `MAGIC_LINK_PATH` (инвариантные константы, не per-env; Terraform ретранслирует их и в бекенд-Lambda, I-12).
 
 Сборка `vite --mode <env>` берёт значения из env-vars (при деплое их объявляет CI / Terraform — фронт симметричен бэку) с fallback'ом на чтение обоих файлов напрямую для локальной one-command сборки (`resolveConfig` / `resolveContract`); `vite.config.ts` инжектит их через `define`, `config.ts` читает `import.meta.env.VITE_*`.
 
@@ -3975,7 +3980,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 | **dev** | вручную через `docker-compose up` (один `docker-compose.yml` в репо); миграции — Alembic-команда |
 | **staging / prod** | IaC через Terraform |
 
-Описание Terraform лежит в `infra/` репо `holahost/`. Структура: модули per ресурс в `infra/modules/`; статический инфра-конфиг — единый файл **`infra/config.yaml`** (single source of truth, читается каждым root'ом через `yamldecode`; §10.9). Single-instance-ресурсы (общий frontend-bucket `holahost-frontend`, зона `hola.host`, ACM-сертификат) вынесены в отдельный root **`infra/envs/shared/`**; per-env root'ы `infra/envs/{staging,prod}/` читают их через `data`-источники и добавляют свои per-env-ресурсы (CloudFront). Модули получают значения из `config.yaml` явными входами (без module-default'ов для конфиг-значений).
+Описание Terraform лежит в `infra/` репо `holahost/`. Структура: модули per ресурс в `infra/modules/`; статический инфра-конфиг — единый файл **`infra/config.yaml`** (single source of truth, читается каждым root'ом через `yamldecode`; §10.9). Single-instance-ресурсы (общий frontend-bucket `holahost-frontend`, зона `hola.host`, ACM-сертификат, ECR-репо `holahost-api`) вынесены в отдельный root **`infra/envs/shared/`**; per-env root'ы `infra/envs/{staging,prod}/` читают их через `data`-источники и добавляют свои per-env-ресурсы (CloudFront, Lambda). Модули получают значения из `config.yaml` явными входами (без module-default'ов для конфиг-значений). App-config staging/prod-Lambda берётся из committed `infra/envs/<env>/<env>.env` — root парсит его inline (минус SM-секреты) и инжектит в Lambda (§10.9).
 
 Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated), отдельный bucket per env. Применение — `terraform init && terraform plan && terraform apply` из соответствующего `envs/<env>/` каталога.
 
@@ -3987,7 +3992,7 @@ Managed-платформы (Vercel, Render, Fly.io и пр.) не использ
 
 Runtime-канал доступа Lambda к server-side секретам (boto на cold start), IAM-форма (`secretsmanager:GetSecretValue` ограниченный `Resource` policy), запрет TF-инжекции значений в env — зафиксированы как архитектурное решение в §10.3 (server-side secrets runtime channel). Настоящий раздел — storage-location, состав ключей per env, ротация, модель доступа.
 
-**Регион boto-клиентов приложения** (Secrets Manager на cold start, S3 для sample-гайдбука) — параметр приложения `AWS_RESOURCES_REGION` (Settings-поле; на cold start читается из env напрямую, до сборки `Settings`). Отличается от зарезервированного Lambda-runtime `AWS_REGION` (= регион деплоя, задаётся CI/Terraform — переопределить нельзя): регион ресурсов приложения и регион деплоя могут различаться.
+**Регион boto-клиентов приложения** (Secrets Manager на cold start, S3 для sample-гайдбука и system-prompt) — параметр приложения `AWS_RESOURCES_REGION` (Settings-поле; на cold start читается из env напрямую, до сборки `Settings`). Отличается от зарезервированного Lambda-runtime `AWS_REGION` (= регион деплоя, задаётся CI/Terraform — переопределить нельзя): регион ресурсов приложения и регион деплоя могут различаться.
 
 | Окружение | Где лежат | Кто имеет доступ |
 |---|---|---|
@@ -4359,11 +4364,11 @@ Strict с первого коммита; ослабление настроек �
 - `I-05` Terraform `infra/` layout: `modules/` + `envs/{staging,prod}/{main.tf,backend.tf}` + единый `infra/config.yaml` (single-source, §10.9; `terraform.tfvars` не используется — заменён config.yaml в I-09…I-11; `shared`-root добавлен там же) — §12.2
 - `I-06` TF module `sm` (`aws_secretsmanager_secret` без значений, value-less; значения заполняются вне IaC, §10.3) — §10.3 / §12.3
 - `I-07` Neon project + ветки `staging`/`prod`, connection strings → Secrets Manager — §12.0
-- `I-08` TF module `ecr` (`holahost-api`, lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
+- `I-08` TF module `ecr` (единый `holahost-api` в `shared`-root; `IMMUTABLE_WITH_EXCLUSION` — `latest*` mutable для bootstrap-образа; lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
 - `I-09` TF module `s3_frontend` (единый bucket `holahost-frontend` в `shared`-root + PAB/versioning/SSE + bucket policy OAC-only через account-scoped `AWS:SourceArn` + публикация `config/template_schema.json` и `config/sample_guidebook.md`) — §12.0 / §13.4 / §10.6
 - `I-10` TF module `route53` (hosted zone `hola.host` в `shared`-root + ACM cert us-east-1 DNS-validated + `email_dns_records` passthrough — DKIM/SPF/DMARC пусты до I-16) — §10.3 / §10.7 / §12.4
 - `I-11` TF module `cloudfront` (per-env distribution staging/prod + response-headers policy §10.3 + cache-behavior `/config/*` TTL 300 + OAC к shared-bucket + SPA-fallback 403/404→index + origin path `releases/<git-sha>/`) — §10.3 / §13.4 / §10.6
-- `I-12` TF module `lambda` (`holahost-{env}-api` + `holahost-{env}-cleanup` + EventBridge schedule `cron(30 0 * * ? *)` + Lambda IAM policy `GetSecretValue` на ARN'ы модуля `sm`; инжектит `AWS_RESOURCES_REGION = var.aws_region`) — §10.1 / §10.2 / §8.6 / §10.3
+- `I-12` TF module `lambda` (`holahost-{env}-api` Function URL `AWS_IAM` + `holahost-{env}-cleanup` + EventBridge `cron(30 0 * * ? *)`; exec-role: `GetSecretValue` на `sm`-ARN'ы + `s3:GetObject` на sample-guidebook + приватный `system-prompt/*` + own log-groups; `image_uri=<ecr>:latest` + `ignore_changes` (CI меняет образ `update-function-code`); расширяет `cloudfront` — `/api/*` origin+OAC + SPA CloudFront Function вместо `custom_error_response`; env собирается inline-парсом committed `<env>.env` в root'е; `SYSTEM_PROMPT`→S3 cold-start (D-30); boto-фабрики в `infrastructure/boto`) — §10.1 / §10.2 / §8.6 / §10.3
 - `I-13` TF module `observability` (log groups, metric filters, CloudWatch alarms, SNS + email subscription) — §10.5
 - `I-14` TF module `github_repo` (settings, branch protection для `main` + `develop`, GitHub Environments staging/prod) — §13.7
 - `I-15` Environment runbook `infra/README.md` (prereq, initial setup, dev/staging/prod секции, rollback, access) — §12.4
