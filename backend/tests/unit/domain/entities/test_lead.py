@@ -88,9 +88,15 @@ class TestLead:
 
     def test_regenerate_magic_link_updates_fields(self) -> None:
         lead = Lead.from_repo(
-            id=LeadId.new(), email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=None, ip_hash=_IP, ua_short=None,
+            id=LeadId.new(),
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=None,
+            ip_hash=_IP,
+            ua_short=None,
         )
         new_ml = MagicLink(value=SecretStr("newtoken456"))
         lead.regenerate_magic_link(new_ml)
@@ -101,9 +107,15 @@ class TestLead:
 
     def test_attach_guidebook_sets_guidebook_id_and_last_seen_at(self) -> None:
         lead = Lead.from_repo(
-            id=LeadId.new(), email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=None, ip_hash=_IP, ua_short=None,
+            id=LeadId.new(),
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=None,
+            ip_hash=_IP,
+            ua_short=None,
         )
         gid = GuidebookId.new()
         lead.attach_guidebook(gid)
@@ -114,9 +126,15 @@ class TestLead:
 
     def test_detach_guidebook_clears_guidebook_id(self) -> None:
         lead = Lead.from_repo(
-            id=LeadId.new(), email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=_GID, ip_hash=_IP, ua_short=None,
+            id=LeadId.new(),
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=_GID,
+            ip_hash=_IP,
+            ua_short=None,
         )
         lead.detach_guidebook()
         assert lead.guidebook_id is None
@@ -124,9 +142,15 @@ class TestLead:
 
     def test_touch_advances_last_seen_at(self) -> None:
         lead = Lead.from_repo(
-            id=LeadId.new(), email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=None, ip_hash=_IP, ua_short=None,
+            id=LeadId.new(),
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=None,
+            ip_hash=_IP,
+            ua_short=None,
         )
         lead.touch()
         assert lead.last_seen_at > _T
@@ -135,9 +159,15 @@ class TestLead:
 
     def test_expire_magic_link_sets_magic_link_to_none(self) -> None:
         lead = Lead.from_repo(
-            id=LeadId.new(), email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=None, ip_hash=_IP, ua_short=None,
+            id=LeadId.new(),
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=None,
+            ip_hash=_IP,
+            ua_short=None,
         )
         lead.expire_magic_link()
         assert lead.magic_link is None
@@ -145,14 +175,26 @@ class TestLead:
     def test_equal_when_same_id_regardless_of_other_fields(self) -> None:
         lid = LeadId.new()
         a = Lead.from_repo(
-            id=lid, email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=None, ip_hash=_IP, ua_short=None,
+            id=lid,
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=None,
+            ip_hash=_IP,
+            ua_short=None,
         )
         b = Lead.from_repo(
-            id=lid, email=Email("other@example.com"), magic_link=None,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.SAMPLE,
-            guidebook_id=_GID, ip_hash=_IP2, ua_short="agent",
+            id=lid,
+            email=Email("other@example.com"),
+            magic_link=None,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.SAMPLE,
+            guidebook_id=_GID,
+            ip_hash=_IP2,
+            ua_short="agent",
         )
         assert a == b
 
@@ -170,14 +212,26 @@ class TestLead:
     def test_hashable_by_id(self) -> None:
         lid = LeadId.new()
         a = Lead.from_repo(
-            id=lid, email=_EMAIL, magic_link=_ML,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.GUIDEBOOK,
-            guidebook_id=None, ip_hash=_IP, ua_short=None,
+            id=lid,
+            email=_EMAIL,
+            magic_link=_ML,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.GUIDEBOOK,
+            guidebook_id=None,
+            ip_hash=_IP,
+            ua_short=None,
         )
         b = Lead.from_repo(
-            id=lid, email=Email("other@example.com"), magic_link=None,
-            captured_at=_T, last_seen_at=_T, flow=LeadFlow.SAMPLE,
-            guidebook_id=_GID, ip_hash=_IP2, ua_short="agent",
+            id=lid,
+            email=Email("other@example.com"),
+            magic_link=None,
+            captured_at=_T,
+            last_seen_at=_T,
+            flow=LeadFlow.SAMPLE,
+            guidebook_id=_GID,
+            ip_hash=_IP2,
+            ua_short="agent",
         )
         assert hash(a) == hash(b)
         assert len({a, b}) == 1

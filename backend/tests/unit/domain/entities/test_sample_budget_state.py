@@ -24,9 +24,7 @@ class TestSampleBudgetState:
         assert state.dollars_spent_est == 0.25
 
     def test_is_exhausted_false_below_cap(self) -> None:
-        state = SampleBudgetState.from_repo(
-            day=_DAY, output_tokens_used=999, dollars_spent_est=0.0
-        )
+        state = SampleBudgetState.from_repo(day=_DAY, output_tokens_used=999, dollars_spent_est=0.0)
         assert not state.is_exhausted(cap_tokens=1000)
 
     def test_is_exhausted_true_at_cap(self) -> None:

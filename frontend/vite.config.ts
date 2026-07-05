@@ -25,7 +25,14 @@ function resolveConfig(mode: string): Record<string, string | undefined> {
   const sourceMode = mode === 'test' ? 'dev' : mode;
   let fileEnv: Record<string, string> = {};
   if ((DEPLOY_ENVS as readonly string[]).includes(sourceMode)) {
-    const path = resolve(import.meta.dirname, '..', 'infra', 'envs', sourceMode, `${sourceMode}.env`);
+    const path = resolve(
+      import.meta.dirname,
+      '..',
+      'infra',
+      'envs',
+      sourceMode,
+      `${sourceMode}.env`,
+    );
     if (existsSync(path)) {
       fileEnv = parseEnvFile(readFileSync(path));
     }
@@ -95,8 +102,7 @@ function templateSchemaDevServer(): Plugin {
  */
 function rieBridgeDevServer(): Plugin {
   const RIE_ENDPOINT =
-    process.env.RIE_ENDPOINT ??
-    'http://localhost:9000/2015-03-31/functions/function/invocations';
+    process.env.RIE_ENDPOINT ?? 'http://localhost:9000/2015-03-31/functions/function/invocations';
   return {
     name: 'dev-rie-bridge',
     apply: 'serve',
@@ -144,7 +150,11 @@ function rieBridgeDevServer(): Plugin {
                 res.setHeader('Content-Type', 'application/json');
                 res.end(
                   JSON.stringify({
-                    error: { code: 'ERR_DEV_BRIDGE', message: 'RIE returned a non-HTTP payload', details: payload },
+                    error: {
+                      code: 'ERR_DEV_BRIDGE',
+                      message: 'RIE returned a non-HTTP payload',
+                      details: payload,
+                    },
                   }),
                 );
                 return;
@@ -162,9 +172,7 @@ function rieBridgeDevServer(): Plugin {
             .catch((err: unknown) => {
               res.statusCode = 502;
               res.setHeader('Content-Type', 'application/json');
-              res.end(
-                JSON.stringify({ error: { code: 'ERR_DEV_BRIDGE', message: String(err) } }),
-              );
+              res.end(JSON.stringify({ error: { code: 'ERR_DEV_BRIDGE', message: String(err) } }));
             });
         });
         req.on('error', () => {
@@ -185,7 +193,9 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.VITE_APP_ENV': JSON.stringify(cfg.ENV ?? null),
       'import.meta.env.VITE_API_BASE_URL': JSON.stringify(cfg.API_BASE_URL ?? null),
-      'import.meta.env.VITE_MAGIC_LINK_URL_PARAM': JSON.stringify(contract.MAGIC_LINK_URL_PARAM ?? null),
+      'import.meta.env.VITE_MAGIC_LINK_URL_PARAM': JSON.stringify(
+        contract.MAGIC_LINK_URL_PARAM ?? null,
+      ),
       'import.meta.env.VITE_MAGIC_LINK_PATH': JSON.stringify(contract.MAGIC_LINK_PATH ?? null),
     },
     build: {

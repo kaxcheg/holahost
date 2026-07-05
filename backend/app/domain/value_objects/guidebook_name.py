@@ -4,7 +4,9 @@ from dataclasses import dataclass
 
 from domain.exceptions import DomainValidationError
 
-GUIDEBOOK_NAME_MAX_LENGTH = 100  # mirrors guidebook_template.json property_name.max_length (§10.6); D6
+GUIDEBOOK_NAME_MAX_LENGTH = (
+    100  # mirrors guidebook_template.json property_name.max_length (§10.6); D6
+)
 
 
 @dataclass(frozen=True)

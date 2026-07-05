@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mypy_boto3_secretsmanager import SecretsManagerClient
 
-SERVER_SIDE_SECRET_KEYS = ("database_url", "resend_api_key", "ip_hash_salt", "sample_server_api_key")
+SERVER_SIDE_SECRET_KEYS = (
+    "database_url",
+    "resend_api_key",
+    "ip_hash_salt",
+    "sample_server_api_key",
+)
 
 
 def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:

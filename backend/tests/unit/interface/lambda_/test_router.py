@@ -10,7 +10,10 @@ from tests._support.settings import make_settings
 
 
 def _evt(
-    *, method: str = "POST", path: str = "/api/sample/generate", body: str | None = None,
+    *,
+    method: str = "POST",
+    path: str = "/api/sample/generate",
+    body: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {

@@ -73,7 +73,9 @@ def test_build_chat_routes_key_through_x_api_key_field() -> None:
     # Constraint (b): the key must authenticate via x-api-key, never Authorization: Bearer. The
     # anthropic SDK uses x-api-key exclusively, so routing the key into ChatAnthropic's
     # ``anthropic_api_key`` field (not a hand-built header) guarantees it at the construction seam.
-    chat = _build_chat("claude-haiku-4-5", SecretStr("sk-secret"), "https://api.anthropic.com", 5.0, 64)
+    chat = _build_chat(
+        "claude-haiku-4-5", SecretStr("sk-secret"), "https://api.anthropic.com", 5.0, 64
+    )
     assert isinstance(chat, ChatAnthropic)
     assert chat.anthropic_api_key is not None
     assert chat.anthropic_api_key.get_secret_value() == "sk-secret"

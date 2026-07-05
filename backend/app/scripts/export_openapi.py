@@ -230,7 +230,9 @@ def _details_schemas_by_code() -> dict[str, dict[str, Any]]:
     by_code: dict[str, dict[str, Any]] = {}
     for cls in _application_error_subclasses():
         if cls.code in by_code:
-            raise RuntimeError(f"duplicate error code {cls.code!r} across ApplicationError subclasses")
+            raise RuntimeError(
+                f"duplicate error code {cls.code!r} across ApplicationError subclasses"
+            )
         ret = typing.get_type_hints(cls.details_dict).get("return")
         by_code[cls.code] = (
             _typeddict_schema(ret) if typing.is_typeddict(ret) else _empty_object_schema()
@@ -333,7 +335,10 @@ def _operation(endpoint: dict[str, Any], operation_id: str) -> dict[str, Any]:
         operation["parameters"] = [_header_param(h) for h in headers]
 
     if endpoint.get("request_json"):
-        operation["requestBody"] = {"required": True, "content": _json_content(endpoint["request_json"])}
+        operation["requestBody"] = {
+            "required": True,
+            "content": _json_content(endpoint["request_json"]),
+        }
     elif endpoint.get("request_multipart"):
         operation["requestBody"] = {
             "required": True,
@@ -413,7 +418,9 @@ def _build_document() -> dict[str, Any]:
 def main() -> None:
     """Write the OpenAPI document to ``docs/openapi.yaml`` (JSON content, valid YAML)."""
     document = _build_document()
-    _OUTPUT_PATH.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _OUTPUT_PATH.write_text(
+        json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     print(f"wrote {_OUTPUT_PATH} ({len(document['paths'])} paths)")
 
 

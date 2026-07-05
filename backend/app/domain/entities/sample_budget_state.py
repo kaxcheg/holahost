@@ -50,7 +50,9 @@ class SampleBudgetState:
         Returns:
             A SampleBudgetState reflecting the persisted values.
         """
-        return cls(day=day, output_tokens_used=output_tokens_used, dollars_spent_est=dollars_spent_est)
+        return cls(
+            day=day, output_tokens_used=output_tokens_used, dollars_spent_est=dollars_spent_est
+        )
 
     def is_exhausted(self, cap_tokens: int) -> bool:
         """Check whether the daily token budget is exhausted.
