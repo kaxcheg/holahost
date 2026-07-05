@@ -1,6 +1,6 @@
 # Module instances for this env. Static config from infra/config.yaml (single source); shared
 # resources (frontend bucket, hosted zone, ACM cert) live in the `shared` root and are read here
-# via data sources. ecr / lambda / observability land in I-08 … I-13.
+# via data sources. ecr / lambda / observability landed in I-08 … I-13.
 locals {
   cfg     = yamldecode(file("${path.module}/../../config.yaml"))
   project = local.cfg.project
@@ -98,6 +98,17 @@ module "cloudfront" {
   acm_certificate_arn         = data.aws_acm_certificate.frontend.arn
   route53_zone_id             = data.aws_route53_zone.primary.zone_id
   api_origin_domain           = module.lambda.function_url_domain
+}
+
+module "observability" {
+  source = "../../modules/observability"
+
+  name_prefix            = local.env_cfg.name_prefix
+  api_log_group_name     = module.lambda.api_log_group_name
+  cleanup_log_group_name = module.lambda.cleanup_log_group_name
+  alert_email            = local.cfg.alert_email
+  # Single source of the cap is <env>.env (§10.9) — reuse the already-parsed be-env map.
+  sample_budget_daily_cap_tokens = tonumber(local.beenv_nonsecret["SAMPLE_BUDGET_DAILY_CAP_TOKENS"])
 }
 
 # CloudFront → Function URL invoke (D-28). Root-level (needs the distribution ARN → no module cycle);

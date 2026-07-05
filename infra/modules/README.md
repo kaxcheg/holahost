@@ -19,4 +19,4 @@ config values); see spec **§10.9 Settings inventory** for the full app-vs-infra
 | `cloudfront`    | I-11   | per-env    | per-env distribution + own OAC + response-headers policy + `/config/*` + SPA fallback + alias records |
 | `lambda`        | I-12   | per-env    | `holahost-{env}-api` + `-cleanup` + EventBridge + GetSecretValue IAM + `/api/*` CloudFront behavior |
 | `observability` | I-13   | per-env    | log groups, metric filters, alarms, SNS + email subscription     |
-| `github_repo`   | I-14   | (repo)     | repo settings, branch protection, GitHub Environments            |
+| `github_repo`   | I-14   | repo       | repo settings, branch protection, GitHub Environments            |

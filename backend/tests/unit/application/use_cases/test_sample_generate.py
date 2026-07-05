@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, time, timedelta
 
 import pytest
@@ -14,6 +15,7 @@ from application.exceptions import (
 from application.ports.rate import RateLimitScope
 from application.use_cases.sample_generate import SampleGenerateUseCase
 from config.config import Settings
+from config.logging import configure_logging
 from domain.entities.chunk import Chunk
 from domain.entities.generated_reply import GeneratedReply
 from domain.entities.sample_budget_state import SampleBudgetState
@@ -105,3 +107,16 @@ class TestSampleGenerate:
         assert isinstance(api_key, SecretStr)
         assert api_key.get_secret_value() == "sk-sample-key"
         assert call["is_byok"] is False
+
+    def test_happy_path_emits_sample_response_completed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging()
+        _uc(llm=FakeLLMClient(reply=GeneratedReply.create("answer", 100))).execute(_CMD)
+        records = [
+            json.loads(line) for line in capsys.readouterr().err.strip().splitlines() if line
+        ]
+        event = next(r for r in records if r["event"] == "sample_response_completed")
+        # §10.5: the sample-budget metric filter reads sample_tokens_used from this event (I-13).
+        assert event["sample_tokens_used"] == 100
+        assert event["level"] == "INFO"

@@ -37,12 +37,13 @@ resource "aws_acm_certificate_validation" "cert" {
   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
 }
 
-# Email-auth records (empty until I-16 populates var.email_dns_records).
+# Email-auth records (empty until I-16 populates var.email_dns_records). Keyed by label, named by
+# the `name` field — several record types can share one DNS name (MX + SPF TXT on send.<domain>).
 resource "aws_route53_record" "email" {
   for_each = var.email_dns_records
 
   zone_id = aws_route53_zone.primary.zone_id
-  name    = each.key
+  name    = each.value.name
   type    = each.value.type
   ttl     = each.value.ttl
   records = each.value.records
