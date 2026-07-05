@@ -3374,13 +3374,13 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
   ```
 - **Границы** — вариант **α**:
   - **CloudWatch Logs**: все structured-JSON логи (один log group на Lambda); retention 30 дней (`Settings.cloudwatch_log_retention_days` через env).
-  - **CloudWatch Metrics** (metric-filter на log group):
+  - **CloudWatch Metrics** (metric-filter на log group; I-13 — метрики хранят **сырые** значения, p95/суточная сумма — статистика alarm'а, не имя метрики):
     - `request_count{endpoint, status}`
-    - `request_duration_p95{endpoint}` (extracted из `duration_ms`)
+    - `request_duration_ms{endpoint}` (value = `duration_ms`)
     - `error_count{code}` (extracted из `event=http_request_completed AND level=ERROR`)
-    - `sample_budget_tokens_used_today` (extracted из `event=sample_response_completed`)
-    - `cleanup_deleted_guidebooks`, `cleanup_expired_magic_links`, `cleanup_deleted_rate_windows` (extracted из cleanup-Lambda events).
-  - **CloudWatch Alarms**: `request_duration_p95{endpoint=/api/generate} > 8s` (RESPONSE_P95_BUDGET, §10.2); `request_duration_p95{endpoint=/api/ingest/*} > 60s`; `error_count{code=ERR_INTERNAL} > N/min`; `sample_budget_tokens_used_today > 0.8 × SAMPLE_BUDGET_DAILY_CAP`. Alarm-action — SNS topic → email хоста проекта.
+    - `sample_budget_tokens_used` (value = `sample_tokens_used` из `event=sample_response_completed`; событие эмитит `SampleGenerateUseCase.execute` сразу после `add_usage` — единственная точка, где известны output-токены; I-13)
+    - `cleanup_deleted_guidebooks`, `cleanup_expired_magic_links`, `cleanup_deleted_rate_windows` (extracted из `event=cleanup_completed` cleanup-Lambda).
+  - **CloudWatch Alarms** (I-13): `p95(request_duration_ms{endpoint=/api/generate})` за 15 мин `> 8s` (RESPONSE_P95_BUDGET, §10.2); `p95(request_duration_ms{endpoint=/api/ingest/upload})` за 15 мин `> 60s`; `error_count{code=ERR_INTERNAL} ≥ 1` за 5 мин (unhandled-ошибки «в норме ноль» — любая сигнальна); `Sum(sample_budget_tokens_used)` за сутки `> 0.8 × SAMPLE_BUDGET_DAILY_CAP`. Alarm-action — per-env SNS topic `holahost-<env>-alarms` → email `alert_email` (config.yaml, §10.9); email-подписка подтверждается вручную после apply (runbook). Known gap (принято, I-13): провал cleanup-Lambda не алармится (`cleanup_completed` логирует только успех); кандидат на расширение — alarm на `AWS/Lambda Errors{FunctionName=holahost-<env>-cleanup}`.
   - **Sentry** (через `sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.env)`): только unhandled-`Exception` (handler в `interface/lambda_/handler.py` ловит `ApplicationError` отдельно — это **не** Sentry-сигнал; всё, что прорвалось до top-level `except Exception`, идёт в Sentry с PII-scrubbing).
   - **Postgres / Neon Insights**: pg_stat_statements нативно (Neon dashboard); top-N slow queries раз в неделю — ручной чек, не автоматизирован.
 - **PII / secret-scrubbing** — вариант **III**: helper `log_event(event_name: str, *, level: int = logging.INFO, **fields)` в `config/logging.py` (дом логирования — `config/`, импортируемый всеми слоями, не `interface/`; уровень задаёт вызывающий — `level=logging.ERROR` для failure-событий, чтобы метрика `error_count{code}` с фильтром `level=ERROR` срабатывала). Allowlist полей фиксированный (на момент MVP):
@@ -3719,7 +3719,7 @@ Consumes root/module inputs.
 
 | Setting | Source |
 |---|---|
-| `aws_region`, `project`, `frontend_bucket`, `domain`, `email_dns_records`, `guidebook_template_path`, `sample_guidebook_path`, `sample_guidebook_key`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` / `system_prompt_key` / `system_prompt_path` / Lambda sizing (`lambda_api_memory_mb` / `lambda_api_timeout_s` / `lambda_cleanup_*`) / `log_retention_days` | **config.yaml** |
+| `aws_region`, `project`, `frontend_bucket`, `domain`, `alert_email` (SNS alarm subscription, I-13), `github_owner` (github provider owner + prod deploy reviewer, I-14), `email_dns_records` (keyed by free-form label, DNS name in the `name` field — Resend puts MX + SPF TXT on one name; I-16), `guidebook_template_path`, `sample_guidebook_path`, `sample_guidebook_key`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` / `system_prompt_key` / `system_prompt_path` / Lambda sizing (`lambda_api_memory_mb` / `lambda_api_timeout_s` / `lambda_cleanup_*`) / `log_retention_days` | **config.yaml** |
 | `secret_keys` (the SM secret names) | backend `sm_loader.SERVER_SIDE_SECRET_KEYS` — the `sm` module mirrors it as a default and re-exports it (`secret_keys` output); the per-env lambda env-parse consumes that output (uppercased) to drop the secrets from be-env, so no third hardcoded copy exists |
 | the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` + per-env `docs/<env>_system_prompt.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md` / `system-prompt/<env>.md`; their **paths** come from config.yaml `guidebook_template_path` / `sample_guidebook_path` / `envs.<env>.system_prompt_path`) | app data files |
 | state-bucket names `holahost-tfstate-{shared,staging,prod}` | literals in each `backend.tf` (Terraform forbids interpolation in the backend block) |
@@ -3982,7 +3982,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 Описание Terraform лежит в `infra/` репо `holahost/`. Структура: модули per ресурс в `infra/modules/`; статический инфра-конфиг — единый файл **`infra/config.yaml`** (single source of truth, читается каждым root'ом через `yamldecode`; §10.9). Single-instance-ресурсы (общий frontend-bucket `holahost-frontend`, зона `hola.host`, ACM-сертификат, ECR-репо `holahost-api`) вынесены в отдельный root **`infra/envs/shared/`**; per-env root'ы `infra/envs/{staging,prod}/` читают их через `data`-источники и добавляют свои per-env-ресурсы (CloudFront, Lambda). Модули получают значения из `config.yaml` явными входами (без module-default'ов для конфиг-значений). App-config staging/prod-Lambda берётся из committed `infra/envs/<env>/<env>.env` — root парсит его inline (минус SM-секреты) и инжектит в Lambda (§10.9).
 
-Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated), отдельный bucket per env. Применение — `terraform init && terraform plan && terraform apply` из соответствующего `envs/<env>/` каталога.
+Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated), отдельный bucket per root. Помимо `shared`/`staging`/`prod` существует четвёртый root **`infra/envs/repo/`** (модуль `github_repo`, I-14; bucket `holahost-tfstate-repo`) — GitHub-репозиторий не привязан ни к одному AWS-env. Применение — `terraform init && terraform plan && terraform apply` из соответствующего `envs/<root>/` каталога.
 
 Исключение «chicken-and-egg»: ресурсы backend state'а (S3-bucket'ы) создаются вручную один раз; задокументированы в Environment runbook.
 
@@ -4237,6 +4237,8 @@ Strict с первого коммита; ослабление настроек �
 - `restrict_pushes`: `push_allowances = []` — direct push запрещён; merge допускается из веток с префиксом `feature/`, `bugfix/`, `refactor/`, `chore/`, `docs/`, `test/`, `release/v*` (back-merge), `hotfix/v*` (back-merge);
 - `allow_force_pushes = false`, `allow_deletions = false`.
 
+> **Стадированное включение (I-14).** Для обеих веток до появления второго maintainer'а действует `required_approving_review_count = 0` — автор в GitHub не может одобрить собственный PR, значение 1 блокировало бы соло-merge; поднимается до 1 со вторым maintainer'ом. `require_status_checks` не задаются, пока CI-контекстов не существует (C-04 добавляет их в модуль `github_repo`). Блок `restrict_pushes` **не используется**: в GitHub push-restriction распространяется и на merge PR'ов — пустой allowlist при `enforce_admins = true` сделал бы ветки немёржабельными; «никакого прямого push» обеспечивает сам required-PR, а «merge только из допустимых префиксов» — конвенция + PR-чеклист (§13.6).
+
 **Merge-стратегия:**
 - `allow_merge_commit = true` — merge-commits разрешены (нужны для GitFlow: `release/v* → main`, `release/v* → develop` back-merge, `hotfix/v* → main`, `hotfix/v* → develop` back-merge — `--no-ff` сохраняет точку ветвления для аудита);
 - `allow_squash_merge = true` — squash-commits разрешены (используются для `feature/*`, `bugfix/*`, `refactor/*`, `chore/*`, `docs/*`, `test/*` → `develop` — сохраняют one-commit-per-PR в `develop`);
@@ -4366,13 +4368,13 @@ Strict с первого коммита; ослабление настроек �
 - `I-07` Neon project + ветки `staging`/`prod`, connection strings → Secrets Manager — §12.0
 - `I-08` TF module `ecr` (единый `holahost-api` в `shared`-root; `IMMUTABLE_WITH_EXCLUSION` — `latest*` mutable для bootstrap-образа; lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
 - `I-09` TF module `s3_frontend` (единый bucket `holahost-frontend` в `shared`-root + PAB/versioning/SSE + bucket policy OAC-only через account-scoped `AWS:SourceArn` + публикация `config/template_schema.json` и `config/sample_guidebook.md`) — §12.0 / §13.4 / §10.6
-- `I-10` TF module `route53` (hosted zone `hola.host` в `shared`-root + ACM cert us-east-1 DNS-validated + `email_dns_records` passthrough — DKIM/SPF/DMARC пусты до I-16) — §10.3 / §10.7 / §12.4
+- `I-10` TF module `route53` (hosted zone `hola.host` в `shared`-root + ACM cert us-east-1 DNS-validated + `email_dns_records` passthrough — DKIM/SPF/DMARC пусты до I-16; map ключуется свободным label'ом, DNS-имя — поле `name`: MX и SPF TXT Resend делят имя `send.<domain>`, I-16) — §10.3 / §10.7 / §12.4
 - `I-11` TF module `cloudfront` (per-env distribution staging/prod + response-headers policy §10.3 + cache-behavior `/config/*` TTL 300 + OAC к shared-bucket + SPA-fallback 403/404→index + origin path `releases/<git-sha>/`) — §10.3 / §13.4 / §10.6
 - `I-12` TF module `lambda` (`holahost-{env}-api` Function URL `AWS_IAM` + `holahost-{env}-cleanup` + EventBridge `cron(30 0 * * ? *)`; exec-role: `GetSecretValue` на `sm`-ARN'ы + `s3:GetObject` на sample-guidebook + приватный `system-prompt/*` + own log-groups; `image_uri=<ecr>:latest` + `ignore_changes` (CI меняет образ `update-function-code`); расширяет `cloudfront` — `/api/*` origin+OAC + SPA CloudFront Function вместо `custom_error_response`; env собирается inline-парсом committed `<env>.env` в root'е; `SYSTEM_PROMPT`→S3 cold-start (D-30); boto-фабрики в `infrastructure/boto`) — §10.1 / §10.2 / §8.6 / §10.3
-- `I-13` TF module `observability` (log groups, metric filters, CloudWatch alarms, SNS + email subscription) — §10.5
-- `I-14` TF module `github_repo` (settings, branch protection для `main` + `develop`, GitHub Environments staging/prod) — §13.7
-- `I-15` Environment runbook `infra/README.md` (prereq, initial setup, dev/staging/prod секции, rollback, access) — §12.4
-- `I-16` Resend account + домен `hola.host`, верификация DKIM/SPF/DMARC, sandbox + production API keys → Secrets Manager — §10.7
+- `I-13` TF module `observability` (metric filters, CloudWatch alarms, SNS + email subscription; log group'ы созданы `lambda`-модулем в I-12 — observability потребляет их имена через outputs; +эмиссия `sample_response_completed` в `SampleGenerateUseCase`) — §10.5
+- `I-14` TF module `github_repo` (settings — репо public (§10.3), branch protection для `main` + `develop` со стадированным включением (§13.7), GitHub Environments staging/prod; отдельный root `infra/envs/repo/` + state-bucket `holahost-tfstate-repo`, §12.2) — §13.7
+- `I-15` Environment runbook `infra/README.md` (prereq, initial setup, repo/dev/staging/prod секции, deploy, rollback, access) — §12.4
+- `I-16` Resend account + домен `hola.host`, верификация DKIM/SPF/DMARC, sandbox + production API keys → Secrets Manager (реализован как пошаговая инструкция в `infra/README.md`; фактические DNS-значения/ключи вносятся при развёртывании) — §10.7
 - `I-17` Sentry org + project `holahost`, environments staging/prod, DSN → Secrets Manager — §10.5
 
 ### 14.4 CI/CD
