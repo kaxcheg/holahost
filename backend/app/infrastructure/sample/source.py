@@ -42,22 +42,6 @@ class FileSampleGuidebookSource:
         return self._path.read_bytes()
 
 
-def make_s3_client(region: str) -> S3Client:
-    """Build an S3 client bound to an explicit region (staging/prod sample source).
-
-    ``boto3`` is imported lazily so the dev cold start (file source) never pays for it; the region is
-    explicit (the Lambda runtime provides ``AWS_REGION``), mirroring ``scripts.sm_loader.make_secrets_client``.
-
-    :returns: a boto3 S3 client bound to ``region``.
-    """
-    import boto3
-
-    # Explicit annotation: mypy resolves the boto3-stubs overload to S3Client; the annotation also keeps
-    # editors (Pyright) from treating the client as partially-unknown — without a mypy-redundant cast.
-    client: S3Client = boto3.session.Session().client("s3", region_name=region)
-    return client
-
-
 class S3SampleGuidebookSource:
     """Reads the sample guidebook from an S3 object (staging/prod).
 
@@ -71,7 +55,7 @@ class S3SampleGuidebookSource:
         """Init.
 
         Args:
-            client: S3 client (see :func:`make_s3_client`).
+            client: S3 client (see ``infrastructure.boto.clients.make_s3_client``).
             bucket: S3 bucket holding the sample-guidebook object.
             key: Object key of the sample guidebook within ``bucket``.
         """

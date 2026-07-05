@@ -71,8 +71,25 @@ resource "aws_s3_object" "template_schema" {
 # module (I-12). Updatable without a redeploy — re-apply to publish a new version.
 resource "aws_s3_object" "sample_guidebook" {
   bucket       = aws_s3_bucket.frontend.id
-  key          = "config/sample_guidebook.md"
+  key          = var.sample_guidebook_key
   source       = var.sample_guidebook_path
   etag         = filemd5(var.sample_guidebook_path)
   content_type = "text/markdown"
+}
+
+# System prompt per env (§10.3). Private prefix `system-prompt/` — NOT under `config/`, so no CloudFront
+# behavior serves it publicly (only the Lambda role reads it via S3). Seeded from the repo file, then
+# edited live via `aws s3 cp`; ignore_changes keeps live edits from being reverted on apply (changeable
+# without a redeploy). Read from S3 by the backend at cold start (SYSTEM_PROMPT_S3_BUCKET/_KEY).
+resource "aws_s3_object" "system_prompt" {
+  for_each = var.system_prompt_objects
+
+  bucket       = aws_s3_bucket.frontend.id
+  key          = each.value.key
+  source       = each.value.source
+  content_type = "text/markdown"
+
+  lifecycle {
+    ignore_changes = [source, etag]
+  }
 }

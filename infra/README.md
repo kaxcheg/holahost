@@ -2,14 +2,16 @@
 
 Operational runbook for provisioning and operating hola.host environments, organised **per environment**
 (`dev` / `staging` / `prod`, spec §12.4). Built incrementally: shared one-time bootstrap (AWS account I-03,
-Terraform backend I-04) and the `sm` secrets module (I-06 / I-07) are covered below; the full staging/prod
-deploy · smoke · rollback · rotation steps land in **I-15**.
+Terraform backend I-04), the `sm` secrets module (I-06 / I-07), the shared `ecr` repo (I-08), and the
+per-env `lambda` functions (I-12) are covered below; the full staging/prod deploy · smoke · rollback ·
+rotation steps land in **I-15**.
 
 Context: serverless on a **single AWS account**; staging/prod isolated by the name-prefix
 `holahost-{env}-*`, separate Terraform state, and separate IAM deploy roles (spec §12).
 
-**Configuration.** Infra static config (region, bucket/domain names, per-env prefix/recovery/price)
-lives in a single [`infra/config.yaml`](config.yaml), read by every Terraform root (`yamldecode`);
+**Configuration.** Infra static config (region, bucket/domain names, per-env prefix/recovery/price/Lambda
+sizing, data-file + system-prompt paths) lives in a single [`infra/config.yaml`](config.yaml), read by
+every Terraform root (`yamldecode`);
 modules receive it as explicit inputs. App runtime settings live in `infra/envs/<env>/<env>.env`. The
 full app-vs-infra map (every setting → its single source) is spec **§10.9 Settings inventory**
 ([`docs/hola_host_spec.md`](../docs/hola_host_spec.md)).
@@ -140,8 +142,10 @@ root/state (`holahost-tfstate-shared`). **Apply this before `staging` / `prod`**
 these via data sources.
 
 1. **Terraform init + apply.** Creates the private, versioned `holahost-frontend` bucket (OAC-only read)
-   + the `config/template_schema.json` object (from `docs/guidebook_template.json`), the hosted zone
-   `hola.host`, and the ACM cert for `hola.host` + `staging.hola.host` (DNS-validated).
+   + its published objects (`config/template_schema.json`, `config/sample_guidebook.md`, and the per-env
+   `system-prompt/<env>.md` seeds), the hosted zone `hola.host`, the ACM cert for `hola.host` +
+   `staging.hola.host` (DNS-validated), and the single **ECR repo `holahost-api`** (I-08) that both envs
+   deploy the API image to.
    ```bash
    cd infra/envs/shared
    terraform init
@@ -156,8 +160,18 @@ these via data sources.
    ```
 3. **Email DNS (SPF/DKIM/DMARC)** stays empty until Resend is configured (I-16): populate the
    `email_dns_records` variable with the values from the Resend dashboard and re-apply.
+4. **Push a bootstrap API image** (one-time, before the first per-env `lambda` apply — the `lambda`
+   module creates its functions from `holahost-api:latest`, so that tag must exist first):
+   ```bash
+   ECR_URL=$(terraform output -raw ecr_repository_url)   # from infra/envs/shared
+   aws ecr get-login-password --region eu-west-3 \
+     | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
+   (cd ../../.. && docker build -f backend/Dockerfile -t "$ECR_URL:latest" .)   # build context = repo root
+   docker push "$ECR_URL:latest"
+   ```
+   CI later replaces the running image per deploy via `update-function-code` (§13.5, I-15).
 
-*(Per-env CloudFront distributions are added in the `staging` / `prod` roots — see below.)*
+*(Per-env CloudFront distributions + Lambda functions are added in the `staging` / `prod` roots — see below.)*
 
 ---
 
@@ -179,11 +193,12 @@ region (§12.3).
    terraform init
    terraform apply
    ```
-   Also provisions this env's **CloudFront distribution** (`cloudfront` module) + its `staging.hola.host`
-   alias record, reading the shared bucket / zone / cert via data sources — so the **`shared` root must be
-   applied first**.
-   *(The `ecr`, `lambda`, `observability` modules are added to this env in I-08 / I-12 / I-13; their
-   apply/deploy steps land in I-15.)*
+   Also provisions this env's **Lambda functions** (`lambda` module: `holahost-staging-api` with a
+   Function URL + the scheduled `holahost-staging-cleanup`, I-12) and its **CloudFront distribution**
+   (`cloudfront` module: static + `/config/*` + `/api/*` → the Function URL) + the `staging.hola.host`
+   alias record. It reads the shared bucket / zone / cert / **ECR repo** via data sources — so the
+   **`shared` root must be applied first** and its bootstrap image pushed (shared step 4).
+   *(The `observability` module is added in I-13; the full image/frontend deploy sequence is I-15.)*
 2. **Neon `staging` branch → connection string** (manual). In the Neon console create branch `staging`
    under project `holahost`, copy its **pooled** connection string (host contains `-pooler`):
    `postgresql://<user>:<pass>@<host>-pooler.<region>.aws.neon.tech/<db>?sslmode=require`. Store the plain
@@ -216,9 +231,11 @@ Same shape as `staging` (same `AWS_PROFILE` / `AWS_REGION` exports), with a sepa
 
 1. **Terraform init + apply.** Provisions
    `holahost/prod/{database_url,resend_api_key,ip_hash_salt,sample_server_api_key}` (value-less;
-   `recovery_window_in_days = 30` → 30-day recovery window before permanent deletion), plus this env's
-   **CloudFront distribution** + `hola.host` alias record (reads the shared bucket / zone / cert — the
-   **`shared` root must be applied first**).
+   `recovery_window_in_days = 30` → 30-day recovery window before permanent deletion), this env's
+   **Lambda functions** (`holahost-prod-api` Function URL + `holahost-prod-cleanup`, I-12), plus its
+   **CloudFront distribution** (static + `/config/*` + `/api/*`) + `hola.host` alias record (reads the
+   shared bucket / zone / cert / **ECR repo** — the **`shared` root must be applied first**, bootstrap
+   image pushed).
    ```bash
    cd infra/envs/prod
    terraform init
@@ -249,6 +266,34 @@ Same shape as `staging` (same `AWS_PROFILE` / `AWS_REGION` exports), with a sepa
 *(Deploy image / frontend bundle / post-deploy smoke / rollback — I-15.)*
 
 ---
+
+## Hot-updating a prompt / sample-guidebook / secret (force re-read)
+
+The system prompt (`system-prompt/<env>.md`), the sample guidebook (`config/sample_guidebook.md`), and
+the four Secrets Manager values are read once per **cold start** by `scripts/bootstrap.py` — a warm
+Lambda container keeps the old value in memory. To apply a change **without a redeploy** (no image
+rebuild, no `update-function-code`):
+
+1. Update the source object / secret:
+   ```bash
+   export AWS_PROFILE=holahost AWS_REGION=eu-west-3
+   # prompt (private, live-editable — s3_frontend's ignore_changes keeps Terraform from reverting it):
+   aws s3 cp new_prompt.md s3://holahost-frontend/system-prompt/<env>.md
+   # sample guidebook:
+   aws s3 cp new_sample.md s3://holahost-frontend/config/sample_guidebook.md
+   # a secret value:
+   aws secretsmanager put-secret-value --secret-id holahost/<env>/<key> --secret-string '…'
+   ```
+2. Force every execution environment to recycle so the next invocations cold-start and re-read. A no-op
+   **configuration** update does this — it is NOT an image redeploy:
+   ```bash
+   for FN in holahost-<env>-api holahost-<env>-cleanup; do
+     aws lambda update-function-configuration \
+       --function-name "$FN" --description "force cold start $(date -u +%FT%TZ)"
+   done
+   ```
+3. Verify: the next request logs a fresh `INIT_START` in CloudWatch (`/aws/lambda/holahost-<env>-api`)
+   and serves the new value. Warm containers not yet recycled drain naturally.
 
 ## Next (I-15)
 

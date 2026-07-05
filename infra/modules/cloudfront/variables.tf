@@ -33,3 +33,8 @@ variable "price_class" {
   type        = string
   description = "CloudFront price class (supplied per env from infra/config.yaml)."
 }
+
+variable "api_origin_domain" {
+  type        = string
+  description = "Lambda Function URL host (from the lambda module) served under /api/*."
+}
