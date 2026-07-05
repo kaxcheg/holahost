@@ -47,7 +47,7 @@ function resolveConfig(mode: string): Record<string, string | undefined> {
  * (`MAGIC_LINK_URL_PARAM`) and the landing path (`MAGIC_LINK_PATH`). Both are baked into the bundle —
  * the frontend uses the param to read `?<param>=` and the path to scope the landing (see
  * boot/magic-link-landing) — and Terraform relays both to the backend Lambda (I-12) to build the email
- * link. Read from frontend/.env (gitignored, copied from .env.example); `process.env` overrides for CI.
+ * link. Read from frontend/.env (committed, non-secret); `process.env` overrides for CI.
  */
 function resolveContract(): Record<string, string | undefined> {
   const path = resolve(import.meta.dirname, '.env');

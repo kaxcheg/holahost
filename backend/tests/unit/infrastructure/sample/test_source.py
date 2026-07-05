@@ -1,4 +1,4 @@
-from infrastructure.sample.source import S3SampleGuidebookSource, make_s3_client
+from infrastructure.sample.source import S3SampleGuidebookSource
 
 
 class _FakeBody:
@@ -20,7 +20,3 @@ def test_s3_source_reads_object_bytes() -> None:
     source = S3SampleGuidebookSource(s3, bucket="holahost-frontend", key="config/sample_guidebook.md")
     assert source.read() == b"sample-guidebook-bytes"
     assert s3.requested == [("holahost-frontend", "config/sample_guidebook.md")]
-
-
-def test_make_s3_client_uses_explicit_region() -> None:
-    assert make_s3_client("eu-west-1").meta.region_name == "eu-west-1"

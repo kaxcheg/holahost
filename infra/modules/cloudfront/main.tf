@@ -5,6 +5,15 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
   signing_protocol                  = "sigv4"
 }
 
+# OAC for the Lambda Function URL origin — CloudFront signs sigv4 so the Function URL (AWS_IAM) is not
+# publicly invocable (D-28).
+resource "aws_cloudfront_origin_access_control" "lambda" {
+  name                              = "${var.name_prefix}-api-oac"
+  origin_access_control_origin_type = "lambda"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
 # Security headers for static responses (§10.3). Env-scoped name → one policy per env (identical
 # content), keeps the module self-contained (no shared→env cross-state dependency).
 resource "aws_cloudfront_response_headers_policy" "security" {
@@ -70,6 +79,35 @@ data "aws_cloudfront_cache_policy" "optimized" {
   name = "Managed-CachingOptimized"
 }
 
+# /api/* must not be cached and must NOT forward the viewer Host (Function URL SigV4 needs its own
+# Host) — managed policies.
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
+# SPA fallback (replaces the global custom_error_response, D-29). Attached to the DEFAULT behavior only
+# → /api/* and /config/* (own behaviors) are untouched, so API 4xx are never rewritten. Any request
+# without a file extension is a client-side route → serve index.html.
+resource "aws_cloudfront_function" "spa_rewrite" {
+  name    = "${var.name_prefix}-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  comment = "Rewrite extensionless requests to /index.html (default behavior only)."
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+      if (!request.uri.includes('.')) {
+        request.uri = '/index.html';
+      }
+      return request;
+    }
+  EOT
+}
+
 resource "aws_cloudfront_distribution" "frontend" {
   enabled             = true
   is_ipv6_enabled     = true
@@ -93,6 +131,20 @@ resource "aws_cloudfront_distribution" "frontend" {
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
   }
 
+  # Lambda Function URL origin for /api/* (I-12).
+  origin {
+    origin_id                = "lambda-api"
+    domain_name              = var.api_origin_domain
+    origin_access_control_id = aws_cloudfront_origin_access_control.lambda.id
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "https-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
   default_cache_behavior {
     target_origin_id           = "s3-releases"
     viewer_protocol_policy     = "redirect-to-https"
@@ -101,6 +153,11 @@ resource "aws_cloudfront_distribution" "frontend" {
     compress                   = true
     cache_policy_id            = data.aws_cloudfront_cache_policy.optimized.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_rewrite.arn
+    }
   }
 
   ordered_cache_behavior {
@@ -114,22 +171,22 @@ resource "aws_cloudfront_distribution" "frontend" {
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
   }
 
-  # SPA fallback: S3 returns 403/404 for client-side routes → serve index.html 200 (D-15).
-  # NOTE (I-12): once /api/* → Lambda is added, this global rewrite must be reconciled
-  # (CloudFront Function viewer-request rewrite) so API 4xx are not turned into index.html.
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
+  # API behavior: no caching, forward everything except Host (Function URL SigV4), no static
+  # response-headers policy (the Lambda sets its own security headers + CORS, §10.3).
+  ordered_cache_behavior {
+    path_pattern             = "/api/*"
+    target_origin_id         = "lambda-api"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    compress                 = true
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
   }
 
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
+  # SPA fallback is handled by aws_cloudfront_function.spa_rewrite (viewer-request, default behavior),
+  # not custom_error_response — otherwise a global 403/404→index rewrite would swallow /api/* JSON
+  # errors (D-29).
 
   restrictions {
     geo_restriction {

@@ -14,6 +14,13 @@ module "s3_frontend" {
   # config.yaml holds these repo-root-relative; the repo root is 3 levels up from this root dir.
   guidebook_template_path = "${path.module}/../../../${local.cfg.guidebook_template_path}"
   sample_guidebook_path   = "${path.module}/../../../${local.cfg.sample_guidebook_path}"
+  sample_guidebook_key    = local.cfg.sample_guidebook_key
+  system_prompt_objects = {
+    for e, c in local.cfg.envs : e => {
+      key    = c.system_prompt_key
+      source = "${path.module}/../../../${c.system_prompt_path}"
+    }
+  }
 }
 
 module "route53" {
@@ -26,4 +33,9 @@ module "route53" {
     aws           = aws
     aws.us_east_1 = aws.us_east_1
   }
+}
+
+module "ecr" {
+  source          = "../../modules/ecr"
+  repository_name = "${local.project}-api"
 }

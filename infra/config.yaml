@@ -21,6 +21,11 @@ domain:          hola.host
 guidebook_template_path: docs/guidebook_template.json
 sample_guidebook_path:   docs/sample_guidebook.md
 
+# Published S3 object keys (single source — s3_frontend publishes to these; the Lambda reads them, no
+# drifting literals in the roots). sample_guidebook is public (CloudFront /config/*); system_prompt is
+# private (no CloudFront behavior) and per-env — its key lives explicitly under envs.<env>.system_prompt_key.
+sample_guidebook_key: config/sample_guidebook.md
+
 # Email-auth DNS (SPF/DKIM/DMARC): keyed by record name. Empty until Resend is set up (I-16),
 # then filled here and re-applied by the `shared` root.
 email_dns_records: {}
@@ -31,8 +36,22 @@ envs:
     subdomain:               staging.hola.host
     recovery_window_in_days: 0 # staging: recreate secrets freely while iterating
     price_class:             PriceClass_100
+    system_prompt_key:       system-prompt/staging.md    # private S3 key (no CloudFront behavior)
+    system_prompt_path:      docs/staging_system_prompt.md # seed; live-editable in S3 (ignore_changes), read at cold start (D-30)
+    lambda_api_memory_mb:     2048 # embedding model baked in image → needs RAM
+    lambda_api_timeout_s:     60   # LLM_TIMEOUT_SECONDS=30 + margin
+    lambda_cleanup_memory_mb: 512
+    lambda_cleanup_timeout_s: 120
+    log_retention_days:       14
   prod:
     name_prefix:             holahost-prod
     subdomain:               hola.host
     recovery_window_in_days: 30 # prod: 30-day recovery window
     price_class:             PriceClass_100
+    system_prompt_key:       system-prompt/prod.md    # private S3 key (no CloudFront behavior)
+    system_prompt_path:      docs/prod_system_prompt.md # seed; live-editable in S3 (ignore_changes), read at cold start (D-30)
+    lambda_api_memory_mb:     2048
+    lambda_api_timeout_s:     60
+    lambda_cleanup_memory_mb: 512
+    lambda_cleanup_timeout_s: 120
+    log_retention_days:       30

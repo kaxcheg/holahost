@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from scripts.sm_loader import SERVER_SIDE_SECRET_KEYS, load_secrets_into_env, make_secrets_client
+from scripts.sm_loader import SERVER_SIDE_SECRET_KEYS, load_secrets_into_env
 
 
 class _FakeSM:
@@ -31,8 +31,3 @@ def test_load_secrets_populates_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert os.environ["DATABASE_URL"] == "val::holahost/staging/database_url"
     assert os.environ["SAMPLE_SERVER_API_KEY"] == "val::holahost/staging/sample_server_api_key"
     assert sm.requested == [f"holahost/staging/{k}" for k in SERVER_SIDE_SECRET_KEYS]
-
-
-def test_make_secrets_client_uses_explicit_region() -> None:
-    client = make_secrets_client("eu-west-1")
-    assert client.meta.region_name == "eu-west-1"

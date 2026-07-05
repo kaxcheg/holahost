@@ -21,6 +21,10 @@ htmlcov/
 *.env
 .env.*
 !.env.example
+# staging/prod be-env hold NO secrets (those live in Secrets Manager) → committed so Terraform reads
+# them directly as the Lambda env source (I-12). dev.env stays ignored (holds DEV_ANTHROPIC_API_KEY).
+!infra/envs/staging/staging.env
+!infra/envs/prod/prod.env
 
 # OS / editor
 .DS_Store

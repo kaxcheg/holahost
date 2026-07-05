@@ -25,6 +25,7 @@ from application.use_cases.resolve_magic_link import ResolveMagicLinkUseCase
 from application.use_cases.sample_generate import SampleGenerateUseCase
 from application.use_cases.upload_guidebook import UploadGuidebookUseCase
 from config.config import Settings
+from infrastructure.boto.clients import make_s3_client
 from infrastructure.common.url_safe_magic_link_generator import UrlSafeMagicLinkGenerator
 from infrastructure.db.sqlalchemy.postgres_chunks_repo import PostgresChunksRepo
 from infrastructure.db.sqlalchemy.postgres_guidebooks_repo import PostgresGuidebooksRepo
@@ -43,7 +44,6 @@ from infrastructure.sample.source import (
     FileSampleGuidebookSource,
     S3SampleGuidebookSource,
     SampleGuidebookSource,
-    make_s3_client,
 )
 from infrastructure.vector.numpy_vector_search import NumpyVectorSearch
 
