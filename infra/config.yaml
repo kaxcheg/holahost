@@ -19,14 +19,17 @@ github_owner:    kaxcheg           # github provider owner + prod deploy reviewe
 
 # Data files s3_frontend publishes to the frontend bucket (paths relative to the repo root; the root
 # resolves them). guidebook_template → config/template_schema.json (§10.6); sample_guidebook →
-# config/sample_guidebook.md (§8.6).
+# config/sample_guidebook.md (§8.6); sample_messages → config/sample_messages.json (US-01/F-20, I-18).
 guidebook_template_path: docs/guidebook_template.json
 sample_guidebook_path:   docs/sample_guidebook.md
+sample_messages_path:    docs/sample_messages.json
 
 # Published S3 object keys (single source — s3_frontend publishes to these; the Lambda reads them, no
-# drifting literals in the roots). sample_guidebook is public (CloudFront /config/*); system_prompt is
+# drifting literals in the roots). sample_guidebook and sample_messages are public (CloudFront
+# /config/*; sample_messages is frontend-only — the Lambda does not read it); system_prompt is
 # private (no CloudFront behavior) and per-env — its key lives explicitly under envs.<env>.system_prompt_key.
 sample_guidebook_key: config/sample_guidebook.md
+sample_messages_key:  config/sample_messages.json
 
 # Email-auth DNS (SPF/DKIM/DMARC): keyed by a free-form label, record name in `name` (several types
 # can share one name — Resend's MX + SPF TXT both sit on send.<domain>). Empty until Resend is set

@@ -145,7 +145,8 @@ root/state (`holahost-tfstate-shared`). **Apply this before `staging` / `prod`**
 these via data sources.
 
 1. **Terraform init + apply.** Creates the private, versioned `holahost-frontend` bucket (OAC-only read)
-   + its published objects (`config/template_schema.json`, `config/sample_guidebook.md`, and the per-env
+   + its published objects (`config/template_schema.json`, `config/sample_guidebook.md`,
+   `config/sample_messages.json`, and the per-env
    `system-prompt/<env>.md` seeds), the hosted zone `hola.host`, the ACM cert for `hola.host` +
    `staging.hola.host` (DNS-validated), and the single **ECR repo `holahost-api`** (I-08) that both envs
    deploy the API image to.
