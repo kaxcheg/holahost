@@ -80,9 +80,10 @@ class InvalidPayloadError(ApplicationError):
     """Generic invalid request payload (§8.4 / §9.0) → 422 ERR_INVALID_PAYLOAD.
 
     Raised when a VO/entity factory raises ``DomainValidationError`` (via ``payload_validation()``,
-    §9.0) or on an explicit payload check (honeypot); ``field`` / ``reason`` feed the §10.8
-    ``details`` payload. (Renamed from the legacy ``ERR_INVALID_TEMPLATE`` — the template flow was
-    removed in §10.6; this is the generic payload-validation code.)
+    §9.0) or by the interface layer on a shape/contract violation (``reason="invalid_json"``,
+    §10.8); ``field`` / ``reason`` feed the §10.8 ``details`` payload. (Renamed from the legacy
+    ``ERR_INVALID_TEMPLATE`` — the template flow was removed in §10.6; this is the generic
+    payload-validation code.)
     """
 
     code = "ERR_INVALID_PAYLOAD"
@@ -100,7 +101,7 @@ class InvalidPayloadError(ApplicationError):
             message: Technical message kept for ``details.field`` mapping (§9.0); sanitized
                 in the envelope before reaching the client.
             field: Offending field name from §10.6, or None.
-            reason: One of empty|too_long|contacts_no_phone|invalid_format|honeypot, or None.
+            reason: One of empty|too_long|contacts_no_phone|invalid_format|invalid_json, or None.
         """
         super().__init__(message)
         self.field = field

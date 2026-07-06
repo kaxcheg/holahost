@@ -62,21 +62,25 @@ class TestCaptureLead:
         assert len(leads.updated) == 1
         assert leads.updated[0].id == existing.id
 
-    def test_honeypot_rejected_before_side_effects(self) -> None:
+    def test_honeypot_silent_ack_no_side_effects(self) -> None:
         leads = FakeLeadsRepo()
         rate = FakeRateLimiter()
         sender = FakeEmailSender()
-        uc = _uc(leads, email=sender, rate=rate)
-        with pytest.raises(InvalidPayloadError) as exc:
-            uc.execute(
-                CaptureLeadCmd(
-                    email="x@y.co", flow="guidebook", ip_hash=_IP, ua_short=None, honeypot="bot"
-                )
+        gen = FakeMagicLinkGenerator()
+        uow = FakeUnitOfWork()
+        uc = _uc(leads, email=sender, rate=rate, gen=gen, uow=uow)
+        uc.execute(
+            CaptureLeadCmd(
+                email="x@y.co", flow="guidebook", ip_hash=_IP, ua_short=None, honeypot="bot"
             )
-        assert exc.value.reason == "honeypot"
+        )
         assert rate.calls == []
         assert leads.added == []
+        assert leads.updated == []
         assert sender.sent == []
+        assert uow.commits == 0
+        assert uow.rollbacks == 0
+        assert gen.count == 0
 
     def test_invalid_email_raises_payload(self) -> None:
         with pytest.raises(InvalidPayloadError):
