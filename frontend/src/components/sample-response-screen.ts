@@ -9,7 +9,10 @@ import { sampleMessages } from '../state/sample-messages';
 import { isValidGuestMessage, MAX_GUEST_MESSAGE_LENGTH } from '../utils/validation';
 
 /** Published sample-messages list (§10.9); dev-served from docs/ by vite.config.ts. */
-const MESSAGES_URL = '/config/sample_messages.json';
+export const MESSAGES_URL = '/config/sample_messages.json';
+
+/** Published sample guidebook (§10.9); key parity pinned by published-config-paths.test (C-11). */
+export const SAMPLE_GUIDEBOOK_URL = '/config/sample_guidebook.md';
 
 /** The list is a UX nicety: anything but non-empty strings degrades to an empty editable field. */
 function isMessageList(value: unknown): value is readonly string[] {
@@ -45,7 +48,7 @@ export class SampleResponseScreen extends HTMLElement {
         <div class="flex flex-col gap-2">
           <h1 class="text-2xl font-semibold">Try it on a sample</h1>
           <p class="text-gray-600">Send a guest message — or write your own — and see the drafted reply.</p>
-          <a href="/config/sample_guidebook.md" download="sample_guidebook.md" data-sample-download
+          <a href="${SAMPLE_GUIDEBOOK_URL}" download="sample_guidebook.md" data-sample-download
              class="text-sm text-blue-600 underline hover:text-blue-700">Download the sample guidebook</a>
         </div>
         <label class="flex flex-col gap-1 text-sm font-medium">
