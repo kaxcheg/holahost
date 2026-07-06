@@ -13,7 +13,8 @@ interface TemplateField {
   readonly hint: string;
 }
 
-const SCHEMA_URL = '/config/template_schema.json';
+/** Published schema path; parity with the S3 key is pinned by published-config-paths.test (C-11). */
+export const SCHEMA_URL = '/config/template_schema.json';
 const NAME_FIELD = 'property_name';
 
 /**

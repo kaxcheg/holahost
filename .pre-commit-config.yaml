@@ -67,3 +67,9 @@ repos:
         language: system
         files: ^frontend/.*\.ts$
         pass_filenames: false
+      - id: validate-sample-messages
+        name: validate sample_messages.json (non-empty string array)
+        entry: make validate-sample-messages
+        language: system
+        files: ^docs/sample_messages\.json$
+        pass_filenames: false

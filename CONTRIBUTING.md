@@ -88,6 +88,7 @@ make hooks-install   # installs the git hooks (pre-commit + commit-msg stages)
 
 The hook set (`.pre-commit-config.yaml`, spec §13.3): ruff check `--fix` + ruff format, mypy
 (strict), import-linter (clean-architecture contract), biome check `--write`, tsc `--noEmit`,
+validate-sample-messages (docs/sample_messages.json shape guard, C-10b),
 conventional-pre-commit, gitleaks, and the pre-commit-hooks basics (whitespace / EOF / yaml / json /
 merge-conflict / large files > 1 MB).
 

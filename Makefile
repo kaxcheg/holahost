@@ -1,6 +1,7 @@
 # hola.host monorepo orchestrator. Backend cmds run via `poetry run` for CI parity; frontend via npm.
 .DEFAULT_GOAL := help
 .PHONY: help lint format typecheck test test-int lint-imports check-versions \
+        validate-sample-messages \
         export-openapi check-openapi export-frontend-constants check-frontend-constants \
         fe-install fe-lint fe-typecheck fe-test fe-build fe-generate-types \
         dev-up dev-down dev-down-v dev-logs migrate-dev dev-test \
@@ -26,6 +27,8 @@ lint-imports: ## clean-architecture import contract
 	$(MAKE) -C backend lint-imports
 check-versions: ## verify toolchain versions agree across manifests (.tool-versions is the source)
 	cd backend && poetry run python ../scripts/check_versions.py
+validate-sample-messages: ## docs/sample_messages.json is a non-empty JSON array of non-empty strings (C-10b)
+	cd backend && poetry run python ../scripts/validate_sample_messages.py
 export-openapi: ; $(MAKE) -C backend export-openapi
 check-openapi: ; $(MAKE) -C backend check-openapi
 export-frontend-constants: ; $(MAKE) -C backend export-frontend-constants
