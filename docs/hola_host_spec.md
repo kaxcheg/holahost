@@ -69,7 +69,7 @@ stateDiagram-v2
 | Экран | Элементы |
 |---|---|
 | `entrypoint` | text · button Try sample · button Use guidebook |
-| `sample_response` | text · link download sample · field message (read-only, preloaded) · button Send · response area · button Leave email |
+| `sample_response` | text · link download sample (→ `/config/sample_guidebook.md`, §10.9) · field message (editable, preloaded из списка `SAMPLE_MESSAGES` §10.9) · button Send · response area (пары «сообщение → ответ») · button Leave email |
 | `capture_email` | text · field email · button Send |
 | `email_sent` | text «check your email» |
 | `guidebook` | text gb info (`name` / created · или «no guidebook yet») · field `name` (отображаемое имя гайдбука) · file chooser **OR** Generate by template · button Upload (disabled пока файл и `name` не заполнены) · button Next (disabled пока gb нет) |
@@ -89,7 +89,7 @@ stateDiagram-v2
 │  Instructions                          │
 │  ↳ download sample guidebook           │
 │  ┌──────────────────────────────────┐  │
-│  │ preloaded guest message (RO)      │  │
+│  │ preloaded message (editable)      │  │
 │  └──────────────────────────────────┘  │
 │  [ Send ]                              │
 │  ┌──────────────────────────────────┐  │
@@ -421,6 +421,7 @@ AC ссылаются на параметры по символическому 
 | `EMAIL_DEDUP_POLICY` | политика обработки повторного submit того же email | US-02: `silent_upsert_with_new_magic_link` |
 | `EMAIL_GUIDEBOOK_CARDINALITY` | кардинальность связи email ↔ Guidebook | US-04 / US-05: `1:1_replace` (magic_link не меняется) |
 | `LEAD_FLOW_VALUES` | возможные значения `Lead.flow` (точка захвата email) | §1.3: `guidebook` (из capture_email через `use_guidebook`), `sample` (из capture_email через `leave_email` в sample_response) |
+| `SAMPLE_MESSAGES` | упорядоченный список заготовленных сообщений гостя для sample-flow | §10.9 (`docs/sample_messages.json` → статика `/config/sample_messages.json`) |
 | `ERR_*` (`ERR_INVALID_API_KEY`, `ERR_INVALID_MAGIC_LINK`, `ERR_NOT_FOUND`, `ERR_NO_GUIDEBOOK`, `ERR_PAYLOAD_TOO_LARGE`, `ERR_TOO_MANY_CHUNKS`, `ERR_UNSUPPORTED_MEDIA_TYPE`, `ERR_EMPTY_DOCUMENT`, `ERR_INVALID_PAYLOAD`, `ERR_RATE_LIMIT`, `ERR_SAMPLE_BUDGET_EXHAUSTED`, `ERR_UPSTREAM_LLM`, `ERR_UPSTREAM_EMAIL`, `ERR_INTERNAL`) | символические идентификаторы классов ошибок; полный список и `details`-структура | §10.8 |
 
 ### US-01: Sample exploration
@@ -429,15 +430,18 @@ AC ссылаются на параметры по символическому 
 
 **AC:**
 - На экране `entrypoint` видна кнопка `Try sample` без скролла.
-- Клик `try_sample` переводит на `sample_response`: подгружается заготовленный гайдбук + упорядоченный список заготовленных сообщений гостя.
-- Поле сообщения **read-only**: содержит первое сообщение из списка.
-- На экране `sample_response` видна ссылка на скачивание тестового гайдбука.
-- Submit (`send`) генерирует ответ на серверном ключе; пользовательский API key не запрашивается.
-- После отображения ответа в `response area` следующее сообщение из списка подставляется в поле; ответ остаётся в `response area` (append).
+- Клик `try_sample` переводит на `sample_response`; фронт фетчит упорядоченный список заготовленных сообщений гостя `SAMPLE_MESSAGES` из статики `/config/sample_messages.json` (§10.9) — сетевой запрос виден в e2e (список не захардкожен в бандле).
+- Поле сообщения **editable**: prefilled первым сообщением из списка; пользователь может изменить или заменить текст; длина ограничена `MAX_GUEST_MESSAGE_LENGTH` на клиенте и на сервере.
+- Submit (`send`) отправляет **фактическое содержимое поля** (в e2e: `message` в body `POST /api/sample/generate` равен значению поля на момент клика); ответ генерируется на серверном ключе; пользовательский API key не запрашивается.
+- Ответ append'ится в `response area` **в паре с отправленным сообщением** (видно, на какой вопрос какой ответ); предыдущие пары сохраняются.
+- Ответ **заземлён на sample-гайдбук**: на guest_message с вопросом о факте, присутствующем в `docs/sample_guidebook.md` (напр. время check-in), `response_text` содержит этот факт — регресс-защита ретривала (пустой/нерелевантный контекст в ответе — дефект).
+- Ответ отображается как plain text без сырой Markdown-разметки (символы `#`, `**` и т.п. не видны пользователю); системный промпт sample-flow требует plain-text-ответ от первого лица хоста — без отсылок к «хозяину» в третьем лице (§10.3).
+- После отображения ответа следующее сообщение из списка подставляется в поле, **только если** поле всё ещё содержит отправленную заготовку (ручной ввод не затирается); после исчерпания списка подстановка прекращается, `Send` остаётся активен.
+- На экране `sample_response` видна ссылка на скачивание тестового гайдбука; клик скачивает **непустой** файл `sample_guidebook.md` — тот же опубликованный объект `/config/sample_guidebook.md`, который читает Lambda (§10.9). HTTP-ответ по href ссылки имеет не-HTML `Content-Type` (регресс-защита от SPA-fallback'а, молча отдающего `index.html`).
 - Превышение `RATE_LIMIT_PER_IP` → `ERR_RATE_LIMIT`.
 - Достижение `SAMPLE_BUDGET_DAILY_CAP` → `ERR_SAMPLE_BUDGET_EXHAUSTED`; sample недоступен до `SAMPLE_BUDGET_RESET_AT`.
 - На экране `sample_response` доступна кнопка `Leave your email` → переход на `capture_email` (флоу `Lead.flow = 'sample'`, см. US-02).
-- Ошибка в sample-flow (`ERR_*`) не выкидывает пользователя — он остаётся на `sample_response` с сообщением об ошибке.
+- Ошибка в sample-flow (`ERR_*`) не выкидывает пользователя — он остаётся на `sample_response` с сообщением об ошибке; введённый в поле текст сохраняется.
 
 ### US-02: Email capture (вход в guidebook flow или sample opt-in)
 
@@ -454,21 +458,28 @@ AC ссылаются на параметры по символическому 
 - После успешного submit пользователь переходит на экран `email_sent` («check your email»); далее пользователь закрывает вкладку и ждёт письма.
 - Превышение `RATE_LIMIT_PER_IP` → `ERR_RATE_LIMIT`.
 - В `leads` пишутся: email, `captured_at`, `last_seen_at`, `flow` (`guidebook` или `sample`), `ip_hash`, `ua_short`; при первом захвате `guidebook_id = NULL`.
+- Форма `capture_email` содержит скрытое honeypot-поле (`website`, `display:none`, недоступно человеку). Непустой honeypot → запрос **молча** отбрасывается: возвращается обычный ack (`200 {"status":"sent"}`, экран `email_sent`), но `Lead` **не создаётся** и письмо **не отправляется** — поведение неотличимо от успеха (§10.7).
+- После `silent_upsert_with_new_magic_link` для существующего email ранее отправленный magic_link больше не резолвится (`open_magic_link` → `ERR_INVALID_MAGIC_LINK`); валиден только последний выданный токен.
 
 ### US-03: Открытие magic_link
 
 > As a host, I want to open the magic_link from the email and land directly in my workspace so that I can start building a guidebook or use an existing one.
 
 **AC:**
-- URL вида `https://hola.host/?ml=<token>` (имя параметра — `MAGIC_LINK_URL_PARAM`) распознаётся клиентом как вход в Magic link app.
+- URL вида `{origin}{MAGIC_LINK_PATH}?{MAGIC_LINK_URL_PARAM}=<token>` (по умолчанию `/claim?ml=<token>`; путь и параметр — frontend-owned контракт, §10.9 / §11.4) распознаётся клиентом как вход в Magic link app.
+- Сопоставление landing-пути **толерантно к trailing slash**: `/claim?ml=…` и `/claim/?ml=…` обрабатываются одинаково. Ссылки из ранее доставленных писем обязаны работать в течение всего `GUIDEBOOK_TTL`, в том числе после редеплоев и правок контракта.
+- **E2e по реальному письму:** ссылка, извлечённая из фактического письма (Mailpit в dev / Resend в staging) и открытая byte-for-byte, вызывает `GET /api/magic-link/resolve` и приводит на экран `guidebook`. Проверка синтетически собранным URL это AC не закрывает.
+- Контракт-тест (CI): URL-префикс письма, собираемый бэкендом (`{frontend_origin}{magic_link_path}?{magic_link_url_param}=`), даёт pathname, равный (с точностью до trailing slash) `MAGIC_LINK_PATH` фронта; оба значения — из единственного источника `frontend/.env` (§10.9).
+- Токен на landing-пути не теряется молча: происходит либо resolve (успех или `ERR_INVALID_MAGIC_LINK`), либо показ error-banner'а (сетевая/5xx-ошибка, US-07). Молчаливый показ `entrypoint` при наличии `?ml=` в URL на landing-пути — дефект.
 - Открытие URL вызывает `open_magic_link` → backend resolves magic_link → возвращает Lead + (опционально) Guidebook metadata.
 - При успехе пользователь переходит на экран `guidebook`:
   - Если у Lead'а нет привязанного Guidebook'а — отображается «no guidebook yet».
   - Если есть — отображается info о текущем гайдбуке (название/created_at), кнопка `Next` enabled.
-- Magic_link не найден / истёк по `GUIDEBOOK_TTL` → `ERR_INVALID_MAGIC_LINK`; UI отображает сообщение и предлагает повторить путь через `entrypoint`.
+- **Прямой заход / hard-reload защищённого `/workspace`** (закладка, refresh) без предшествующего in-tab resolve перезапрашивает `GET /api/magic-link/resolve` (по восстановленному из sessionStorage `session.magicLink`) и регидрирует `lead` до рендера экрана → workspace отражает фактическую привязку гайдбука (не «no guidebook yet» при наличии гайдбука).
+- Magic_link, уже очищенный cleanup-задачей (§10.1), либо не найденный → `ERR_INVALID_MAGIC_LINK`; UI отображает сообщение и предлагает повторить путь через `entrypoint`. **TTL — cleanup-eventual:** токен, чей `last_seen_at` превысил `GUIDEBOOK_TTL`, но ещё не очищен cleanup'ом, резолвится успешно (200) с `guidebook = null` (sliding-TTL: любой backend-вызов обновляет `last_seen_at`; фактическое истечение — только после полного `GUIDEBOOK_TTL` бездействия и прогона cleanup, §10.1).
 - Успешный `open_magic_link` обновляет `Lead.last_seen_at` (sliding TTL).
 - Превышение `RATE_LIMIT_PER_IP` → `ERR_RATE_LIMIT`.
-- Магia_link не вводится пользователем вручную (только через URL); в UI значение не отображается.
+- Magic_link не вводится пользователем вручную (только через URL); в UI значение не отображается.
 
 ### US-04: Загрузка готового файла-гайдбука
 
@@ -496,6 +507,7 @@ AC ссылаются на параметры по символическому 
 **AC:**
 - На экране `guidebook` видна кнопка `Generate by template`; клик → переход на `template`.
 - На экране `template` — форма (обязательные/опциональные поля по §10.6, schema подгружается через CloudFront-статику `/config/template_schema.json`) и кнопка `Generate`. На submit фронт рендерит plain text по `<label>: <value>\n\n` per filled поле и шлёт в `POST /api/ingest/upload` с `name = property_name`-value, `mime_type = "text/plain"`.
+- Схема формы фетчится **сетевым запросом** с `/config/template_schema.json` (виден в e2e, не захардкожен в бандле); HTTP-ответ имеет не-HTML `Content-Type`. Ответ, не являющийся JSON-массивом объектов-полей (в т.ч. SPA-fallback `index.html`), → видимая ошибка загрузки формы, а не пустой/сломанный экран (`Array.isArray`-guard на клиенте; регресс-защита от молча отданного `index.html`).
 - Незаполненное обязательное поле блокирует submit; конкретное поле подсвечивается.
 - Поле, превысившее лимит длины, блокирует submit с указанием поля и лимита.
 - Submit запускает: фронт собирает plain text по `<label>: <value>\n\n`, авто-fills `name = property_name`-value, шлёт в `/api/ingest/upload`. На бэке — обычный upload-pipeline (чанкинг → embedding → save), создаёт или replace'ит Guidebook у Lead'а (1:1; magic_link не меняется).
@@ -517,6 +529,8 @@ AC ссылаются на параметры по символическому 
 - Ключ не появляется в `console.log` и не попадает в request body.
 - Длина сообщения ограничена `MAX_GUEST_MESSAGE_LENGTH` на клиенте и на сервере.
 - Submit (`send`) генерирует ответ; ответ append'ится в `response area` без перезагрузки экрана.
+- Ответ отображается как plain text без сырой Markdown-разметки; системный промпт real-flow требует plain-text-ответ от первого лица хоста (симметрично US-01, §10.3).
+- Ответ **заземлён на загруженный гайдбук**: после upload гайдбука с уникальным sentinel-фактом ответ на вопрос об этом факте содержит sentinel (заземление на данные хоста, а не на общие знания модели; регресс-защита ретривала).
 - Поля `API key` и `Guest message` сохраняют значения для повторного `send` (можно изменить сообщение и/или ключ и снова отправить).
 - При фокусе на `API key` и `Guest message` выделяется весь текст.
 - Время от submit до начала отображения ответа ≤ `RESPONSE_P95_BUDGET` (p95).
@@ -539,6 +553,9 @@ AC ссылаются на параметры по символическому 
 - `ERR_SAMPLE_BUDGET_EXHAUSTED`: сообщение указывает время восстановления (`SAMPLE_BUDGET_RESET_AT`); sample-кнопки disabled; guidebook flow остаётся доступен.
 - `ERR_UPSTREAM_LLM`: один автоматический повтор через 2 с без действий пользователя; при повторной неудаче — ручной retry.
 - `ERR_INVALID_MAGIC_LINK`: UI отображает сообщение и предлагает повторить путь через `entrypoint`.
+- `ERR_NO_GUIDEBOOK`: сообщение + переход на `guidebook` (загрузить/сгенерировать гайдбук); без auto-retry (§5.8).
+- `ERR_UPSTREAM_EMAIL`: сообщение + ручной retry `capture_email` (§5.8).
+- `ERR_NOT_FOUND`: сообщение «ресурс не найден»; без retry (§5.8).
 - `ERR_INTERNAL` и прочие 5xx: ручной retry; сообщение не содержит stack trace, имён файлов, путей.
 - Никакая ошибка не отображает значение API key (даже частичное) и не отображает значение magic_link.
 - Полная таксономия `ERR_*` и формат тела ошибки → §10.8.
@@ -790,7 +807,7 @@ Sample-flow на серверном ключе (§1.3, US-01).
 
 **Request:**
 - Headers: `Content-Type: application/json`
-- Body: `{ "message": "<string>" }`
+- Body: `{ "message": "<string>" }` — произвольный текст (поле editable, US-01); сервер **не** проверяет принадлежность `message` списку `SAMPLE_MESSAGES` (список — UI-уровень, §10.9); защита — rate limit + sample budget + §10.4.
 
 **Response (200):**
 - Body: `{ "response_text": "<string>" }`
@@ -971,7 +988,7 @@ Conceptual-уровень: участники, порядок взаимодей
 
 ### 6.1 Sample-flow: ответ на заготовку
 
-Endpoint: `POST /api/sample/generate` (§5.3). Триггер UI: `sample_response/send` (§1.3). BYOK не вводится; sample-LLM (Haiku) на серверном ключе. Заготовленный гайдбук (чанки + embeddings) и список заготовок загружены в память Lambda на cold start (бандлятся в container image, фризятся SnapStart'ом).
+Endpoint: `POST /api/sample/generate` (§5.3). Триггер UI: `sample_response/send` (§1.3). BYOK не вводится; sample-LLM (Haiku) на серверном ключе. Заготовленный гайдбук (чанки + embeddings) загружается в память Lambda на cold start через `SampleGuidebookSource` (§8.6: dev — локальный файл, staging/prod — S3) и фризится SnapStart'ом. Список заготовок `SAMPLE_MESSAGES` — frontend-статика `/config/sample_messages.json` (§10.9); бэкенд его не потребляет.
 
 ```mermaid
 sequenceDiagram
@@ -994,7 +1011,7 @@ sequenceDiagram
     LM-->>BR: 200 OK {response_text}
 ```
 
-**Контекст:** sample-чанки не лежат в `chunks`-таблице (in-memory из образа); запросов по `guidebooks`/`chunks` для sample-flow нет. `sample_budget` — единственная DB-запись. `Lead.last_seen_at` не bump'ится (sample-flow без magic_link). При исчерпании заготовок UI отключает Send (US-01) — серверу безразлично.
+**Контекст:** sample-чанки не лежат в `chunks`-таблице (in-memory, см. выше); запросов по `guidebooks`/`chunks` для sample-flow нет. `sample_budget` — единственная DB-запись. `Lead.last_seen_at` не bump'ится (sample-flow без magic_link). После исчерпания заготовок подстановка следующего сообщения прекращается, поле остаётся editable и `Send` активен (US-01) — серверу безразлично.
 
 ### 6.2 Email capture + отправка magic_link
 
@@ -2599,9 +2616,10 @@ def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
 
 ```python
 def execute(self, cmd: CaptureLeadCmd) -> None:
-    # 0. honeypot — тихий отказ ДО любых side-effect'ов (§10.7); generic-сообщение
+    # 0. honeypot — тихий отказ ДО любых side-effect'ов (§10.7): обычный ack без создания
+    #    Lead и без письма (бот не отличает от успеха); НЕ raise
     if cmd.honeypot:
-        raise InvalidPayloadError(reason="honeypot")
+        return
 
     # 1. rate-limit (только scope=ip — magic_link на входе нет); своя транзакция (§9.0)
     with self.uow.transaction():
@@ -3059,6 +3077,7 @@ ADR фиксируют принятые архитектурные решени�
 - §2.6 (IaC) — Terraform aws_cloudwatch_event_rule с указанным cron-expression.
 - AC §3 US-03/US-04/US-05/US-06 — все «host возвращается через ≤ 30 дней → доступ сохраняется» становятся численно верифицируемыми.
 - Риск: lag до 24h между фактическим истечением TTL и DELETE — выраженный, но допустимый: на MVP-объёмах ошибочно обслуживается ≤ суток, после cleanup пользователь получает `ERR_INVALID_MAGIC_LINK` штатно.
+- Семантика resolve при over-TTL (§9.3, AC §3 US-03): `resolve` **не гейтит по TTL** — токен, чей `last_seen_at` за `GUIDEBOOK_TTL`, но ещё не очищен cleanup'ом, резолвится успешно (200) с `guidebook = null` (soft-null); инвалидация токена (`ERR_INVALID_MAGIC_LINK`) наступает только после прогона cleanup. AC §3 US-03 сформулирован под эту cleanup-eventual семантику.
 
 ### 10.2 Числовые лимиты (rate, message, output, sample-budget, perf-budgets)
 
@@ -3559,7 +3578,7 @@ Hot-update хинтов:
           raise DomainValidationError("Email: invalid format", field="email", reason="invalid_format")
   ```
   Та же валидация на клиенте (frontend bundle, для немедленного feedback'а до отправки запроса) — это duplication, but server — authoritative.
-- **Antibot**: вариант **β**. Honeypot-поле во frontend-форме (`<input name="website" style="display:none">`); если приходит непустое — backend в `CaptureLeadUseCase` отбрасывает запрос с `InvalidPayloadError("honeypot")` (тихий отказ без объяснения причины, чтобы бот не итерировал). Реализация: `CaptureLeadCmd.honeypot: str` (default `""`); use case проверяет первым шагом. Rate-limit `RATE_LIMIT_PER_IP = 60/час` (§10.2) — backstop.
+- **Antibot**: вариант **β**. Honeypot-поле во frontend-форме (`<input name="website" style="display:none">`); если приходит непустое — backend в `CaptureLeadUseCase` **молча** отбрасывает запрос и возвращает обычный ack (`200 {"status":"sent"}`) **без создания `Lead` и без письма** — поведение неотличимо от успеха, чтобы бот не мог детектировать фильтр (возврат 422 / `reason=honeypot` был бы для бота сигналом — отвергнут). Реализация: `CaptureLeadCmd.honeypot: str` (default `""`); use case проверяет первым шагом и делает ранний `return` без side-effect'ов. Rate-limit `RATE_LIMIT_PER_IP = 60/час` (§10.2) — backstop.
 - **Resend retry**: вариант **I** — sync single attempt. На failure — `UpstreamEmailError` (§8.4), rollback UoW (§9.2). HTTP 502 `ERR_UPSTREAM_EMAIL` (§10.8). Resend-timeout — `Settings.resend_timeout_s = 5` (env). Идемпотентность Resend-вызова — не нужна на single attempt; при ручном retry'е пользователем — повторное письмо с **новым** magic_link (через `regenerate_magic_link()` §7.5).
 - **Double opt-in**: вариант **B** — single opt-in.
 - **Текст подтверждающего письма**: НЕ фиксируется в ADR (продуктовое/копирайт-решение). Хранится как Jinja-шаблон `infrastructure/email/templates/magic_link.j2` (включён в Lambda container). Минимум:
@@ -3572,7 +3591,7 @@ Hot-update хинтов:
 - §3.0 «Источник» для `EMAIL_REGEX`, `EMAIL_MAX_LENGTH` обновляется на `§10.7`.
 - §7.2.2 `Email.__post_init__` — конкретные check'и подставляются.
 - §8.0 — добавляется `infrastructure/email/templates/magic_link.j2`.
-- §8.1 DTO `CaptureLeadCmd` — добавляется `honeypot: str` (default `""`); §9.2 use case — `if cmd.honeypot: raise InvalidPayloadError("honeypot")` первым шагом.
+- §8.1 DTO `CaptureLeadCmd` — добавляется `honeypot: str` (default `""`); §9.2 use case — `if cmd.honeypot: return` первым шагом (молчаливый ack без side-effect'ов; НЕ raise).
 - §9.2 — Resend-вызов внутри UoW без изменений; `resend_timeout_s` пробрасывается в `EmailSender` impl.
 - §10.8 — `ERR_UPSTREAM_EMAIL` (502) в таксономии.
 - AC §3 US-02 «email capture» — численно верифицируемо.
@@ -3626,7 +3645,7 @@ Hot-update хинтов:
 | `ERR_TOO_MANY_CHUNKS` | 413 | `TooManyChunksError` | `{ "max_chunks": <int> }` | no retry; UI: документ слишком большой, показать `max_chunks` |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | `UnsupportedMediaTypeError` | `{ "allowed": [<mime>, ...] }` | no retry; UI: показать allowed-форматы |
 | `ERR_EMPTY_DOCUMENT` | 422 | `EmptyDocumentError` | `{}` | no retry; UI: «извлечённый текст пуст, проверь файл» |
-| `ERR_INVALID_PAYLOAD` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_PAYLOAD"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|honeypot\|invalid_json" }` | no retry; UI: подсветить поле, показать `reason` (`honeypot` — UI получает 422 + generic-сообщение без подсветки конкретного поля, см. §10.7) |
+| `ERR_INVALID_PAYLOAD` | 422 | `InvalidPayloadError` (`code = "ERR_INVALID_PAYLOAD"`, §8.4) | `{ "field": "<имя_поля_из_§10.6>", "reason": "empty\|too_long\|contacts_no_phone\|invalid_format\|invalid_json" }` | no retry; UI: подсветить поле, показать `reason` |
 | `ERR_RATE_LIMIT` | 429 | `RateLimitExceededError` | `{ "scope": "ip\|magic_link", "retry_after_s": <int> }` | auto-retry через `retry_after_s` (UI показывает обратный отсчёт) |
 | `ERR_SAMPLE_BUDGET_EXHAUSTED` | 429 | `SampleBudgetExhaustedError` | `{ "reset_at": "<ISO-8601 UTC>" }` | no retry до `reset_at`; UI: «попробуй завтра или загрузи свой ключ» |
 | `ERR_UPSTREAM_LLM` | 502 | `UpstreamLLMError` | `{ "upstream_status": <int>, "retryable": <bool> }` | если `retryable=true` — экспоненциальный backoff (1s, 2s, 4s; max 3 попытки); иначе no retry |
@@ -3719,9 +3738,9 @@ Consumes root/module inputs.
 
 | Setting | Source |
 |---|---|
-| `aws_region`, `project`, `frontend_bucket`, `domain`, `alert_email` (SNS alarm subscription, I-13), `github_owner` (github provider owner + prod deploy reviewer, I-14), `email_dns_records` (keyed by free-form label, DNS name in the `name` field — Resend puts MX + SPF TXT on one name; I-16), `guidebook_template_path`, `sample_guidebook_path`, `sample_guidebook_key`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` / `system_prompt_key` / `system_prompt_path` / Lambda sizing (`lambda_api_memory_mb` / `lambda_api_timeout_s` / `lambda_cleanup_*`) / `log_retention_days` | **config.yaml** |
+| `aws_region`, `project`, `frontend_bucket`, `domain`, `alert_email` (SNS alarm subscription, I-13), `github_owner` (github provider owner + prod deploy reviewer, I-14), `email_dns_records` (keyed by free-form label, DNS name in the `name` field — Resend puts MX + SPF TXT on one name; I-16), `guidebook_template_path`, `sample_guidebook_path`, `sample_guidebook_key`, `sample_messages_path`, `sample_messages_key`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` / `system_prompt_key` / `system_prompt_path` / Lambda sizing (`lambda_api_memory_mb` / `lambda_api_timeout_s` / `lambda_cleanup_*`) / `log_retention_days` | **config.yaml** |
 | `secret_keys` (the SM secret names) | backend `sm_loader.SERVER_SIDE_SECRET_KEYS` — the `sm` module mirrors it as a default and re-exports it (`secret_keys` output); the per-env lambda env-parse consumes that output (uppercased) to drop the secrets from be-env, so no third hardcoded copy exists |
-| the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` + per-env `docs/<env>_system_prompt.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md` / `system-prompt/<env>.md`; their **paths** come from config.yaml `guidebook_template_path` / `sample_guidebook_path` / `envs.<env>.system_prompt_path`) | app data files |
+| the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` + `docs/sample_messages.json` + per-env `docs/<env>_system_prompt.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md` / `config/sample_messages.json` / `system-prompt/<env>.md`; their **paths** come from config.yaml `guidebook_template_path` / `sample_guidebook_path` / `sample_messages_path` / `envs.<env>.system_prompt_path`) | app data files |
 | state-bucket names `holahost-tfstate-{shared,staging,prod}` | literals in each `backend.tf` (Terraform forbids interpolation in the backend block) |
 | CSP / security-header values | `cloudfront` module constants (§10.3, verbatim) |
 
@@ -3815,7 +3834,7 @@ frontend/
 | `/workspace` | `<guidebook-screen>` или `<llm-key-msg-screen>` (зависит от `Lead.guidebook_id`, §1.3.4) | требует `session.magicLink` (см. §11.4) |
 | `/workspace/upload` | `<guidebook-screen>` upload-mode | требует `session.magicLink` |
 | `/workspace/template` | `<template-screen>` | требует `session.magicLink` |
-| `/?ml=<token>` | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/magic-link/resolve`, `history.replaceState`; `resolved` → `/workspace`, `expired` → error-banner | — |
+| `{MAGIC_LINK_PATH}?ml=<token>` (по умолчанию `/claim?ml=…`; trailing slash нормализуется, §11.4) | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/magic-link/resolve`, `history.replaceState`; `resolved` → `/workspace`, `expired` → error-banner | — |
 
 **Защищённые маршруты** (`/workspace/*`): guard в роутере проверяет `session.magicLink !== null`; при отсутствии — `history.replaceState('/')` и редирект на entrypoint (без error-сообщения, magic_link мог истечь).
 
@@ -3830,13 +3849,14 @@ frontend/
 | `state/session.ts` | `magicLink: Signal<string \| null>` | resolved magic_link, in-memory; `null` после tab-close или после `/api/magic-link/resolve` с 401 |
 | `state/session.ts` | `lead: Signal<ResolveMagicLinkResult \| null>` | данные Lead после resolve (email, flow, guidebook_id, guidebook_name, guidebook_created_at) |
 | `state/sample-budget.ts` | `sampleBudgetExhausted: Signal<boolean>` | устанавливается в `true` при получении `ERR_SAMPLE_BUDGET_EXHAUSTED` (§10.8), отключает sample-формы |
-| `state/session.ts` | `templateSchema: Signal<readonly unknown[] \| null>` | кэш ответа `fetch('/config/template_schema.json')` через CloudFront-статику (§10.6), грузится при mount template-экрана |
+| `state/session.ts` | `templateSchema: Signal<readonly unknown[] \| null>` | кэш ответа `fetch('/config/template_schema.json')` через CloudFront-статику (§10.6), грузится при mount template-экрана; ответ, не являющийся JSON-массивом (в т.ч. SPA-fallback `index.html`), → видимая ошибка формы (`Array.isArray`-guard), не пустой экран |
+| `state/sample-messages.ts` | `sampleMessages: Signal<readonly string[] \| null>` | кэш ответа `fetch('/config/sample_messages.json')` через ту же статику (§3 US-01), грузится при mount sample-экрана |
 | `state/error-banner.ts` | `bannerMessage: Signal<string \| null>` | текст глобального error-banner (§11.3/§11.4); `null` — баннер скрыт |
 | `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/leads/capture` |
 
 Подписка из компонента — через `effect()` внутри `connectedCallback` (cleanup через возвращаемую функцию в `disconnectedCallback`).
 
-**Сохранение через перезагрузку:** `magicLink` зеркалируется в `sessionStorage["magic_link"]`. При старте `main.ts` читает sessionStorage и инициализирует сигнал. Tab-close очищает sessionStorage штатно. localStorage не используется (явное решение — magic_link не должен переживать tab-close сверх того, что делает sessionStorage; BYOK Claude key не сохраняется нигде).
+**Сохранение через перезагрузку:** `magicLink` зеркалируется в `sessionStorage["magic_link"]`. При старте `main.ts` читает sessionStorage и инициализирует сигнал. **`lead` не зеркалируется**: при прямом заходе/hard-reload `/workspace` (когда `magicLink` восстановлен, но `lead === null`) `main.ts` / роутер-guard перезапрашивает `GET /api/magic-link/resolve` и регидрирует `lead` до рендера экрана (иначе workspace покажет «no guidebook yet» при наличии гайдбука; §3 US-03). Tab-close очищает sessionStorage штатно. localStorage не используется (явное решение — magic_link не должен переживать tab-close сверх того, что делает sessionStorage; BYOK Claude key не сохраняется нигде).
 
 **Серверный data-cache:** простая in-memory `Map<key, value>` per screen для повторных запросов на одной сессии (например, `templateSchema`); без TTL, без библиотеки типа React Query.
 
@@ -3875,7 +3895,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 **magic_link** — токен сессии, identifies Lead:
 - источник: landing-URL `{MAGIC_LINK_PATH}?{MAGIC_LINK_URL_PARAM}=<token>` (по умолчанию `/claim?ml=<token>`; путь и имя параметра — frontend-owned контракт, §11.6 / §10.9);
-- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) срабатывает только на пути `MAGIC_LINK_PATH`, извлекает токен через `utils/url.ts`, выполняет `GET /api/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
+- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) срабатывает только на пути `MAGIC_LINK_PATH` (сравнение нормализует trailing slash: `/claim` ≡ `/claim/` — ссылки из ранее доставленных писем обязаны работать весь `GUIDEBOOK_TTL`; §3 US-03), извлекает токен через `utils/url.ts`, выполняет `GET /api/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
 - `history.replaceState('/', '')` сразу после извлечения — token не остаётся в URL;
 - storage: in-memory signal + `sessionStorage["magic_link"]` (для переживания reload в одной вкладке);
 - передача в API: `X-Magic-Link` header через `client.ts`, автоматически на всех endpoint'ах с MAGIC_LINK-scope;
@@ -4388,3 +4408,28 @@ Strict с первого коммита; ослабление настроек �
 - `C-07` GitHub Actions `promote-prod.yml` (resolve digest по `release-v<version>` ECR-тегу, Alembic migrate prod, Lambda update, CloudFront origin path switch, smoke) — §13.4 / §13.5
 - `C-08` OIDC IAM Role'ы `github-actions-deploy-staging` + `github-actions-deploy-prod` в TF (часть `I-14`-расширения) — §13.4
 - `C-09` Pre-commit hook `validate-template-schema`: проверка что `docs/guidebook_template.json` парсится как valid JSON-array объектов с required-полями (`name`, `label`, `required`, `max_length`, `hint`) — §13.3 / §10.6
+
+### 14.5 AC-extend 2026-07-06 (пробелы AC)
+
+Тикеты прогона `/ac-extend` от 2026-07-06 (карта и evidence: `.claude/ac-runs/2026-07-06-ac-gaps.md`). Закрывают известные баги sample-flow / magic-link (1–4) и новые пробелы AC (AF-1…AF-7); AC берутся из §3 (US-01…US-07) и §10.X, тикет не дублирует. Каждый цитирует anchor находки.
+
+**Backend**
+
+- `B-51` `CaptureLeadUseCase`: honeypot — молчаливый отказ (ранний `return` без создания `Lead` и без письма, ack `200 {"status":"sent"}`); убрать `raise InvalidPayloadError(reason="honeypot")`; убрать `honeypot` из `reason`-enum §10.8 — §10.7 / §10.8 / §9.2 — `#AF-3`
+
+**Frontend**
+
+- `F-20` `<sample-response-screen>` v2: editable-поле + список `SAMPLE_MESSAGES` из `/config/sample_messages.json` (signal `sampleMessages` в `state/sample-messages.ts` + dev-serve из `docs/`) + отправка фактического содержимого поля + пары «сообщение → ответ» в response area + подстановка следующей заготовки (только если поле не тронуто) — §3 US-01 — `#AF-0` (баги 2, 4)
+- `F-21` Download-ссылка sample-гайдбука → `/config/sample_guidebook.md` (`download="sample_guidebook.md"`; dev-serve из `docs/`; non-HTML `Content-Type`) — §3 US-01 / §10.9 — `#AF-0` (баг 3)
+- `F-22` Magic-link landing: нормализация trailing slash в сравнении с `MAGIC_LINK_PATH` + error-banner вместо молчаливого `entrypoint` при неразрешённом токене на landing-пути — §11.4 / §3 US-03 — `#AF-0` (баг 1)
+- `F-23` Workspace-регидрация: при прямом заходе/hard-reload `/workspace` (`magicLink` восстановлен, `lead === null`) — повторный `GET /api/magic-link/resolve` + регидрация `lead` до рендера экрана — §11.2 / §3 US-03 — `#AF-5`
+- `F-24` `<template-screen>`: `Array.isArray`-guard на ответе `/config/template_schema.json` + видимая ошибка загрузки формы при не-JSON/не-массиве (SPA-fallback `index.html`) — §3 US-05 / §11.2 — `#AF-2`
+
+**Infrastructure**
+
+- `I-18` TF `s3_frontend` публикует третий объект `config/sample_messages.json` из `docs/sample_messages.json` (+ config.yaml `sample_messages_path` / `sample_messages_key`; расширяет I-09) — §10.9 / §12.0 — `#AF-0`
+
+**CI/CD**
+
+- `C-10` Контракт-тесты sample/magic-link: (a) pathname URL-префикса письма (бэкенд-сборка `{frontend_origin}{magic_link_path}?{magic_link_url_param}=`) == `MAGIC_LINK_PATH` фронта с точностью до trailing slash, из единого источника `frontend/.env`; (b) pre-commit `validate-sample-messages` — `docs/sample_messages.json` парсится как valid JSON-array непустых строк — §3 US-03 / §13.3 — `#AF-0`
+- `C-11` Contract-тест паритета published-путей `/config/*`: опубликованный S3-key (`config/template_schema.json`, `config/sample_messages.json`) == путь, который фетчит фронт (защита от silent SPA-fallback при drift ключа/пути; у magic-link такой тест есть — C-10a) — §11.2 / §11.3 — `#AF-2`
