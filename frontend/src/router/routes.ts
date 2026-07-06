@@ -25,3 +25,8 @@ export const ROUTES: Record<string, Route> = {
 
 /** Screen to fall back to on an unknown or guarded-away path (§11.1). */
 export const FALLBACK_TAG = ENTRYPOINT_TAG;
+
+/** Whether a path requires a live magic-link session (§11.1 route guards). */
+export function isProtectedPath(path: string): boolean {
+  return ROUTES[path]?.protected === true;
+}

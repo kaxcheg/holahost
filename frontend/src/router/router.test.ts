@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { lead, magicLink } from '../state/session';
 import { navigate, resolveScreen } from './router';
+import { isProtectedPath } from './routes';
 
 beforeEach(() => {
   document.body.innerHTML = '<main id="root"></main>';
@@ -39,6 +40,20 @@ describe('resolveScreen', () => {
       guidebook_created_at: '2026-01-01T00:00:00Z',
     };
     expect(resolveScreen('/workspace').tag).toBe('llm-key-msg-screen');
+  });
+});
+
+describe('isProtectedPath', () => {
+  it('flags workspace paths as protected', () => {
+    expect(isProtectedPath('/workspace')).toBe(true);
+    expect(isProtectedPath('/workspace/upload')).toBe(true);
+    expect(isProtectedPath('/workspace/template')).toBe(true);
+  });
+
+  it('flags public and unknown paths as not protected', () => {
+    expect(isProtectedPath('/')).toBe(false);
+    expect(isProtectedPath('/sample-response')).toBe(false);
+    expect(isProtectedPath('/nope')).toBe(false);
   });
 });
 

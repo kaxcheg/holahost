@@ -47,7 +47,13 @@ export class TemplateScreen extends HTMLElement {
       if (!response.ok) {
         throw new Error(`schema ${response.status}`);
       }
-      const fields = (await response.json()) as readonly TemplateField[];
+      const parsed: unknown = await response.json();
+      if (!Array.isArray(parsed)) {
+        // An SPA fallback or a misshapen publish must not poison the templateSchema cache —
+        // a cached non-array would crash renderForm on every remount (US-05, F-24).
+        throw new Error('schema: not an array');
+      }
+      const fields = parsed as readonly TemplateField[];
       if (!this.isConnected) {
         return;
       }
@@ -108,7 +114,7 @@ export class TemplateScreen extends HTMLElement {
   private renderLoadError(): void {
     this.innerHTML = `
       <section class="mx-auto flex max-w-md flex-col gap-4 px-4 py-12 text-center">
-        <p class="text-gray-600">Couldn't load the template. Please try again.</p>
+        <p data-load-error role="alert" class="text-sm text-red-600">Couldn't load the template form. Please try again later.</p>
         <button data-action="back" type="button"
                 class="self-center rounded-md border border-gray-300 px-5 py-2.5 font-medium hover:bg-gray-50">
           Back
