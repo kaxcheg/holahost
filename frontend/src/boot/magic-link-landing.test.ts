@@ -46,6 +46,27 @@ describe('handleMagicLinkLanding', () => {
     expect(window.location.search).toBe('');
   });
 
+  it('resolves when the landing path carries a trailing slash', async () => {
+    history.replaceState(null, '', `${MAGIC_LINK_PATH}/?ml=tok`);
+    stubFetch({
+      email: 'a@b.co',
+      flow: 'guidebook',
+      guidebook_id: null,
+      guidebook_name: null,
+      guidebook_created_at: null,
+    });
+
+    expect(await handleMagicLinkLanding()).toBe('resolved');
+    expect(magicLink.value).toBe('tok');
+  });
+
+  it('rethrows non-auth resolve failures to the caller', async () => {
+    history.replaceState(null, '', `${MAGIC_LINK_PATH}?ml=tok`);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')));
+
+    await expect(handleMagicLinkLanding()).rejects.toThrow('network down');
+  });
+
   it('returns "expired" and clears the session on ERR_INVALID_MAGIC_LINK', async () => {
     history.replaceState(null, '', `${MAGIC_LINK_PATH}?ml=bad`);
     stubFetch({ error: { code: 'ERR_INVALID_MAGIC_LINK', message: 'expired', details: {} } });

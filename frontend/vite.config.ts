@@ -65,26 +65,48 @@ function resolveContract(): Record<string, string | undefined> {
   };
 }
 
+// Published config assets (§10.9): canonical files under docs/ served at their deployed /config/*
+// paths. Content types matter — the frontend guards against the SPA fallback serving text/html.
+const CONFIG_ASSETS = [
+  {
+    route: '/config/template_schema.json',
+    file: 'guidebook_template.json',
+    contentType: 'application/json',
+  },
+  {
+    route: '/config/sample_messages.json',
+    file: 'sample_messages.json',
+    contentType: 'application/json',
+  },
+  {
+    route: '/config/sample_guidebook.md',
+    file: 'sample_guidebook.md',
+    contentType: 'text/markdown',
+  },
+] as const;
+
 /**
- * Dev-only static for the template form (F-16 / §10.6): serve the canonical
- * `docs/guidebook_template.json` at `/config/template_schema.json`, read fresh per request (no copy,
- * not bundled). In deployed envs this path is served from S3/CloudFront by Terraform (§10.6/§12), so
- * the plugin is `apply: 'serve'` only — the canon stays the single source.
+ * Dev-only statics for the published config assets (F-16/F-20/F-21, §10.6/§10.9): serve each
+ * canonical `docs/*` file at its `/config/*` path, read fresh per request (no copy, not bundled).
+ * In deployed envs these paths are served from S3/CloudFront by Terraform (§10.6/§12/I-18), so the
+ * plugin is `apply: 'serve'` only — the canon stays the single source.
  */
-function templateSchemaDevServer(): Plugin {
-  const schemaPath = resolve(import.meta.dirname, '..', 'docs', 'guidebook_template.json');
+function configAssetsDevServer(): Plugin {
   return {
-    name: 'serve-template-schema',
+    name: 'serve-config-assets',
     apply: 'serve',
     configureServer(server) {
-      server.middlewares.use('/config/template_schema.json', (_req, res, next) => {
-        if (!existsSync(schemaPath)) {
-          next();
-          return;
-        }
-        res.setHeader('Content-Type', 'application/json');
-        res.end(readFileSync(schemaPath));
-      });
+      for (const asset of CONFIG_ASSETS) {
+        const assetPath = resolve(import.meta.dirname, '..', 'docs', asset.file);
+        server.middlewares.use(asset.route, (_req, res, next) => {
+          if (!existsSync(assetPath)) {
+            next();
+            return;
+          }
+          res.setHeader('Content-Type', asset.contentType);
+          res.end(readFileSync(assetPath));
+        });
+      }
     },
   };
 }
@@ -189,7 +211,7 @@ export default defineConfig(({ mode }) => {
   const cfg = resolveConfig(mode);
   const contract = resolveContract();
   return {
-    plugins: [tailwindcss(), templateSchemaDevServer(), rieBridgeDevServer()],
+    plugins: [tailwindcss(), configAssetsDevServer(), rieBridgeDevServer()],
     define: {
       'import.meta.env.VITE_APP_ENV': JSON.stringify(cfg.ENV ?? null),
       'import.meta.env.VITE_API_BASE_URL': JSON.stringify(cfg.API_BASE_URL ?? null),

@@ -5,21 +5,38 @@ import { ApplicationError, hasCode, messageFor } from '../api/errors';
 import { navigate } from '../router/router';
 import { captureFlow } from '../state/capture-flow';
 import { sampleBudgetExhausted } from '../state/sample-budget';
+import { sampleMessages } from '../state/sample-messages';
+import { isValidGuestMessage, MAX_GUEST_MESSAGE_LENGTH } from '../utils/validation';
 
-/** Preloaded guest question shown read-only in the sample flow (§1.3.2 / §6.1). */
-const SAMPLE_MESSAGE = 'Hi! What time is check-in, and is there parking nearby?';
+/** Published sample-messages list (§10.9); dev-served from docs/ by vite.config.ts. */
+const MESSAGES_URL = '/config/sample_messages.json';
+
+/** The list is a UX nicety: anything but non-empty strings degrades to an empty editable field. */
+function isMessageList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && item.trim().length > 0)
+  );
+}
 
 /**
- * Sample flow (F-13 / §1.3.2 / §10.2).
+ * Sample flow v2 (F-20/F-21 / US-01 / §11.2).
  *
- * Shows a download link to a sample guidebook, a read-only preloaded guest message, and a Send button
- * that calls `POST /api/sample/generate` and appends each reply to the response area. **Leave email**
- * goes to `/capture-email` with `flow='sample'`. When the global daily sample budget is exhausted
- * ({@link sampleBudgetExhausted}, set here on `ERR_SAMPLE_BUDGET_EXHAUSTED`), Send is disabled.
- * Renders in light DOM; self-registers as `<sample-response-screen>`.
+ * Fetches the ordered `SAMPLE_MESSAGES` list into {@link sampleMessages} (once, cached across
+ * remounts), prefills the first item into an **editable** guest-message field, and sends the
+ * actual field content to `POST /api/sample/generate`. Each reply is appended to the response
+ * area **paired with the sent message**; after a reply the next list item is prefilled only when
+ * the field still holds the sent prefill (manual input is never overwritten), and prefilling
+ * stops once the list is exhausted while Send stays enabled. The download link points at the
+ * published `/config/sample_guidebook.md` object. **Leave email** goes to `/capture-email` with
+ * `flow='sample'`. When the global daily sample budget is exhausted ({@link sampleBudgetExhausted},
+ * set here on `ERR_SAMPLE_BUDGET_EXHAUSTED`), Send is disabled. Renders in light DOM;
+ * self-registers as `<sample-response-screen>`.
  */
 export class SampleResponseScreen extends HTMLElement {
   private submitting = false;
+  private prefillIndex = 0;
   private dispose: (() => void) | undefined;
 
   connectedCallback(): void {
@@ -27,14 +44,14 @@ export class SampleResponseScreen extends HTMLElement {
       <section class="mx-auto flex max-w-xl flex-col gap-5 px-4 py-12">
         <div class="flex flex-col gap-2">
           <h1 class="text-2xl font-semibold">Try it on a sample</h1>
-          <p class="text-gray-600">Send the sample guest message and see the drafted reply.</p>
-          <a href="/sample-guidebook.pdf" download data-sample-download
+          <p class="text-gray-600">Send a guest message — or write your own — and see the drafted reply.</p>
+          <a href="/config/sample_guidebook.md" download="sample_guidebook.md" data-sample-download
              class="text-sm text-blue-600 underline hover:text-blue-700">Download the sample guidebook</a>
         </div>
         <label class="flex flex-col gap-1 text-sm font-medium">
           Guest message
-          <textarea data-message readonly rows="2"
-                    class="resize-none rounded-md border border-gray-300 bg-gray-50 px-3 py-2 font-normal text-gray-700"></textarea>
+          <textarea data-message rows="2" maxlength="${MAX_GUEST_MESSAGE_LENGTH}"
+                    class="resize-none rounded-md border border-gray-300 bg-white px-3 py-2 font-normal text-gray-900"></textarea>
         </label>
         <button data-send type="button"
                 class="self-start rounded-md bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-60">
@@ -47,21 +64,46 @@ export class SampleResponseScreen extends HTMLElement {
           Leave your email to use your own guidebook
         </button>
       </section>`;
-    const messageField = this.querySelector<HTMLTextAreaElement>('[data-message]');
-    if (messageField) {
-      messageField.value = SAMPLE_MESSAGE;
-    }
     this.querySelector('[data-send]')?.addEventListener('click', this.onSend);
     this.querySelector('[data-leave-email]')?.addEventListener('click', this.onLeaveEmail);
     this.dispose = effect(() => {
       // Re-evaluates whenever the budget signal changes (also runs once on mount).
       this.updateSendState(sampleBudgetExhausted.value);
     });
+    void this.loadMessages();
   }
 
   disconnectedCallback(): void {
     this.dispose?.();
     this.dispose = undefined;
+  }
+
+  private async loadMessages(): Promise<void> {
+    if (sampleMessages.value === null) {
+      try {
+        const response = await fetch(MESSAGES_URL);
+        if (!response.ok) {
+          throw new Error(`sample messages ${response.status}`);
+        }
+        const parsed: unknown = await response.json();
+        if (!isMessageList(parsed)) {
+          throw new Error('sample messages: not a list of non-empty strings');
+        }
+        if (!this.isConnected) {
+          return;
+        }
+        sampleMessages.value = parsed;
+      } catch {
+        // Degradation (US-01): keep the field empty and editable, Send stays functional.
+        return;
+      }
+    }
+    const field = this.querySelector<HTMLTextAreaElement>('[data-message]');
+    const first = sampleMessages.value?.[0];
+    if (field && first !== undefined && field.value === '') {
+      this.prefillIndex = 0;
+      field.value = first;
+    }
   }
 
   private updateSendState(exhausted: boolean): void {
@@ -80,23 +122,59 @@ export class SampleResponseScreen extends HTMLElement {
     el.classList.toggle('hidden', message === null);
   }
 
-  private appendResponse(text: string): void {
-    const block = document.createElement('div');
-    block.className = 'rounded-md border border-gray-200 bg-white px-3 py-2 text-sm';
-    block.textContent = text;
-    this.querySelector('[data-responses]')?.append(block);
+  private appendPair(message: string, reply: string): void {
+    const area = this.querySelector('[data-responses]');
+    if (!area) {
+      return;
+    }
+    const pair = document.createElement('div');
+    pair.className =
+      'flex flex-col gap-1 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm';
+    const question = document.createElement('p');
+    question.dataset.pairMessage = '';
+    question.className = 'font-medium text-gray-500';
+    question.textContent = message;
+    const answer = document.createElement('p');
+    answer.dataset.pairReply = '';
+    answer.textContent = reply;
+    pair.append(question, answer);
+    area.append(pair);
+  }
+
+  private advancePrefill(field: HTMLTextAreaElement, sent: string, sentWasPrefill: boolean): void {
+    const list = sampleMessages.value;
+    if (list === null || !sentWasPrefill || field.value !== sent) {
+      return;
+    }
+    const next = list[this.prefillIndex + 1];
+    if (next === undefined) {
+      return; // list exhausted: keep the sent text, Send stays enabled (US-01)
+    }
+    this.prefillIndex += 1;
+    field.value = next;
   }
 
   private readonly onSend = async (): Promise<void> => {
     if (this.submitting || sampleBudgetExhausted.value) {
       return;
     }
+    const field = this.querySelector<HTMLTextAreaElement>('[data-message]');
+    if (!field) {
+      return;
+    }
+    const message = field.value;
+    if (!isValidGuestMessage(message)) {
+      this.setError('Enter a guest message.');
+      return;
+    }
     this.setError(null);
     this.submitting = true;
     this.updateSendState(sampleBudgetExhausted.value);
+    const sentWasPrefill = message === sampleMessages.value?.[this.prefillIndex];
     try {
-      const result = await postJson('/sample/generate', { message: SAMPLE_MESSAGE });
-      this.appendResponse(result.response_text);
+      const result = await postJson('/sample/generate', { message });
+      this.appendPair(message, result.response_text);
+      this.advancePrefill(field, message, sentWasPrefill);
     } catch (error) {
       this.handleError(error);
     } finally {

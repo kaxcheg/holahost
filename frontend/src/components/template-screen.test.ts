@@ -86,3 +86,77 @@ describe('template-screen', () => {
     expect(navigate).toHaveBeenCalledWith('/workspace');
   });
 });
+
+describe('template-screen schema loading', () => {
+  let el: TemplateScreen;
+
+  function stubSchemaFetch(payload: unknown, ok = true, status = 200): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok, status, json: () => Promise.resolve(payload) }),
+    );
+  }
+
+  async function mount(): Promise<void> {
+    el = new TemplateScreen();
+    document.body.append(el);
+    await tick();
+  }
+
+  beforeEach(() => {
+    magicLink.value = 'tok';
+    lead.value = null;
+    templateSchema.value = null;
+  });
+
+  afterEach(() => {
+    el.remove();
+    templateSchema.value = null;
+    lead.value = null;
+    magicLink.value = null;
+    vi.unstubAllGlobals();
+  });
+
+  it('renders the form from a fetched array schema and caches it', async () => {
+    stubSchemaFetch(SCHEMA);
+    await mount();
+    expect(el.querySelectorAll('[data-field]')).toHaveLength(3);
+    expect(templateSchema.value).toEqual(SCHEMA);
+  });
+
+  it('shows a visible load error and does not cache a non-array JSON payload', async () => {
+    stubSchemaFetch({ error: { code: 'ERR_NOT_FOUND' } });
+    await mount();
+    const error = el.querySelector('[data-load-error]');
+    expect(error).not.toBeNull();
+    expect(error?.getAttribute('role')).toBe('alert');
+    expect(templateSchema.value).toBeNull();
+  });
+
+  it('renders the load error again on remount after a non-array payload (no crash)', async () => {
+    stubSchemaFetch({});
+    await mount();
+    el.remove();
+    await mount();
+    expect(el.querySelector('[data-load-error]')).not.toBeNull();
+  });
+
+  it('shows the load error when the body is not JSON (SPA fallback HTML)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+      }),
+    );
+    await mount();
+    expect(el.querySelector('[data-load-error]')).not.toBeNull();
+  });
+
+  it('shows the load error on a non-2xx response', async () => {
+    stubSchemaFetch('irrelevant', false, 500);
+    await mount();
+    expect(el.querySelector('[data-load-error]')).not.toBeNull();
+  });
+});

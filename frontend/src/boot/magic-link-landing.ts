@@ -8,6 +8,14 @@ import { extractMagicLink, stripQuery } from '../utils/url';
 export type LandingOutcome = 'none' | 'resolved' | 'expired';
 
 /**
+ * `/claim` and `/claim/` must match: links from already-delivered emails have to work for the whole
+ * `GUIDEBOOK_TTL`, across redeploys and contract tweaks (US-03, §11.4).
+ */
+function normalizePath(path: string): string {
+  return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+}
+
+/**
  * Handle the magic-link landing (`<MAGIC_LINK_PATH>?<param>=<token>`, §11.4 / §10.3): only when the SPA
  * is on the frontend-owned landing path, strip the token from the URL, resolve it, and populate the
  * session.
@@ -22,7 +30,7 @@ export type LandingOutcome = 'none' | 'resolved' | 'expired';
 export async function handleMagicLinkLanding(
   landingPath: string = MAGIC_LINK_PATH,
 ): Promise<LandingOutcome> {
-  if (window.location.pathname !== landingPath) {
+  if (normalizePath(window.location.pathname) !== normalizePath(landingPath)) {
     return 'none';
   }
   const token = extractMagicLink();
