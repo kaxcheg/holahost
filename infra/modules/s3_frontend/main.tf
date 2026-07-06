@@ -77,6 +77,17 @@ resource "aws_s3_object" "sample_guidebook" {
   content_type = "text/markdown"
 }
 
+# Sample guest-messages list fetched by the SPA from /config/sample_messages.json through
+# CloudFront's /config/* behavior (US-01/F-20, §10.9). Frontend-only — the backend does not read
+# it. Static content like the template schema: re-published when the source file changes (etag).
+resource "aws_s3_object" "sample_messages" {
+  bucket       = aws_s3_bucket.frontend.id
+  key          = var.sample_messages_key
+  source       = var.sample_messages_path
+  etag         = filemd5(var.sample_messages_path)
+  content_type = "application/json"
+}
+
 # System prompt per env (§10.3). Private prefix `system-prompt/` — NOT under `config/`, so no CloudFront
 # behavior serves it publicly (only the Lambda role reads it via S3). Seeded from the repo file, then
 # edited live via `aws s3 cp`; ignore_changes keeps live edits from being reverted on apply (changeable

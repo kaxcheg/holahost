@@ -15,6 +15,8 @@ module "s3_frontend" {
   guidebook_template_path = "${path.module}/../../../${local.cfg.guidebook_template_path}"
   sample_guidebook_path   = "${path.module}/../../../${local.cfg.sample_guidebook_path}"
   sample_guidebook_key    = local.cfg.sample_guidebook_key
+  sample_messages_path    = "${path.module}/../../../${local.cfg.sample_messages_path}"
+  sample_messages_key     = local.cfg.sample_messages_key
   system_prompt_objects = {
     for e, c in local.cfg.envs : e => {
       key    = c.system_prompt_key

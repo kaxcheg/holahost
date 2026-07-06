@@ -18,6 +18,16 @@ variable "sample_guidebook_key" {
   description = "S3 object key for the published sample guidebook (config.yaml sample_guidebook_key) — also injected by lambda as SAMPLE_GUIDEBOOK_S3_KEY (single source, no drift)."
 }
 
+variable "sample_messages_path" {
+  type        = string
+  description = "Path to the sample guest-messages JSON published as config/sample_messages.json — value from infra/config.yaml, resolved to the repo root by the caller."
+}
+
+variable "sample_messages_key" {
+  type        = string
+  description = "S3 object key for the published sample-messages list (config.yaml sample_messages_key). Frontend-only (US-01/F-20) — no backend consumer, so no output/lambda fan-out."
+}
+
 variable "system_prompt_objects" {
   type        = map(object({ key = string, source = string }))
   description = "Per-env system-prompt objects (env => {key, source}), from config.yaml envs.<env>.system_prompt_key / system_prompt_path. One aws_s3_object published per entry."
