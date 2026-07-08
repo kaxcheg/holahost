@@ -2,18 +2,10 @@ import { get } from '../api/client';
 import { ApplicationError } from '../api/errors';
 import { MAGIC_LINK_PATH } from '../config';
 import { lead, magicLink } from '../state/session';
-import { extractMagicLink, stripQuery } from '../utils/url';
+import { extractMagicLink, normalizePath, stripQuery } from '../utils/url';
 
 /** Outcome of the magic-link landing flow, for the caller to route/notify on (§11.4). */
 export type LandingOutcome = 'none' | 'resolved' | 'expired';
-
-/**
- * `/claim` and `/claim/` must match: links from already-delivered emails have to work for the whole
- * `GUIDEBOOK_TTL`, across redeploys and contract tweaks (US-03, §11.4).
- */
-function normalizePath(path: string): string {
-  return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
-}
 
 /**
  * Handle the magic-link landing (`<MAGIC_LINK_PATH>?<param>=<token>`, §11.4 / §10.3): only when the SPA

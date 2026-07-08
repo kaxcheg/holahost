@@ -28,15 +28,16 @@ describe('main bootstrap', () => {
     await tick();
 
     expect(customElements.get('entrypoint-screen')).toBeTruthy();
-    expect(customElements.get('llm-key-msg-screen')).toBeTruthy();
+    expect(customElements.get('generate-screen')).toBeTruthy();
     expect(customElements.get('error-banner')).toBeTruthy();
     expect(document.querySelector('#root > entrypoint-screen')).not.toBeNull();
     expect(document.querySelector('body > error-banner')).not.toBeNull();
+    expect(document.querySelector('body > app-menu')).not.toBeNull();
   });
 
-  it('rehydrates the lead before the first render on a hard reload of /workspace', async () => {
+  it('rehydrates the lead before the first render on a hard reload of /guidebook', async () => {
     sessionStorage.setItem('magic_link', 'tok');
-    history.replaceState(null, '', '/workspace');
+    history.replaceState(null, '', '/guidebook');
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -55,7 +56,30 @@ describe('main bootstrap', () => {
     await bootstrap();
 
     expect(lead.value?.guidebook_id).toBe('gb-1');
-    expect(document.querySelector('#root > llm-key-msg-screen')).not.toBeNull();
+    expect(document.querySelector('#root > guidebook-screen')).not.toBeNull();
+  });
+
+  it('lands a resolved magic link on the guidebook screen even with a bound guidebook', async () => {
+    history.replaceState(null, '', `${MAGIC_LINK_PATH}?ml=tok`);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            email: 'a@b.co',
+            flow: 'guidebook',
+            guidebook_id: 'gb-1',
+            guidebook_name: 'Villa',
+            guidebook_created_at: '2026-01-01T00:00:00Z',
+          }),
+      }),
+    );
+    const { bootstrap } = await import('./main');
+
+    await bootstrap();
+
+    expect(window.location.pathname).toBe('/guidebook');
+    expect(document.querySelector('#root > guidebook-screen')).not.toBeNull();
   });
 
   it('shows the error banner when the landing resolve fails with a non-auth error', async () => {

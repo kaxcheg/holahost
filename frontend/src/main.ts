@@ -2,13 +2,14 @@
 // Element (side-effect imports → `customElements.define`), restore the session, handle a magic-link
 // landing, mount the global error banner, and start the router.
 import './styles/tailwind.css';
+import './components/app-menu';
 import './components/error-banner';
 import './components/entrypoint-screen';
 import './components/sample-response-screen';
 import './components/capture-email-screen';
 import './components/guidebook-screen';
 import './components/template-screen';
-import './components/llm-key-msg-screen';
+import './components/generate-screen';
 import './components/processing-screen';
 
 import { ApplicationError, messageFor } from './api/errors';
@@ -22,15 +23,17 @@ import { initSession, lead } from './state/session';
 /** SPA bootstrap; exported for tests (the module-level call below runs it in production). */
 export async function bootstrap(): Promise<void> {
   initSession();
-  // The banner lives outside the router's #root so it survives screen changes (§11.3 / §11.4).
+  // Banner and menu live outside the router's #root so they survive screen changes (§11.3 / US-08).
   document.body.prepend(document.createElement('error-banner'));
+  document.body.prepend(document.createElement('app-menu'));
 
   let outcome: LandingOutcome = 'none';
   try {
     outcome = await handleMagicLinkLanding();
     if (outcome === 'resolved') {
-      // Land the resolved session in the workspace; the router renders it below.
-      history.replaceState(null, '', '/workspace');
+      // Land the resolved session on the guidebook screen — always, regardless of a bound
+      // guidebook (US-03 / §11.1); the router renders it below.
+      history.replaceState(null, '', '/guidebook');
     } else if (outcome === 'expired') {
       showBanner(messageFor('ERR_INVALID_MAGIC_LINK'));
     }

@@ -1,11 +1,9 @@
+import { currentPath } from '../state/route';
 import { magicLink } from '../state/session';
-import { FALLBACK_TAG, ROUTES, type Route } from './routes';
+import { normalizePath } from '../utils/url';
+import { FALLBACK_TAG, ROUTES } from './routes';
 
 const ROOT_SELECTOR = '#root';
-
-function tagFor(route: Route): string {
-  return typeof route.tag === 'function' ? route.tag() : route.tag;
-}
 
 export interface Resolved {
   /** Effective path after the guard (may differ from the requested path on redirect). */
@@ -17,15 +15,18 @@ export interface Resolved {
 /**
  * Resolve a path to the screen tag to mount, applying the magic-link guard (§11.1).
  *
- * Unknown paths and guarded-away protected paths (no `magicLink`) resolve to the entrypoint at `/`
- * — silently, since the magic link may simply have expired (§11.1).
+ * Matching is trailing-slash tolerant (`/guidebook/` ≡ `/guidebook`, §11.1); the returned path is
+ * the canonical one. Unknown paths (including the retired `/workspace*`) and guarded-away
+ * protected paths (no `magicLink`) resolve to the entrypoint at `/` — silently, since the magic
+ * link may simply have expired (§11.1).
  */
 export function resolveScreen(path: string): Resolved {
-  const route = ROUTES[path];
+  const normalized = normalizePath(path);
+  const route = ROUTES[normalized];
   if (!route || (route.protected && magicLink.value === null)) {
     return { path: '/', tag: FALLBACK_TAG };
   }
-  return { path, tag: tagFor(route) };
+  return { path: normalized, tag: route.tag };
 }
 
 function mount(tag: string): void {
@@ -41,6 +42,7 @@ function renderCurrentLocation(): void {
   if (path !== window.location.pathname) {
     history.replaceState(null, '', path);
   }
+  currentPath.value = path;
   mount(tag);
 }
 
@@ -48,6 +50,7 @@ function renderCurrentLocation(): void {
 export function navigate(requestedPath: string): void {
   const { path, tag } = resolveScreen(requestedPath);
   history.pushState(null, '', path);
+  currentPath.value = path;
   mount(tag);
 }
 

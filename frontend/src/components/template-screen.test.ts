@@ -83,7 +83,7 @@ describe('template-screen', () => {
     const form = vi.mocked(postForm).mock.calls[0]?.[1] as FormData;
     expect(form.get('name')).toBe('Loft');
     expect(lead.value?.guidebook_id).toBe('gb-2');
-    expect(navigate).toHaveBeenCalledWith('/workspace');
+    expect(navigate).toHaveBeenCalledWith('/generate');
   });
 });
 

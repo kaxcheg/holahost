@@ -2,19 +2,22 @@ import { postJson, withRetry } from '../api/client';
 import { ApplicationError, hasCode, messageFor } from '../api/errors';
 import { navigate } from '../router/router';
 import { showBanner } from '../state/error-banner';
+import { byokKey, guestMessage, type ResponsePair, responsePairs } from '../state/generate-fields';
 import { clearSession, magicLink } from '../state/session';
 import { isValidGuestMessage, MAX_GUEST_MESSAGE_LENGTH } from '../utils/validation';
 
 /**
- * Answer screen (F-17 / §1.3.2 / §10.3).
+ * Generate screen (F-17 / F-25 / F-29 / §1.3.2 / §10.3).
  *
  * Host enters their BYOK Claude key (password input, in-memory only — never persisted, §10.3) and a
  * guest message; Send calls `POST /api/generate` (key as `X-Api-Key`, retryable upstream failures
- * backed off via {@link withRetry}) and appends each reply. The key and message inputs persist in the
- * element while mounted. Inline submitting state (not a processing swap) so the inputs and prior
- * replies survive repeated sends. Light DOM; self-registers as `<llm-key-msg-screen>`.
+ * backed off via {@link withRetry}) and appends each message → reply pair. The key, message, and
+ * reply history live in module-scope signals (`state/generate-fields`, §11.2 / §11.4), so they
+ * survive in-app navigation through the menu; a hard reload or tab close wipes them (US-06).
+ * Inline submitting state (not a processing swap) so the inputs and prior replies survive repeated
+ * sends. Light DOM; self-registers as `<generate-screen>`.
  */
-export class LlmKeyMsgScreen extends HTMLElement {
+export class GenerateScreen extends HTMLElement {
   private submitting = false;
 
   connectedCallback(): void {
@@ -41,12 +44,31 @@ export class LlmKeyMsgScreen extends HTMLElement {
         <p data-error role="alert" class="hidden text-sm text-red-600"></p>
         <div data-responses class="flex flex-col gap-3"></div>
       </section>`;
+    const key = this.querySelector<HTMLInputElement>('[data-key]');
+    if (key) {
+      key.value = byokKey.value;
+    }
+    const message = this.querySelector<HTMLTextAreaElement>('[data-message]');
+    if (message) {
+      message.value = guestMessage.value;
+    }
+    for (const pair of responsePairs.value) {
+      this.appendPair(pair);
+    }
     this.querySelector('[data-send]')?.addEventListener('click', this.onSend);
+    this.addEventListener('input', this.onFieldInput);
   }
 
   disconnectedCallback(): void {
     this.querySelector('[data-send]')?.removeEventListener('click', this.onSend);
+    this.removeEventListener('input', this.onFieldInput);
   }
+
+  /** Mirror the inputs into the module-scope signals so they survive in-app navigation (US-06). */
+  private readonly onFieldInput = (): void => {
+    byokKey.value = this.querySelector<HTMLInputElement>('[data-key]')?.value ?? '';
+    guestMessage.value = this.querySelector<HTMLTextAreaElement>('[data-message]')?.value ?? '';
+  };
 
   private setError(message: string | null): void {
     const el = this.querySelector('[data-error]');
@@ -65,11 +87,17 @@ export class LlmKeyMsgScreen extends HTMLElement {
     }
   }
 
-  private appendResponse(text: string): void {
+  private appendPair(pair: ResponsePair): void {
     const block = document.createElement('div');
-    block.className =
+    block.className = 'flex flex-col gap-1';
+    const message = document.createElement('p');
+    message.className = 'text-xs text-gray-500 whitespace-pre-wrap';
+    message.textContent = pair.message;
+    const reply = document.createElement('div');
+    reply.className =
       'rounded-md border border-gray-200 bg-white px-3 py-2 text-sm whitespace-pre-wrap';
-    block.textContent = text;
+    reply.textContent = pair.response;
+    block.append(message, reply);
     this.querySelector('[data-responses]')?.append(block);
   }
 
@@ -93,7 +121,9 @@ export class LlmKeyMsgScreen extends HTMLElement {
       const result = await withRetry(() =>
         postJson('/generate', { message }, { magicLink: magicLink.value ?? undefined, byok: key }),
       );
-      this.appendResponse(result.response_text);
+      const pair: ResponsePair = { message, response: result.response_text };
+      responsePairs.value = [...responsePairs.value, pair];
+      this.appendPair(pair);
     } catch (error) {
       this.handleError(error);
     } finally {
@@ -117,6 +147,7 @@ export class LlmKeyMsgScreen extends HTMLElement {
       return;
     }
     if (hasCode(error, 'ERR_INVALID_API_KEY')) {
+      byokKey.value = '';
       const keyInput = this.querySelector<HTMLInputElement>('[data-key]');
       if (keyInput) {
         keyInput.value = '';
@@ -127,7 +158,7 @@ export class LlmKeyMsgScreen extends HTMLElement {
     }
     if (hasCode(error, 'ERR_NO_GUIDEBOOK')) {
       showBanner(messageFor(error.code));
-      navigate('/workspace/upload');
+      navigate('/guidebook');
       return;
     }
     if (hasCode(error, 'ERR_RATE_LIMIT')) {
@@ -138,4 +169,4 @@ export class LlmKeyMsgScreen extends HTMLElement {
   }
 }
 
-customElements.define('llm-key-msg-screen', LlmKeyMsgScreen);
+customElements.define('generate-screen', GenerateScreen);

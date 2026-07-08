@@ -168,7 +168,7 @@ export class TemplateScreen extends HTMLElement {
 
   private readonly onClick = (event: MouseEvent): void => {
     if (event.target instanceof Element && event.target.closest('[data-action="back"]')) {
-      navigate('/workspace/upload');
+      navigate('/guidebook');
     }
   };
 
@@ -196,7 +196,8 @@ export class TemplateScreen extends HTMLElement {
         guidebook_name: result.name,
         guidebook_created_at: result.created_at,
       };
-      navigate('/workspace');
+      // Straight to the generate screen, explicitly — no state-dependent resolve (US-05 / §11.1).
+      navigate('/generate');
     } catch (error) {
       this.setSubmitting(false);
       if (error instanceof ApplicationError && hasCode(error, 'ERR_INVALID_MAGIC_LINK')) {

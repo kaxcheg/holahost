@@ -48,6 +48,19 @@ describe('capture-email-screen', () => {
     expect(el.textContent).toContain('Check your email');
   });
 
+  it('explains the guidebook continuation in the guidebook flow', () => {
+    expect(el.textContent).toContain('continue with your guidebook');
+  });
+
+  it('uses the waitlist wording in the sample flow', () => {
+    captureFlow.value = 'sample';
+    el.remove();
+    el = new CaptureEmailScreen();
+    document.body.append(el);
+    expect(el.textContent).toContain('save your place');
+    expect(el.textContent).not.toContain('continue with your guidebook');
+  });
+
   it('rejects an invalid email without calling the API', () => {
     setEmail(el, 'not-an-email');
     submit(el);

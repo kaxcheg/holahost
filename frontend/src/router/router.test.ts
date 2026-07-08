@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { lead, magicLink } from '../state/session';
+import { currentPath } from '../state/route';
+import { magicLink } from '../state/session';
 import { navigate, resolveScreen } from './router';
 import { isProtectedPath } from './routes';
 
@@ -8,7 +9,7 @@ beforeEach(() => {
   document.body.innerHTML = '<main id="root"></main>';
   history.replaceState(null, '', '/');
   magicLink.value = null;
-  lead.value = null;
+  currentPath.value = '/';
 });
 
 function mountedTag(): string | undefined {
@@ -26,34 +27,41 @@ describe('resolveScreen', () => {
   });
 
   it('guards protected paths when there is no magic link', () => {
-    expect(resolveScreen('/workspace')).toEqual({ path: '/', tag: 'entrypoint-screen' });
+    expect(resolveScreen('/guidebook')).toEqual({ path: '/', tag: 'entrypoint-screen' });
   });
 
-  it('resolves /workspace by guidebook presence when authenticated', () => {
+  it('resolves each screen path to its tag when authenticated', () => {
     magicLink.value = 'tok';
-    expect(resolveScreen('/workspace').tag).toBe('guidebook-screen');
-    lead.value = {
-      email: 'a@b.co',
-      flow: 'guidebook',
-      guidebook_id: 'gb-1',
-      guidebook_name: 'Villa',
-      guidebook_created_at: '2026-01-01T00:00:00Z',
-    };
-    expect(resolveScreen('/workspace').tag).toBe('llm-key-msg-screen');
+    expect(resolveScreen('/guidebook').tag).toBe('guidebook-screen');
+    expect(resolveScreen('/template').tag).toBe('template-screen');
+    expect(resolveScreen('/generate').tag).toBe('generate-screen');
+  });
+
+  it('normalizes a trailing slash to the canonical path', () => {
+    magicLink.value = 'tok';
+    expect(resolveScreen('/guidebook/')).toEqual({ path: '/guidebook', tag: 'guidebook-screen' });
+  });
+
+  it('falls back to the entrypoint on the retired /workspace paths', () => {
+    magicLink.value = 'tok';
+    expect(resolveScreen('/workspace').path).toBe('/');
+    expect(resolveScreen('/workspace/upload').path).toBe('/');
+    expect(resolveScreen('/workspace/template').path).toBe('/');
   });
 });
 
 describe('isProtectedPath', () => {
-  it('flags workspace paths as protected', () => {
-    expect(isProtectedPath('/workspace')).toBe(true);
-    expect(isProtectedPath('/workspace/upload')).toBe(true);
-    expect(isProtectedPath('/workspace/template')).toBe(true);
+  it('flags screen paths as protected, trailing-slash tolerant', () => {
+    for (const path of ['/guidebook', '/template', '/generate', '/guidebook/']) {
+      expect(isProtectedPath(path)).toBe(true);
+    }
   });
 
-  it('flags public and unknown paths as not protected', () => {
+  it('flags public, unknown, and retired paths as not protected', () => {
     expect(isProtectedPath('/')).toBe(false);
     expect(isProtectedPath('/sample-response')).toBe(false);
     expect(isProtectedPath('/nope')).toBe(false);
+    expect(isProtectedPath('/workspace')).toBe(false);
   });
 });
 
@@ -64,9 +72,24 @@ describe('navigate', () => {
     expect(mountedTag()).toBe('sample-response-screen');
   });
 
+  it('pushes the canonical path for a trailing-slash request', () => {
+    magicLink.value = 'tok';
+    navigate('/guidebook/');
+    expect(window.location.pathname).toBe('/guidebook');
+    expect(mountedTag()).toBe('guidebook-screen');
+  });
+
   it('mounts the entrypoint when navigating to a guarded path unauthenticated', () => {
-    navigate('/workspace');
+    navigate('/guidebook');
     expect(window.location.pathname).toBe('/');
     expect(mountedTag()).toBe('entrypoint-screen');
+  });
+
+  it('tracks the mounted path in currentPath', () => {
+    magicLink.value = 'tok';
+    navigate('/generate');
+    expect(currentPath.value).toBe('/generate');
+    navigate('/nope');
+    expect(currentPath.value).toBe('/');
   });
 });
