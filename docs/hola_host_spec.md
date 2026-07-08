@@ -49,20 +49,26 @@ stateDiagram-v2
 
         guidebook --> guidebook: upload
         guidebook --> template: by_template
-        template --> llm_key_msg: generate
+        template --> generate: generate
 
-        guidebook --> llm_key_msg: next
+        guidebook --> generate: next
+        guidebook --> generate: menu_generate
+        generate --> guidebook: menu_guidebook
+        template --> guidebook: menu_guidebook
+        template --> generate: menu_generate
 
-        llm_key_msg --> llm_key_msg: send
-        llm_key_msg --> [*]: close_tab
+        generate --> generate: send
+        generate --> [*]: close_tab
     }
 
     email_sent --> app: open_magic_link via email (out-of-band)
+    landing --> app: menu guidebook | generate (только при живой сессии)
 ```
 
 **Две точки входа:**
 1. **Landing widget** — пользователь попадает на сайт; выбирает `try_sample` или `use_guidebook`. После `capture_email` пользователь получает письмо с magic_link и закрывает вкладку (terminal `close_tab`); вход в Magic link app происходит **out-of-band** — пользователь открывает письмо и кликает по magic_link, что переводит его в `Magic link app` (ребро `email_sent → app`).
-2. **Magic link app** — пользователь оказывается в workspace, начинающемся с `guidebook` экрана. Альтернативный путь — открытие сохранённого magic_link URL напрямую (закладка, history) без захода через Landing widget; конечная точка та же.
+2. **Magic link app** — пользователь оказывается в workspace, начинающемся с `guidebook` экрана. Альтернативный путь — повторное открытие magic_link URL из письма (или явно сохранённой пользователем ссылки) без захода через Landing widget; в history вкладки токен не сохраняется — landing-handler вычищает `?ml=` через `replaceState` (§11.4); конечная точка та же.
+3. **Меню** — при живой сессии (`session.magicLink !== null`, §11.4) на **каждом** экране, включая Landing widget, отображается краткое меню `guidebook · generate` (рёбра `menu_*`); пункт ведёт на соответствующий экран, пункт текущего экрана выделен; без сессии меню не рендерится. AC — US-08; маршруты — §11.1.
 
 #### 1.3.2 Содержимое экранов
 
@@ -74,7 +80,8 @@ stateDiagram-v2
 | `email_sent` | text «check your email» |
 | `guidebook` | text gb info (`name` / created · или «no guidebook yet») · field `name` (отображаемое имя гайдбука) · file chooser **OR** Generate by template · button Upload (disabled пока файл и `name` не заполнены) · button Next (disabled пока gb нет) |
 | `template` | text · form (6 required + 13 optional полей, schema из `docs/guidebook_template.json` через CloudFront; см. §10.6) · button Generate |
-| `llm_key_msg` | text · field API key (persistent in memory) · field guest_message (persistent) · button Send · response area |
+| `generate` | text · field API key (persistent in memory) · field guest_message (persistent) · button Send · response area |
+| `menu` (не экран — элемент поверх всех экранов при живой сессии) | пункты `guidebook` · `generate`; активный пункт выделен; скрыт при `session.magicLink === null` |
 
 #### 1.3.3 Принципиальные интерфейсы
 
@@ -149,7 +156,11 @@ stateDiagram-v2
 │  [ Generate ]                          │
 └────────────────────────────────────────┘
 
-┌─ llm_key_msg ─────────────────────────┐
+┌─ menu (все экраны, при живой сессии) ─┐
+│  [ guidebook ]  [ generate ]           │
+└────────────────────────────────────────┘
+
+┌─ generate ────────────────────────────┐
 │  Instructions, trust-сигналы           │
 │  ┌──────────────────────────────────┐  │
 │  │ API key (persistent in tab)       │  │
@@ -178,8 +189,8 @@ stateDiagram-v2
 
 #### 1.3.5 Rate limit (обязательно)
 
-Все backend-запросы (sample_response/send, capture_email/send, open_magic_link, upload, send в llm_key_msg) ограничены **двумя независимыми rate-limit-параметрами**. Submit формы template-flow на бэке — это та же `/api/ingest/upload` ручка (см. §10.6), отдельной точки rate-limit нет.
-- **Per magic_link** — для запросов после открытия magic_link (upload, llm_key_msg/send, open_magic_link); защита от runaway-цикла одного пользователя.
+Все backend-запросы (sample_response/send, capture_email/send, open_magic_link, upload, send в generate) ограничены **двумя независимыми rate-limit-параметрами**. Submit формы template-flow на бэке — это та же `/api/ingest/upload` ручка (см. §10.6), отдельной точки rate-limit нет.
+- **Per magic_link** — для запросов после открытия magic_link (upload, generate/send, open_magic_link); защита от runaway-цикла одного пользователя.
 - **Per IP** — для всех запросов; защита от анонимных абуз-сценариев (sample-flow, capture_email, open_magic_link до привязки к Lead'у).
 
 Превышение любого из лимитов → ошибка с указанием retry-after. Конкретные числа (окна, scope-разделение по эндпоинтам) — в §10.2.
@@ -411,7 +422,7 @@ AC ссылаются на параметры по символическому 
 | `MAX_OUTPUT_TOKENS` | потолок output-tokens ответа | §10.2 (1000 токенов) |
 | `RESPONSE_P95_BUDGET` | целевой p95 времени отклика LLM | §10.2 (8 с) |
 | `GUIDEBOOK_TTL` | TTL связки `Lead.magic_link ↔ Guidebook`; sliding по `Lead.last_seen_at` | §10.1 (30 дней) |
-| `RATE_LIMIT_PER_MAGIC_LINK` | rate limit для запросов с привязкой к magic_link (upload, template/generate, llm_key_msg/send, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
+| `RATE_LIMIT_PER_MAGIC_LINK` | rate limit для запросов с привязкой к magic_link (upload, template/generate, generate/send, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
 | `RATE_LIMIT_PER_IP` | rate limit на все backend-запросы (включая sample, capture_email, open_magic_link); fixed-window 1 ч | §10.2 (60 req/час) |
 | `SAMPLE_BUDGET_DAILY_CAP`, `SAMPLE_BUDGET_RESET_AT` | глобальный суточный потолок sample-flow (output-tokens) и время сброса (UTC, lazy на первом запросе после полуночи) | §10.2 (200 000 токенов / 00:00 UTC) |
 | `EMAIL_REGEX`, `EMAIL_MAX_LENGTH` | валидация email | §10.7 (`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\Z` / 254) |
@@ -451,6 +462,7 @@ AC ссылаются на параметры по символическому 
 - На экране `entrypoint` видна кнопка `Use guidebook` без скролла. Клик `use_guidebook` переводит на `capture_email` с `Lead.flow = 'guidebook'`.
 - На экране `sample_response` доступен переход `leave_email` → `capture_email` с `Lead.flow = 'sample'`.
 - На экране `capture_email` видны: текст-обещание (что мы делаем с email), поле ввода email, кнопка `Send`.
+- Текст на `capture_email` параметризуется точкой входа (`Lead.flow`, сигнал `captureFlow`): в guidebook-флоу (`use_guidebook`) текст явно объясняет, что после отправки email пользователь сможет продолжить работу с guidebook по ссылке из письма; в sample-флоу (`leave_email`) — семантика сохранения места (waitlist). Текст-обещание присутствует в обоих вариантах.
 - Email, не проходящий `EMAIL_REGEX` или длиннее `EMAIL_MAX_LENGTH`, блокирует submit; сообщение об ошибке у поля.
 - При submit:
   - Новый email → `Lead.create()` с генерацией `MagicLink.new()` + запись в `leads`; magic_link отправляется на email через Resend.
@@ -472,10 +484,10 @@ AC ссылаются на параметры по символическому 
 - Контракт-тест (CI): URL-префикс письма, собираемый бэкендом (`{frontend_origin}{magic_link_path}?{magic_link_url_param}=`), даёт pathname, равный (с точностью до trailing slash) `MAGIC_LINK_PATH` фронта; оба значения — из единственного источника `frontend/.env` (§10.9).
 - Токен на landing-пути не теряется молча: происходит либо resolve (успех или `ERR_INVALID_MAGIC_LINK`), либо показ error-banner'а (сетевая/5xx-ошибка, US-07). Молчаливый показ `entrypoint` при наличии `?ml=` в URL на landing-пути — дефект.
 - Открытие URL вызывает `open_magic_link` → backend resolves magic_link → возвращает Lead + (опционально) Guidebook metadata.
-- При успехе пользователь переходит на экран `guidebook`:
+- При успехе пользователь переходит на экран `guidebook` — **всегда, в том числе при уже привязанном Guidebook'е** (landing-цель не зависит от `Lead.guidebook_id`; редирект — явный `history.replaceState('/guidebook')`, §11.1):
   - Если у Lead'а нет привязанного Guidebook'а — отображается «no guidebook yet».
   - Если есть — отображается info о текущем гайдбуке (название/created_at), кнопка `Next` enabled.
-- **Прямой заход / hard-reload защищённого `/workspace`** (закладка, refresh) без предшествующего in-tab resolve перезапрашивает `GET /api/magic-link/resolve` (по восстановленному из sessionStorage `session.magicLink`) и регидрирует `lead` до рендера экрана → workspace отражает фактическую привязку гайдбука (не «no guidebook yet» при наличии гайдбука).
+- **Прямой заход / hard-reload защищённого пути** (`/guidebook`, `/generate`, `/template`; закладка, refresh) без предшествующего in-tab resolve перезапрашивает `GET /api/magic-link/resolve` (по восстановленному из sessionStorage `session.magicLink`) и регидрирует `lead` до рендера экрана → экран отражает фактическую привязку гайдбука (не «no guidebook yet» при наличии гайдбука).
 - Magic_link, уже очищенный cleanup-задачей (§10.1), либо не найденный → `ERR_INVALID_MAGIC_LINK`; UI отображает сообщение и предлагает повторить путь через `entrypoint`. **TTL — cleanup-eventual:** токен, чей `last_seen_at` превысил `GUIDEBOOK_TTL`, но ещё не очищен cleanup'ом, резолвится успешно (200) с `guidebook = null` (sliding-TTL: любой backend-вызов обновляет `last_seen_at`; фактическое истечение — только после полного `GUIDEBOOK_TTL` бездействия и прогона cleanup, §10.1).
 - Успешный `open_magic_link` обновляет `Lead.last_seen_at` (sliding TTL).
 - Превышение `RATE_LIMIT_PER_IP` → `ERR_RATE_LIMIT`.
@@ -511,8 +523,8 @@ AC ссылаются на параметры по символическому 
 - Незаполненное обязательное поле блокирует submit; конкретное поле подсвечивается.
 - Поле, превысившее лимит длины, блокирует submit с указанием поля и лимита.
 - Submit запускает: фронт собирает plain text по `<label>: <value>\n\n`, авто-fills `name = property_name`-value, шлёт в `/api/ingest/upload`. На бэке — обычный upload-pipeline (чанкинг → embedding → save), создаёт или replace'ит Guidebook у Lead'а (1:1; magic_link не меняется).
-- После успешной генерации пользователь переводится **сразу на экран `llm_key_msg`** (минуя возврат на `guidebook`), см. §1.3.1.
-- Время от submit формы до перехода на `llm_key_msg` ≤ `INGESTION_P95_BUDGET` (p95).
+- После успешной генерации пользователь переводится **сразу на экран `generate`** (минуя возврат на `guidebook`) — явным `navigate('/generate')`, не через state-зависимый резолв (§11.1); см. §1.3.1.
+- Время от submit формы до перехода на `generate` ≤ `INGESTION_P95_BUDGET` (p95).
 - Структура полей шаблона и их лимиты → §10.6.
 - Превышение `RATE_LIMIT_PER_MAGIC_LINK` или `RATE_LIMIT_PER_IP` → `ERR_RATE_LIMIT`.
 
@@ -521,7 +533,7 @@ AC ссылаются на параметры по символическому 
 > As a host with a saved guidebook, I want to enter my Claude API key and a guest message so that I can see how the demo would answer in my voice.
 
 **AC:**
-- На экране `llm_key_msg` поле `API key` имеет тип `password` (значение не отображается обратно после ввода).
+- На экране `generate` поле `API key` имеет тип `password` (значение не отображается обратно после ввода).
 - Рядом с полями `API key` и `Guest message` видны: текст-обещание про ключ, ссылка на публичный репозиторий (механика хранения — §10.3).
 - API key и Guest message сохраняются **только в памяти JS** (не в `localStorage`/`sessionStorage`/`IndexedDB`/cookie); проверяется отсутствием соответствующих записей в DevTools.
 - Hard reload или закрытие вкладки → ключ и сообщение очищаются.
@@ -531,7 +543,7 @@ AC ссылаются на параметры по символическому 
 - Submit (`send`) генерирует ответ; ответ append'ится в `response area` без перезагрузки экрана.
 - Ответ отображается как plain text без сырой Markdown-разметки; системный промпт real-flow требует plain-text-ответ от первого лица хоста (симметрично US-01, §10.3).
 - Ответ **заземлён на загруженный гайдбук**: после upload гайдбука с уникальным sentinel-фактом ответ на вопрос об этом факте содержит sentinel (заземление на данные хоста, а не на общие знания модели; регресс-защита ретривала).
-- Поля `API key` и `Guest message` сохраняют значения для повторного `send` (можно изменить сообщение и/или ключ и снова отправить).
+- Поля `API key` и `Guest message` сохраняют значения для повторного `send` (можно изменить сообщение и/или ключ и снова отправить) — **в том числе при in-app навигации**: уход через меню на `guidebook`/`template` и возврат на `generate` в той же вкладке не очищает ни значения полей, ни накопленные пары «сообщение → ответ» в `response area` (хранение — module-scope signals в памяти JS, §11.2/§11.4). Hard reload / закрытие вкладки очищает по-прежнему.
 - При фокусе на `API key` и `Guest message` выделяется весь текст.
 - Время от submit до начала отображения ответа ≤ `RESPONSE_P95_BUDGET` (p95).
 - Длина ответа не превышает `MAX_OUTPUT_TOKENS`.
@@ -560,6 +572,18 @@ AC ссылаются на параметры по символическому 
 - Никакая ошибка не отображает значение API key (даже частичное) и не отображает значение magic_link.
 - Полная таксономия `ERR_*` и формат тела ошибки → §10.8.
 
+### US-08: Меню воркспейса
+
+> As a returning host with a live session, I want a persistent short menu so that I can switch between my guidebook and answer generation from anywhere in the app.
+
+**AC:**
+- При `session.magicLink !== null` на **каждом** экране (включая `entrypoint`, `sample_response`, `capture_email`) виден компонент меню с пунктами `guidebook` и `generate`.
+- При `session.magicLink === null` меню не рендерится; публичные экраны без сессии выглядят как раньше.
+- Пункт меню ведёт на соответствующий путь (`/guidebook`, `/generate`) через роутер (History API, без перезагрузки страницы); URL в адресной строке меняется на путь целевого экрана.
+- Пункт, соответствующий текущему экрану, визуально выделен (active state); на остальных экранах (`template`, landing-экраны) ни один пункт не выделен.
+- Переход через меню не сбрасывает `lead` и не очищает in-memory состояние экрана `generate` — поля и response area (US-06).
+- Переход по пункту меню при истёкшей/невалидной сессии подчиняется общему guard'у и обработке 401 (§11.1/§11.4): silent redirect на `/` + очистка сессии.
+
 ### 3.8 Покрытие сценариев карты пути (§1.3)
 
 | Узел / переход карты | Покрыто в |
@@ -574,10 +598,12 @@ AC ссылаются на параметры по символическому 
 | `app: [*] → guidebook` (entry into Magic link app) | US-03 |
 | `guidebook → guidebook` (`upload`) | US-04 |
 | `guidebook → template` (`by_template`) | US-05 (точка входа) |
-| `template → llm_key_msg` (`generate`) | US-05 |
-| `guidebook → llm_key_msg` (`next`) | US-06 (точка входа) |
-| `llm_key_msg → llm_key_msg` (`send`) | US-06 |
-| `llm_key_msg → close_tab` (terminal Magic link app) | US-06 |
+| `template → generate` (`generate`) | US-05 |
+| `guidebook → generate` (`next`) | US-06 (точка входа) |
+| `generate → generate` (`send`) | US-06 |
+| `generate → close_tab` (terminal Magic link app) | US-06 |
+| `guidebook ↔ generate`, `template → guidebook`/`generate` (`menu_*`) | US-08 |
+| `landing → app` (`menu`, при живой сессии) | US-08 |
 | Любая `ERR_*` ветка | US-07 |
 
 Все темы из §2.8 приняты в §10; AC, ссылающиеся на параметры (`MAX_GUEST_MESSAGE_LENGTH`, `RATE_LIMIT_*`, `GUIDEBOOK_TTL`, `EMAIL_REGEX` и др.), численно верифицируемы по значениям из §10.
@@ -654,7 +680,7 @@ CREATE TABLE leads (
 - `email` — естественный UNIQUE-ключ; `EMAIL_DEDUP_POLICY = silent_upsert_with_new_magic_link` (см. US-02) реализуется как `INSERT … ON CONFLICT (email) DO UPDATE SET last_seen_at=now(), magic_link=<new>`.
 - `magic_link` — URL-safe random token (см. §1.3.4); генерируется `MagicLinkGenerator` (порт §2.2) при `capture_email` или silent_upsert; UNIQUE; nullable (NULL после истечения TTL или до первого capture). Используется как auth-токен для входа в Magic link app (`open_magic_link`).
 - `captured_at` — момент первого захвата email; не меняется.
-- `last_seen_at` — TTL-якорь magic_link'а; обновляется на каждом `open_magic_link` и каждом успешном backend-вызове с привязкой к magic_link (upload, template/generate, llm_key_msg/send).
+- `last_seen_at` — TTL-якорь magic_link'а; обновляется на каждом `open_magic_link` и каждом успешном backend-вызове с привязкой к magic_link (upload, template/generate, generate/send).
 - `flow` — точка захвата email: `'guidebook'` (через кнопку `use_guidebook` на entrypoint) | `'sample'` (через `leave_email` на sample_response); фиксируется только при INSERT, не перезаписывается при silent_upsert.
 - `guidebook_id` ON DELETE SET NULL — при удалении гайдбука (TTL-cleanup или replace) ссылка обнуляется, сам Lead остаётся.
 - `ip_hash` — `SHA-256(creator_ip + salt)`, abuse-tracking.
@@ -676,7 +702,7 @@ CREATE TABLE guidebooks (
 - `guidebook_id` — `GuidebookId.new()` (UUID); создаётся в `Guidebook.create()` при upload (US-04, US-05).
 - `name` — отображаемое имя гайдбука; вводится host'ом при file-upload (US-04); авто-fills из `property_name`-поля при template-flow на фронте (US-05, см. §10.6). Используется в UI (workspace, magic-link-resolve response §5.5).
 - `created_at` — момент создания (первый upload после magic_link).
-- `last_accessed_at` — обновляется на каждом `/api/generate` (`llm_key_msg → send`); вспомогательно для analytics и отладки.
+- `last_accessed_at` — обновляется на каждом `/api/generate` (`generate → send`); вспомогательно для analytics и отладки.
 - `ip_hash` — IP создателя на момент upload.
 - `access_param` **удалён** из этой таблицы; единый токен входа теперь — `leads.magic_link` (см. §1.3.4).
 
@@ -743,8 +769,8 @@ CREATE TABLE sample_budget (
 | `leads` | UNIQUE на `magic_link` (partial WHERE NOT NULL) | resolve в `open_magic_link` (US-03) | SELECT … WHERE magic_link=? |
 | `leads` | partial INDEX на `(last_seen_at) WHERE magic_link IS NOT NULL` | cleanup expired magic_links (§4.7) | DELETE/UPDATE WHERE last_seen_at < ? |
 | `leads` | partial INDEX на `(guidebook_id) WHERE guidebook_id IS NOT NULL` | обратный поиск Lead по Guidebook (analytics) | SELECT email WHERE guidebook_id=? |
-| `guidebooks` | PK на `guidebook_id` | lookup при /generate (llm_key_msg/send) | SELECT … |
-| `chunks` | INDEX на `guidebook_id` | retrieve чанков (llm_key_msg/send) | SELECT … WHERE guidebook_id=? |
+| `guidebooks` | PK на `guidebook_id` | lookup при /generate (generate/send) | SELECT … |
+| `chunks` | INDEX на `guidebook_id` | retrieve чанков (generate/send) | SELECT … WHERE guidebook_id=? |
 | `rate_limit_counters` | PK (`scope`, `subject`, `window_start`) | проверка/инкремент в каждом endpoint'е | UPSERT … RETURNING counter |
 | `rate_limit_counters` | INDEX на `window_start` | cleanup | DELETE WHERE window_start < ? |
 | `sample_budget` | PK на `date` | pre-check / post-increment (sample_response/send) | UPSERT … RETURNING output_tokens_used |
@@ -799,7 +825,7 @@ HTTP-контракт между фронтом (Vite TS bundle) и backend (Lam
 | 5.4 | POST | `/api/leads/capture` | — | захват email + создание/перегенерация magic_link + отправка письма | `capture_email/send` |
 | 5.5 | GET | `/api/magic-link/resolve` | magic_link | resolve magic_link → Lead + (опц.) Guidebook metadata (включая `name`) | `open_magic_link` (loader Magic link app) |
 | 5.6 | POST | `/api/ingest/upload` | magic_link | upload файла или rendered text (фронт-template) → Guidebook + chunks + embeddings | `guidebook/upload`, `template/generate` (см. §10.6) |
-| 5.7 | POST | `/api/generate` | magic_link + BYOK | real-flow ответ на сообщение гостя | `llm_key_msg/send` |
+| 5.7 | POST | `/api/generate` | magic_link + BYOK | real-flow ответ на сообщение гостя | `generate/send` |
 
 ### 5.3 POST /api/sample/generate
 
@@ -1051,7 +1077,7 @@ sequenceDiagram
     participant LM as Lambda
     participant DB as Neon Postgres
 
-    Note over BR: чтение ?ml=<token> из URL<br/>замена URL на /app/ (history.replaceState)
+    Note over BR: чтение ?ml=<token> из URL<br/>замена URL на /guidebook (history.replaceState)
     BR->>LM: GET /api/magic-link/resolve<br/>header: magic_link
     LM->>DB: rate check + increment (scope=ip)
     DB-->>LM: ok
@@ -1103,7 +1129,7 @@ sequenceDiagram
 
 ### 6.5 Real-flow: ответ на сообщение гостя
 
-Endpoint: `POST /api/generate` (§5.7). Триггер UI: `llm_key_msg/send` (§1.3). BYOK обязателен.
+Endpoint: `POST /api/generate` (§5.7). Триггер UI: `generate/send` (§1.3). BYOK обязателен.
 
 ```mermaid
 sequenceDiagram
@@ -1141,9 +1167,9 @@ sequenceDiagram
 | `Magic link app: [*] → guidebook` (loader) | GET `/api/magic-link/resolve` | §6.3 |
 | `guidebook/upload` | POST `/api/ingest/upload` | §6.4 |
 | `template/generate` | POST `/api/ingest/upload` (фронт рендерит форму, отправляет как text/plain — см. §10.6) | §6.4 |
-| `llm_key_msg/send` | POST `/api/generate` | §6.5 |
+| `generate/send` | POST `/api/generate` | §6.5 |
 
-UI-переходы без backend-вызовов (`entrypoint → sample_response`, `entrypoint → capture_email`, `sample_response → capture_email`, `guidebook → template`, `guidebook → llm_key_msg`, `close_tab`) в §6 не разворачиваются.
+UI-переходы без backend-вызовов (`entrypoint → sample_response`, `entrypoint → capture_email`, `sample_response → capture_email`, `guidebook → template`, `guidebook → generate`, `menu_*`-переходы (US-08), `close_tab`) в §6 не разворачиваются.
 
 ---
 
@@ -3798,13 +3824,15 @@ frontend/
       sample-budget.ts                # sampleBudgetExhausted signal
       error-banner.ts                 # bannerMessage signal (глобальный баннер)
       capture-flow.ts                 # captureFlow signal (точка захвата email для /capture-email)
+      generate-fields.ts              # byokKey / guestMessage / responsePairs signals (in-memory состояние экрана generate; US-06)
     components/
       entrypoint-screen.ts            # экран entrypoint (§1.3.1)
       sample-response-screen.ts       # экран sample_response
       capture-email-screen.ts         # экран capture_email
       guidebook-screen.ts             # экран guidebook (upload/template choice)
       template-screen.ts              # форма template (schema из /config/template_schema.json через CloudFront — §10.6)
-      llm-key-msg-screen.ts           # экран llm_key_msg (BYOK + guest message)
+      generate-screen.ts              # экран generate (BYOK + guest message)
+      menu.ts                         # краткое меню guidebook · generate (при живой сессии) — US-08
       processing-screen.ts            # inline loading-индикатор (НЕ роут; показывается во время upload/generate)
       error-banner.ts                 # глобальный error-banner
     styles/
@@ -3824,19 +3852,26 @@ frontend/
 - маппинг `path-pattern → tagName` (Custom Element) в `routes.ts`;
 - роутер монтирует соответствующий `<screen-element>` в `<main id="root">` (старый размонтируется).
 
-Карта маршрутов соответствует state machine §1.3.1:
+Карта маршрутов соответствует state machine §1.3.1. **Принципы роутинга (жёсткие, Spec-extend 2026-07-07):**
+- **1 экран = 1 путь**; путь = имя экрана. `Route.tag` — только строка: никаких state-зависимых резолверов (ветвление по `Lead.guidebook_id` запрещено).
+- Транзитные под-состояния (`email_sent`, `processing`) URL-адресов **не имеют** — рендерятся внутри экрана-хозяина, URL не меняется.
+- Цели redirect'ов явные: landing-handler после resolve — `history.replaceState('/guidebook')`; успешный `generate` в template — `navigate('/generate')` (§3 US-05).
+- Сопоставление путей нормализует trailing slash для **всех** маршрутов (`/guidebook/` ≡ `/guidebook`), не только для landing-пути.
+- Неизвестный путь → silent redirect на `/` (см. guard ниже).
 
 | Path | Screen Custom Element | Guard |
 |---|---|---|
 | `/` | `<entrypoint-screen>` | — (публичный) |
 | `/sample-response` | `<sample-response-screen>` | — |
 | `/capture-email` | `<capture-email-screen>` | — |
-| `/workspace` | `<guidebook-screen>` или `<llm-key-msg-screen>` (зависит от `Lead.guidebook_id`, §1.3.4) | требует `session.magicLink` (см. §11.4) |
-| `/workspace/upload` | `<guidebook-screen>` upload-mode | требует `session.magicLink` |
-| `/workspace/template` | `<template-screen>` | требует `session.magicLink` |
-| `{MAGIC_LINK_PATH}?ml=<token>` (по умолчанию `/claim?ml=…`; trailing slash нормализуется, §11.4) | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/magic-link/resolve`, `history.replaceState`; `resolved` → `/workspace`, `expired` → error-banner | — |
+| `/guidebook` | `<guidebook-screen>` (gb info + upload / выбор template; upload-mode — внутреннее состояние экрана, отдельного пути нет) | требует `session.magicLink` (см. §11.4) |
+| `/template` | `<template-screen>` | требует `session.magicLink` |
+| `/generate` | `<generate-screen>` | требует `session.magicLink` |
+| `{MAGIC_LINK_PATH}?ml=<token>` (по умолчанию `/claim?ml=…`; trailing slash нормализуется, §11.4) | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/magic-link/resolve`, `history.replaceState`; `resolved` → `/guidebook` (всегда, независимо от `Lead.guidebook_id`; §3 US-03), `expired` → error-banner | — |
 
-**Защищённые маршруты** (`/workspace/*`): guard в роутере проверяет `session.magicLink !== null`; при отсутствии — `history.replaceState('/')` и редирект на entrypoint (без error-сообщения, magic_link мог истечь).
+Бывшие пути `/workspace`, `/workspace/upload`, `/workspace/template` упразднены (Spec-extend 2026-07-07): state-зависимый резолв `/workspace` нарушал «1 экран = 1 путь» и уводил returning-хоста мимо `guidebook`.
+
+**Защищённые маршруты** (`/guidebook`, `/template`, `/generate`): guard в роутере проверяет `session.magicLink !== null`; при отсутствии — `history.replaceState('/')` и редирект на entrypoint (без error-сообщения, magic_link мог истечь).
 
 ### 11.2 Управление состоянием
 
@@ -3852,11 +3887,12 @@ frontend/
 | `state/session.ts` | `templateSchema: Signal<readonly unknown[] \| null>` | кэш ответа `fetch('/config/template_schema.json')` через CloudFront-статику (§10.6), грузится при mount template-экрана; ответ, не являющийся JSON-массивом (в т.ч. SPA-fallback `index.html`), → видимая ошибка формы (`Array.isArray`-guard), не пустой экран |
 | `state/sample-messages.ts` | `sampleMessages: Signal<readonly string[] \| null>` | кэш ответа `fetch('/config/sample_messages.json')` через ту же статику (§3 US-01), грузится при mount sample-экрана |
 | `state/error-banner.ts` | `bannerMessage: Signal<string \| null>` | текст глобального error-banner (§11.3/§11.4); `null` — баннер скрыт |
-| `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/leads/capture` |
+| `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/leads/capture` + flow-параметризация текста экрана (§3 US-02) |
+| `state/generate-fields.ts` | `byokKey: Signal<string>`, `guestMessage: Signal<string>`, `responsePairs: Signal<ReadonlyArray<{message: string; response: string}>>` | in-memory состояние экрана `generate` (поля + история пар «сообщение → ответ»); переживает in-app навигацию через меню (US-06/US-08); НЕ зеркалируется ни в какой storage; hard reload / tab-close очищает |
 
 Подписка из компонента — через `effect()` внутри `connectedCallback` (cleanup через возвращаемую функцию в `disconnectedCallback`).
 
-**Сохранение через перезагрузку:** `magicLink` зеркалируется в `sessionStorage["magic_link"]`. При старте `main.ts` читает sessionStorage и инициализирует сигнал. **`lead` не зеркалируется**: при прямом заходе/hard-reload `/workspace` (когда `magicLink` восстановлен, но `lead === null`) `main.ts` / роутер-guard перезапрашивает `GET /api/magic-link/resolve` и регидрирует `lead` до рендера экрана (иначе workspace покажет «no guidebook yet» при наличии гайдбука; §3 US-03). Tab-close очищает sessionStorage штатно. localStorage не используется (явное решение — magic_link не должен переживать tab-close сверх того, что делает sessionStorage; BYOK Claude key не сохраняется нигде).
+**Сохранение через перезагрузку:** `magicLink` зеркалируется в `sessionStorage["magic_link"]`. При старте `main.ts` читает sessionStorage и инициализирует сигнал. **`lead` не зеркалируется**: при прямом заходе/hard-reload защищённого пути (`/guidebook` / `/generate` / `/template`; `magicLink` восстановлен, но `lead === null`) `main.ts` / роутер-guard перезапрашивает `GET /api/magic-link/resolve` и регидрирует `lead` до рендера экрана (иначе экран покажет «no guidebook yet» при наличии гайдбука; §3 US-03). Tab-close очищает sessionStorage штатно. localStorage не используется (явное решение — magic_link не должен переживать tab-close сверх того, что делает sessionStorage; BYOK Claude key не сохраняется нигде).
 
 **Серверный data-cache:** простая in-memory `Map<key, value>` per screen для повторных запросов на одной сессии (например, `templateSchema`); без TTL, без библиотеки типа React Query.
 
@@ -3902,8 +3938,8 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 - очистка: tab-close (sessionStorage очищается штатно) или `/api/magic-link/resolve` с 401 (frontend-side guard).
 
 **BYOK Claude key** — не сессионный, передаётся явно:
-- ввод: input на `<llm-key-msg-screen>`, type `password`;
-- storage: **никакого** — значение живёт только в JS-памяти input'а и аргументе вызова `client.post('/api/generate', { byok, message })`; после `await` ссылок не остаётся;
+- ввод: input на `<generate-screen>`, type `password`;
+- storage: только module-scope signal в JS-памяти (`state/generate-fields.ts`, §11.2) — переживает in-app навигацию через меню в пределах вкладки (US-06/US-08); hard reload / tab-close очищает; в вызов уходит аргументом `client.post('/api/generate', { byok, message })`;
 - передача в API: `X-Api-Key` header только на `/api/generate`;
 - НЕ зеркалируется в sessionStorage / localStorage / cookie.
 
@@ -4373,7 +4409,7 @@ Strict с первого коммита; ослабление настроек �
 - `F-14` Component `<capture-email-screen>` (с honeypot-полем) — §1.3.2 / §10.7
 - `F-15` Component `<guidebook-screen>` (upload-mode имеет input `name`; template-mode — переход на template-screen) — §1.3.2
 - `F-16` Component `<template-screen>` (динамическая форма из `/config/template_schema.json`; на submit рендерит plain text по `<label>: <value>\n\n` и шлёт в `/api/ingest/upload` с auto-filled `name = property_name`) — §10.6
-- `F-17` Component `<llm-key-msg-screen>` (BYOK input + guest message) — §1.3.2 / §10.3
+- `F-17` Component `<llm-key-msg-screen>` (BYOK input + guest message) — §1.3.2 / §10.3 (переименование в `<generate-screen>` — F-25, Spec-extend 2026-07-07)
 - `F-18` Component `<processing-screen>` — inline loading-индикатор (НЕ роут/состояние; §11.3 loading-state), показывается экранами upload/generate во время in-flight
 - `F-19` `main.ts` (bootstrap, mount, router start, session init из sessionStorage) — §11.1
 
@@ -4422,7 +4458,7 @@ Strict с первого коммита; ослабление настроек �
 - `F-20` `<sample-response-screen>` v2: editable-поле + список `SAMPLE_MESSAGES` из `/config/sample_messages.json` (signal `sampleMessages` в `state/sample-messages.ts` + dev-serve из `docs/`) + отправка фактического содержимого поля + пары «сообщение → ответ» в response area + подстановка следующей заготовки (только если поле не тронуто) — §3 US-01 — `#AF-0` (баги 2, 4)
 - `F-21` Download-ссылка sample-гайдбука → `/config/sample_guidebook.md` (`download="sample_guidebook.md"`; dev-serve из `docs/`; non-HTML `Content-Type`) — §3 US-01 / §10.9 — `#AF-0` (баг 3)
 - `F-22` Magic-link landing: нормализация trailing slash в сравнении с `MAGIC_LINK_PATH` + error-banner вместо молчаливого `entrypoint` при неразрешённом токене на landing-пути — §11.4 / §3 US-03 — `#AF-0` (баг 1)
-- `F-23` Workspace-регидрация: при прямом заходе/hard-reload `/workspace` (`magicLink` восстановлен, `lead === null`) — повторный `GET /api/magic-link/resolve` + регидрация `lead` до рендера экрана — §11.2 / §3 US-03 — `#AF-5`
+- `F-23` Workspace-регидрация: при прямом заходе/hard-reload защищённого пути (`/guidebook` / `/generate` / `/template` — пути актуализированы Spec-extend 2026-07-07; `magicLink` восстановлен, `lead === null`) — повторный `GET /api/magic-link/resolve` + регидрация `lead` до рендера экрана — §11.2 / §3 US-03 — `#AF-5`
 - `F-24` `<template-screen>`: `Array.isArray`-guard на ответе `/config/template_schema.json` + видимая ошибка загрузки формы при не-JSON/не-массиве (SPA-fallback `index.html`) — §3 US-05 / §11.2 — `#AF-2`
 
 **Infrastructure**
@@ -4433,3 +4469,15 @@ Strict с первого коммита; ослабление настроек �
 
 - `C-10` Контракт-тесты sample/magic-link: (a) pathname URL-префикса письма (бэкенд-сборка `{frontend_origin}{magic_link_path}?{magic_link_url_param}=`) == `MAGIC_LINK_PATH` фронта с точностью до trailing slash, из единого источника `frontend/.env`; (b) pre-commit `validate-sample-messages` — `docs/sample_messages.json` парсится как valid JSON-array непустых строк — §3 US-03 / §13.3 — `#AF-0`
 - `C-11` Contract-тест паритета published-путей `/config/*`: опубликованный S3-key (`config/template_schema.json`, `config/sample_messages.json`) == путь, который фетчит фронт (защита от silent SPA-fallback при drift ключа/пути; у magic-link такой тест есть — C-10a) — §11.2 / §11.3 — `#AF-2`
+
+### 14.6 Spec-extend 2026-07-07 (навигация и видимость)
+
+Тикеты прогона `/spec-extend` от 2026-07-07 (карта и evidence: `.claude/ac-runs/2026-07-07-nav-visibility-gaps.md`). Закрывают user-найденные баги 1–5 (пер-экранные пути, landing-цель, видимость гайдбука, flow-copy, меню). AC — §3 (US-02, US-03, US-05, US-06, US-08) и §11.1 / §11.2 / §11.4; тикет не дублирует. Каждый цитирует anchor находки. Решения гейта: rename `llm_key_msg → generate` по всей спеке; guidebook-экран показывает **только метаданные** (новый endpoint контента не заводится — resolve уже отдаёт `name`/`created_at`); flow-copy — только экран `capture_email` (письмо и `email_sent` не трогаем); поля US-06 при in-app навигации **сохраняются**.
+
+**Frontend**
+
+- `F-25` Пер-экранные маршруты: `routes.ts` — `/guidebook`, `/template`, `/generate` вместо `/workspace*`; `Route.tag` только строка (убрать state-зависимый резолвер); trailing-slash-нормализация для всех путей; rename `<llm-key-msg-screen>` / `llm-key-msg-screen.ts` → `<generate-screen>` / `generate-screen.ts`; явный `navigate('/generate')` после успешного template-generate; обновить все navigate/replaceState call-sites — §11.1 / §3 US-05 — `#AF-1`
+- `F-26` Landing-redirect после resolve → `/guidebook` всегда (в т.ч. при привязанном guidebook; `main.ts` вместо `/workspace`) — §11.1 / §3 US-03 — `#AF-2`
+- `F-27` Flow-параметризованная копия `capture_email` (по сигналу `captureFlow`): guidebook-флоу — текст «продолжите работу с guidebook после отправки email», sample-флоу — waitlist-семантика — §3 US-02 — `#AF-4`
+- `F-28` Компонент меню `components/menu.ts`: пункты `guidebook` · `generate`, рендер при `session.magicLink !== null` на всех экранах, active-подсветка текущего экрана, навигация через роутер — §3 US-08 / §11.1 — `#AF-5`
+- `F-29` `state/generate-fields.ts`: module-scope signals `byokKey` / `guestMessage` / `responsePairs` (история пар «сообщение → ответ»); экран `generate` читает/пишет их вместо component-state; персистентность при in-app навигации, очистка на hard reload / tab-close — §3 US-06 / §11.2 / §11.4 — `#AF-6`
