@@ -3825,6 +3825,7 @@ frontend/
       error-banner.ts                 # bannerMessage signal (глобальный баннер)
       capture-flow.ts                 # captureFlow signal (точка захвата email для /capture-email)
       generate-fields.ts              # byokKey / guestMessage / responsePairs signals (in-memory состояние экрана generate; US-06)
+      route.ts                        # currentPath signal (пишет роутер, читает app-menu) — US-08
     components/
       entrypoint-screen.ts            # экран entrypoint (§1.3.1)
       sample-response-screen.ts       # экран sample_response
@@ -3832,7 +3833,7 @@ frontend/
       guidebook-screen.ts             # экран guidebook (upload/template choice)
       template-screen.ts              # форма template (schema из /config/template_schema.json через CloudFront — §10.6)
       generate-screen.ts              # экран generate (BYOK + guest message)
-      menu.ts                         # краткое меню guidebook · generate (при живой сессии) — US-08
+      app-menu.ts                     # краткое меню guidebook · generate при живой сессии (тег <app-menu>: custom-element обязан содержать дефис) — US-08
       processing-screen.ts            # inline loading-индикатор (НЕ роут; показывается во время upload/generate)
       error-banner.ts                 # глобальный error-banner
     styles/
@@ -3889,6 +3890,7 @@ frontend/
 | `state/error-banner.ts` | `bannerMessage: Signal<string \| null>` | текст глобального error-banner (§11.3/§11.4); `null` — баннер скрыт |
 | `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/leads/capture` + flow-параметризация текста экрана (§3 US-02) |
 | `state/generate-fields.ts` | `byokKey: Signal<string>`, `guestMessage: Signal<string>`, `responsePairs: Signal<ReadonlyArray<{message: string; response: string}>>` | in-memory состояние экрана `generate` (поля + история пар «сообщение → ответ»); переживает in-app навигацию через меню (US-06/US-08); НЕ зеркалируется ни в какой storage; hard reload / tab-close очищает |
+| `state/route.ts` | `currentPath: Signal<string>` | текущий путь SPA после guard-резолва; пишет роутер (`navigate()` / `renderCurrentLocation()`), читает `<app-menu>` для active-подсветки (US-08) |
 
 Подписка из компонента — через `effect()` внутри `connectedCallback` (cleanup через возвращаемую функцию в `disconnectedCallback`).
 
@@ -4479,5 +4481,5 @@ Strict с первого коммита; ослабление настроек �
 - `F-25` Пер-экранные маршруты: `routes.ts` — `/guidebook`, `/template`, `/generate` вместо `/workspace*`; `Route.tag` только строка (убрать state-зависимый резолвер); trailing-slash-нормализация для всех путей; rename `<llm-key-msg-screen>` / `llm-key-msg-screen.ts` → `<generate-screen>` / `generate-screen.ts`; явный `navigate('/generate')` после успешного template-generate; обновить все navigate/replaceState call-sites — §11.1 / §3 US-05 — `#AF-1`
 - `F-26` Landing-redirect после resolve → `/guidebook` всегда (в т.ч. при привязанном guidebook; `main.ts` вместо `/workspace`) — §11.1 / §3 US-03 — `#AF-2`
 - `F-27` Flow-параметризованная копия `capture_email` (по сигналу `captureFlow`): guidebook-флоу — текст «продолжите работу с guidebook после отправки email», sample-флоу — waitlist-семантика — §3 US-02 — `#AF-4`
-- `F-28` Компонент меню `components/menu.ts`: пункты `guidebook` · `generate`, рендер при `session.magicLink !== null` на всех экранах, active-подсветка текущего экрана, навигация через роутер — §3 US-08 / §11.1 — `#AF-5`
+- `F-28` Компонент меню `components/app-menu.ts` (тег `<app-menu>`): пункты `guidebook` · `generate`, рендер при `session.magicLink !== null` на всех экранах, active-подсветка текущего экрана (сигнал `currentPath`, §11.2), навигация через роутер — §3 US-08 / §11.1 — `#AF-5`
 - `F-29` `state/generate-fields.ts`: module-scope signals `byokKey` / `guestMessage` / `responsePairs` (история пар «сообщение → ответ»); экран `generate` читает/пишет их вместо component-state; персистентность при in-app навигации, очистка на hard reload / tab-close — §3 US-06 / §11.2 / §11.4 — `#AF-6`
