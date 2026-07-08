@@ -22,3 +22,11 @@ export function extractMagicLink(
 export function stripQuery(): void {
   history.replaceState(history.state, '', window.location.pathname);
 }
+
+/**
+ * Strip one trailing slash (the root path stays `/`): `/x/` ≡ `/x` for every route and for the
+ * magic-link landing path (US-03 / §11.1 / §11.4).
+ */
+export function normalizePath(path: string): string {
+  return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+}

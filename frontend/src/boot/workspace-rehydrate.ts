@@ -4,9 +4,10 @@ import { showBanner } from '../state/error-banner';
 import { clearSession, lead, magicLink } from '../state/session';
 
 /**
- * Rehydrate `lead` before the first render on a direct visit / hard reload of a protected route:
- * sessionStorage restores only `magicLink`, so without a fresh `GET /api/magic-link/resolve` the
- * workspace would show "no guidebook yet" regardless of the actual binding (US-03, §11.2).
+ * Rehydrate `lead` before the first render on a direct visit / hard reload of a protected route
+ * (`/guidebook` / `/generate` / `/template`, §11.1): sessionStorage restores only `magicLink`, so
+ * without a fresh `GET /api/magic-link/resolve` the screen would show "no guidebook yet"
+ * regardless of the actual binding (US-03, §11.2).
  *
  * Failure semantics (operator decision 2026-07-06): `ERR_INVALID_MAGIC_LINK` clears the session
  * (the router guard then lands on the entrypoint) with a banner; any other failure keeps the

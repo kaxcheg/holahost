@@ -4,12 +4,14 @@ import { captureFlow } from '../state/capture-flow';
 import { EMAIL_MAX_LENGTH, isValidEmail } from '../utils/validation';
 
 /**
- * Email capture (F-14 / §1.3.2 / §10.7).
+ * Email capture (F-14 / F-27 / §1.3.2 / §10.7).
  *
  * A trust-signalled form: email + a hidden honeypot (`name="website"`, §10.7 — bots fill it, humans
- * do not) → `POST /api/leads/capture` with `flow` from {@link captureFlow}. On success it swaps to the
- * "check your email" confirmation (the `email_sent` state, §1.3.1 — no separate route). Renders in
- * light DOM; self-registers as `<capture-email-screen>`.
+ * do not) → `POST /api/leads/capture` with `flow` from {@link captureFlow}. The intro copy is
+ * flow-parameterized (US-02): the guidebook flow explains the continuation after the email, the
+ * sample flow uses the waitlist wording. On success it swaps to the "check your email"
+ * confirmation (the `email_sent` state, §1.3.1 — no separate route). Renders in light DOM;
+ * self-registers as `<capture-email-screen>`.
  */
 export class CaptureEmailScreen extends HTMLElement {
   private submitting = false;
@@ -19,11 +21,16 @@ export class CaptureEmailScreen extends HTMLElement {
   }
 
   private renderForm(): void {
+    // Both variants are compile-time constants (US-02 flow copy, F-27) — safe to interpolate.
+    const hint =
+      captureFlow.value === 'guidebook'
+        ? "Leave your email to continue with your guidebook — we'll send you a magic link. No password, no spam."
+        : "Leave your email to save your place — we'll send you a magic link so you can start your guidebook anytime. No password, no spam.";
     this.innerHTML = `
       <section class="mx-auto flex max-w-md flex-col gap-5 px-4 py-12">
         <div class="flex flex-col gap-2">
           <h1 class="text-2xl font-semibold">Get your private link</h1>
-          <p class="text-gray-600">We'll email you a magic link to your workspace. No password, no spam.</p>
+          <p class="text-gray-600">${hint}</p>
         </div>
         <form data-form novalidate class="flex flex-col gap-4">
           <label class="flex flex-col gap-1 text-sm font-medium">

@@ -16,7 +16,7 @@ function formatMb(bytes: number): string {
  * (`name` + file → `POST /api/ingest/upload`), a path to the template form, and Next into the
  * answer screen. Upload is enabled only once both `name` and a file are chosen; Next only once a
  * guidebook exists. During upload it swaps to `<processing-screen>`. On success it updates `lead`
- * (so Next enables and `/workspace` resolves to the answer screen). Light DOM; self-registers.
+ * (so Next enables; Next navigates explicitly to `/generate`, §11.1). Light DOM; self-registers.
  */
 export class GuidebookScreen extends HTMLElement {
   connectedCallback(): void {
@@ -105,9 +105,9 @@ export class GuidebookScreen extends HTMLElement {
     }
     const action = event.target.closest('[data-action]')?.getAttribute('data-action');
     if (action === 'template') {
-      navigate('/workspace/template');
+      navigate('/template');
     } else if (action === 'next') {
-      navigate('/workspace');
+      navigate('/generate');
     } else if (action === 'upload') {
       void this.onUpload();
     }

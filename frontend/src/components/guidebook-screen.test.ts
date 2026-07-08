@@ -73,7 +73,22 @@ describe('guidebook-screen', () => {
 
   it('Generate by template navigates to the template screen', () => {
     click(el, 'template');
-    expect(navigate).toHaveBeenCalledWith('/workspace/template');
+    expect(navigate).toHaveBeenCalledWith('/template');
+  });
+
+  it('Next navigates explicitly to the generate screen', () => {
+    lead.value = {
+      email: 'h@x.com',
+      flow: 'guidebook',
+      guidebook_id: 'gb-1',
+      guidebook_name: 'Riverside Loft',
+      guidebook_created_at: '2026-06-01T00:00:00Z',
+    };
+    el.remove();
+    el = new GuidebookScreen();
+    document.body.append(el);
+    click(el, 'next');
+    expect(navigate).toHaveBeenCalledWith('/generate');
   });
 
   it('uploads name + file and updates the lead on success', async () => {

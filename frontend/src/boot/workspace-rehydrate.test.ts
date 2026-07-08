@@ -22,7 +22,7 @@ describe('rehydrateWorkspaceLead', () => {
     magicLink.value = null;
     lead.value = null;
     clearBanner();
-    history.replaceState(null, '', '/workspace');
+    history.replaceState(null, '', '/guidebook');
   });
 
   afterEach(() => {
