@@ -52,6 +52,7 @@ export class GuidebookScreen extends HTMLElement {
                   class="self-start rounded-md bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-60">
             Upload
           </button>
+          <p data-upload-hint class="text-xs text-gray-500"></p>
           <p data-error role="alert" class="hidden text-sm text-red-600"></p>
         </div>
         <div class="flex items-center gap-3 text-xs text-gray-400">
@@ -72,6 +73,13 @@ export class GuidebookScreen extends HTMLElement {
         ? `Current guidebook: ${gb?.guidebook_name ?? 'untitled'}${created ? ` · ${created}` : ''}`
         : 'No guidebook yet — upload a file or generate one from a template.';
     }
+    const nameInput = this.querySelector<HTMLInputElement>('[data-name]');
+    if (nameInput) {
+      // Prefill with the current name so replacing needs only a new file (US-04, 1:1_replace);
+      // user data goes in via the value property, never interpolated into innerHTML.
+      nameInput.value = gb?.guidebook_name ?? '';
+    }
+    this.updateUploadState();
   }
 
   private renderProcessing(): void {
@@ -89,9 +97,17 @@ export class GuidebookScreen extends HTMLElement {
   private updateUploadState(): void {
     const name = this.querySelector<HTMLInputElement>('[data-name]')?.value.trim() ?? '';
     const fileCount = this.querySelector<HTMLInputElement>('[data-file]')?.files?.length ?? 0;
+    const ready = Boolean(name) && fileCount > 0;
     const button = this.querySelector<HTMLButtonElement>('[data-action="upload"]');
     if (button) {
-      button.disabled = !(name && fileCount > 0);
+      button.disabled = !ready;
+    }
+    // A disabled button gives no click feedback — the hint names what is still missing (US-04).
+    const hint = this.querySelector('[data-upload-hint]');
+    if (hint) {
+      const missing = [...(name ? [] : ['a guidebook name']), ...(fileCount > 0 ? [] : ['a file'])];
+      hint.textContent = missing.length ? `Add ${missing.join(' and ')} to enable Upload.` : '';
+      hint.classList.toggle('hidden', ready);
     }
   }
 

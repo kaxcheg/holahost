@@ -71,6 +71,36 @@ describe('guidebook-screen', () => {
     expect(el.querySelector<HTMLButtonElement>('[data-action="next"]')?.disabled).toBe(false);
   });
 
+  it('shows the enable-hint while Upload is disabled and hides it once ready', () => {
+    const hint = el.querySelector('[data-upload-hint]');
+    expect(hint?.textContent).toBe('Add a guidebook name and a file to enable Upload.');
+    expect(hint?.classList.contains('hidden')).toBe(false);
+    setName(el, 'My place');
+    expect(hint?.textContent).toBe('Add a file to enable Upload.');
+    setFile(el);
+    expect(el.querySelector<HTMLButtonElement>('[data-action="upload"]')?.disabled).toBe(false);
+    expect(hint?.classList.contains('hidden')).toBe(true);
+  });
+
+  it('prefills the name with the current guidebook so replacing needs only a file', () => {
+    lead.value = {
+      email: 'h@x.com',
+      flow: 'guidebook',
+      guidebook_id: 'gb-1',
+      guidebook_name: 'Riverside Loft',
+      guidebook_created_at: '2026-06-01T00:00:00Z',
+    };
+    el.remove();
+    el = new GuidebookScreen();
+    document.body.append(el);
+    expect(el.querySelector<HTMLInputElement>('[data-name]')?.value).toBe('Riverside Loft');
+    expect(el.querySelector('[data-upload-hint]')?.textContent).toBe(
+      'Add a file to enable Upload.',
+    );
+    setFile(el);
+    expect(el.querySelector<HTMLButtonElement>('[data-action="upload"]')?.disabled).toBe(false);
+  });
+
   it('Generate by template navigates to the template screen', () => {
     click(el, 'template');
     expect(navigate).toHaveBeenCalledWith('/template');
