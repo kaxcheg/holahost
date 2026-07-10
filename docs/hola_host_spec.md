@@ -78,7 +78,7 @@ stateDiagram-v2
 | `sample_response` | text · link download sample (→ `/config/sample_guidebook.md`, §10.9) · field message (editable, preloaded из списка `SAMPLE_MESSAGES` §10.9) · button Send · response area (пары «сообщение → ответ») · button Leave email |
 | `capture_email` | text · field email · button Send |
 | `email_sent` | text «check your email» |
-| `guidebook` | text gb info (`name` / created · или «no guidebook yet») · field `name` (отображаемое имя гайдбука) · file chooser **OR** Generate by template · button Upload (disabled пока файл и `name` не заполнены) · button Next (disabled пока gb нет) |
+| `guidebook` | text gb info (`name` / created · или «no guidebook yet») · field `name` (отображаемое имя гайдбука; при привязанном guidebook prefilled текущим именем — replace требует только новый файл) · file chooser **OR** Generate by template · button Upload (disabled пока файл и `name` не заполнены; рядом hint, называющий недостающее — disabled-кнопка не даёт feedback на клик) · button Next (disabled пока gb нет) |
 | `template` | text · form (6 required + 13 optional полей, schema из `docs/guidebook_template.json` через CloudFront; см. §10.6) · button Generate |
 | `generate` | text · field API key (persistent in memory) · field guest_message (persistent) · button Send · response area |
 | `menu` (не экран — элемент поверх всех экранов при живой сессии) | пункты `guidebook` · `generate`; активный пункт выделен; скрыт при `session.magicLink === null` |
@@ -498,7 +498,7 @@ AC ссылаются на параметры по символическому 
 > As a host with magic_link, I want to upload my existing guidebook file so that the demo can answer based on my real apartment data.
 
 **AC:**
-- На экране `guidebook` виден file chooser и поле ввода `name` (отображаемое имя гайдбука); кнопка `Upload` disabled пока файл не выбран И `name` не заполнен.
+- На экране `guidebook` виден file chooser и поле ввода `name` (отображаемое имя гайдбука); при привязанном Guidebook'е поле `name` prefilled текущим именем (replace требует только выбора файла). Кнопка `Upload` disabled пока файл не выбран И `name` не заполнен; рядом виден hint, называющий недостающее (disabled-кнопка не даёт feedback на клик).
 - Принимаются только файлы с MIME из `ALLOWED_MIME_TYPES`.
 - Файл с MIME вне whitelist → `ERR_UNSUPPORTED_MEDIA_TYPE`.
 - Файл > `MAX_UPLOAD_SIZE` отклоняется на клиенте до отправки.
