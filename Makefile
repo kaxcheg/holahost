@@ -9,38 +9,42 @@
 
 DEV_DATABASE_URL ?= postgresql://holahost:holahost@localhost:5432/holahost
 
+# Component locations (monorepo: Holahost app + the lead-capture microservice).
+BE := holahost/services/lead-capture/backend
+FE := holahost/frontend
+
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-26s\033[0m %s\n",$$1,$$2}'
 
 ## ── Backend quality (CI parity) ──────────────────────────────────────────────
 lint: ## ruff lint (backend)
-	cd backend && poetry run ruff check app tests
+	cd $(BE) && poetry run ruff check app tests
 format: ## ruff format (backend)
-	cd backend && poetry run ruff format app tests
+	cd $(BE) && poetry run ruff format app tests
 typecheck: ## mypy strict (backend app)
-	cd backend && poetry run mypy app
+	cd $(BE) && poetry run mypy app
 test: ## unit tests (no Docker)
-	cd backend && poetry run pytest -m "not integration"
+	cd $(BE) && poetry run pytest -m "not integration"
 test-int: ## integration tests (testcontainers; needs Docker)
-	cd backend && poetry run pytest -m integration
+	cd $(BE) && poetry run pytest -m integration
 lint-imports: ## clean-architecture import contract
-	$(MAKE) -C backend lint-imports
+	$(MAKE) -C $(BE) lint-imports
 check-versions: ## verify toolchain versions agree across manifests (.tool-versions is the source)
-	cd backend && poetry run python ../scripts/check_versions.py
+	cd $(BE) && poetry run python $(CURDIR)/scripts/check_versions.py
 validate-sample-messages: ## docs/sample_messages.json is a non-empty JSON array of non-empty strings (C-10b)
-	cd backend && poetry run python ../scripts/validate_sample_messages.py
-export-openapi: ; $(MAKE) -C backend export-openapi
-check-openapi: ; $(MAKE) -C backend check-openapi
-export-frontend-constants: ; $(MAKE) -C backend export-frontend-constants
-check-frontend-constants: ; $(MAKE) -C backend check-frontend-constants
+	cd $(BE) && poetry run python $(CURDIR)/scripts/validate_sample_messages.py
+export-openapi: ; $(MAKE) -C $(BE) export-openapi
+check-openapi: ; $(MAKE) -C $(BE) check-openapi
+export-frontend-constants: ; $(MAKE) -C $(BE) export-frontend-constants
+check-frontend-constants: ; $(MAKE) -C $(BE) check-frontend-constants
 
 ## ── Frontend ─────────────────────────────────────────────────────────────────
-fe-install: ; npm ci --prefix frontend
-fe-lint: ; npm run lint --prefix frontend
-fe-typecheck: ; npm run typecheck --prefix frontend
-fe-test: ; npm test --prefix frontend
-fe-build: ; npm run build --prefix frontend
-fe-generate-types: ; npm run generate-types --prefix frontend
+fe-install: ; npm ci --prefix $(FE)
+fe-lint: ; npm run lint --prefix $(FE)
+fe-typecheck: ; npm run typecheck --prefix $(FE)
+fe-test: ; npm test --prefix $(FE)
+fe-build: ; npm run build --prefix $(FE)
+fe-generate-types: ; npm run generate-types --prefix $(FE)
 
 ## ── Local dev stack (I-02) ───────────────────────────────────────────────────
 dev-up: ## build + start the stack; prompts for the Anthropic key (SAMPLE_SERVER_API_KEY) if unset
@@ -58,20 +62,20 @@ dev-down-v: ## stop + wipe volumes (fresh DB)
 dev-logs: ## follow stack logs
 	docker compose logs -f
 migrate-dev: ## alembic upgrade head against the compose Postgres
-	cd backend && DATABASE_URL=$(DEV_DATABASE_URL) poetry run alembic upgrade head
+	cd $(BE) && DATABASE_URL=$(DEV_DATABASE_URL) poetry run alembic upgrade head
 dev-test: ## integration suite (testcontainers spins its own PG)
-	cd backend && poetry run pytest -m integration
+	cd $(BE) && poetry run pytest -m integration
 
 ## ── Deploy migration wrappers (run by CI; §13.5; gated in settings) ──────────
-migrate-staging: ; cd backend && poetry run alembic upgrade head
-migrate-prod: ; cd backend && poetry run alembic upgrade head
+migrate-staging: ; cd $(BE) && poetry run alembic upgrade head
+migrate-prod: ; cd $(BE) && poetry run alembic upgrade head
 
 ## ── Aggregate ────────────────────────────────────────────────────────────────
 hooks-install: ## install git hooks (pre-commit + commit-msg stages, §13.3)
-	cd backend && poetry run pre-commit install
+	cd $(BE) && poetry run pre-commit install
 ci-local: ## §13.4 local CI parity
 	$(MAKE) check-versions
-	cd backend && poetry run pre-commit run --all-files
-	cd backend && poetry run pytest
-	npm test --prefix frontend
-	npm run build --prefix frontend
+	cd $(BE) && poetry run pre-commit run --all-files
+	cd $(BE) && poetry run pytest
+	npm test --prefix $(FE)
+	npm run build --prefix $(FE)

@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_PATH = _ROOT / "docs" / "sample_messages.json"
+# The sample data is owned by the lead-capture microservice (docs/ under the service).
+_PATH = _ROOT / "holahost" / "services" / "lead-capture" / "docs" / "sample_messages.json"
 
 
 def main() -> int:
