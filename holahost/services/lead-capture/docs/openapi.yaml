@@ -1,0 +1,1148 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "hola.host API",
+    "version": "0.1.0",
+    "description": "Generated from the backend contract by app/scripts/export_openapi.py (spec §11.3) -- do not edit by hand."
+  },
+  "servers": [
+    {
+      "url": "/api/capture-lead",
+      "description": "Same-origin via CloudFront (§2.1)."
+    }
+  ],
+  "paths": {
+    "/sample/generate": {
+      "post": {
+        "operationId": "sample_generate",
+        "summary": "Sample-flow reply generated on the server key (§5.3, US-01).",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleGenerateResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error: ERR_INVALID_PAYLOAD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error: ERR_RATE_LIMIT, ERR_SAMPLE_BUDGET_EXHAUSTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error: ERR_INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Error: ERR_UPSTREAM_LLM",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Unexpected error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SampleGenerateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/leads/capture": {
+      "post": {
+        "operationId": "capture_lead",
+        "summary": "Capture an email and send the magic link (§5.4, US-02).",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusSentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error: ERR_INVALID_PAYLOAD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error: ERR_RATE_LIMIT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error: ERR_INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Error: ERR_UPSTREAM_EMAIL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Unexpected error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureLeadRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/magic-link/resolve": {
+      "get": {
+        "operationId": "resolve_magic_link",
+        "summary": "Resolve a magic-link token to the lead + guidebook metadata (§5.5, US-03).",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveMagicLinkResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error: ERR_INVALID_MAGIC_LINK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error: ERR_RATE_LIMIT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error: ERR_INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Unexpected error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Magic-Link",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/ingest/upload": {
+      "post": {
+        "operationId": "upload_guidebook",
+        "summary": "Upload a guidebook file or rendered template text (§5.6, US-04/US-05).",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error: ERR_INVALID_MAGIC_LINK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Error: ERR_PAYLOAD_TOO_LARGE, ERR_TOO_MANY_CHUNKS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error: ERR_UNSUPPORTED_MEDIA_TYPE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error: ERR_EMPTY_DOCUMENT, ERR_INVALID_PAYLOAD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error: ERR_RATE_LIMIT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error: ERR_INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Unexpected error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Magic-Link",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadGuidebookRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/generate": {
+      "post": {
+        "operationId": "generate_response",
+        "summary": "Real-flow reply to a guest message using the host's BYOK key (§5.7, US-06).",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateResponseResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error: ERR_INVALID_MAGIC_LINK, ERR_INVALID_API_KEY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error: ERR_NO_GUIDEBOOK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error: ERR_INVALID_PAYLOAD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error: ERR_RATE_LIMIT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error: ERR_INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Error: ERR_UPSTREAM_LLM",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Unexpected error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Magic-Link",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateRequest"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SampleGenerateRequest": {
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "CaptureLeadRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "flow": {
+            "type": "string"
+          },
+          "honeypot": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "flow"
+        ],
+        "type": "object"
+      },
+      "GenerateRequest": {
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "UploadGuidebookRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "file"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string",
+            "format": "binary"
+          }
+        }
+      },
+      "SampleGenerateResult": {
+        "type": "object",
+        "properties": {
+          "response_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "response_text"
+        ],
+        "additionalProperties": false
+      },
+      "ResolveMagicLinkResult": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "flow": {
+            "type": "string"
+          },
+          "guidebook_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "guidebook_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "guidebook_created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "email",
+          "flow",
+          "guidebook_id",
+          "guidebook_name",
+          "guidebook_created_at"
+        ],
+        "additionalProperties": false
+      },
+      "IngestionResult": {
+        "type": "object",
+        "properties": {
+          "guidebook_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "guidebook_id",
+          "name",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "GenerateResponseResult": {
+        "type": "object",
+        "properties": {
+          "response_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "response_text"
+        ],
+        "additionalProperties": false
+      },
+      "StatusSentResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent"
+            ]
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Error_ERR_EMAIL_CONFLICT"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_EMPTY_DOCUMENT"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_INTERNAL"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_INVALID_API_KEY"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_INVALID_MAGIC_LINK"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_INVALID_PAYLOAD"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_NOT_FOUND"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_NO_GUIDEBOOK"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_PAYLOAD_TOO_LARGE"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_RATE_LIMIT"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_SAMPLE_BUDGET_EXHAUSTED"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_TOO_MANY_CHUNKS"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_UNSUPPORTED_MEDIA_TYPE"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_UPSTREAM_EMAIL"
+              },
+              {
+                "$ref": "#/components/schemas/Error_ERR_UPSTREAM_LLM"
+              }
+            ]
+          }
+        }
+      },
+      "Error_ERR_EMAIL_CONFLICT": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_EMAIL_CONFLICT"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_EMPTY_DOCUMENT": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_EMPTY_DOCUMENT"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_INTERNAL": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_INTERNAL"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "request_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "request_id"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_INVALID_API_KEY": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_INVALID_API_KEY"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_INVALID_MAGIC_LINK": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_INVALID_MAGIC_LINK"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_INVALID_PAYLOAD": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_INVALID_PAYLOAD"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_NOT_FOUND": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_NOT_FOUND"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "resource"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_NO_GUIDEBOOK": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_NO_GUIDEBOOK"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_PAYLOAD_TOO_LARGE": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_PAYLOAD_TOO_LARGE"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "max_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max_bytes"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_RATE_LIMIT": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_RATE_LIMIT"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "retry_after_s": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scope",
+              "retry_after_s"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_SAMPLE_BUDGET_EXHAUSTED": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_SAMPLE_BUDGET_EXHAUSTED"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "reset_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reset_at"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_TOO_MANY_CHUNKS": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_TOO_MANY_CHUNKS"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "max_chunks": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max_chunks"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_UNSUPPORTED_MEDIA_TYPE": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_UNSUPPORTED_MEDIA_TYPE"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "allowed": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "allowed"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_UPSTREAM_EMAIL": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_UPSTREAM_EMAIL"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "Error_ERR_UPSTREAM_LLM": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ERR_UPSTREAM_LLM"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "upstream_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "upstream_status",
+              "retryable"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  }
+}

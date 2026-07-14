@@ -26,17 +26,17 @@ services:
   api:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: holahost/services/lead-capture/backend/Dockerfile
       args:
         PYTHON_VERSION: ${PYTHON_VERSION:-3.12}   # sourced from .tool-versions by `make dev-up`
     image: holahost-api:dev
-    env_file: [infra/envs/dev/dev.env, frontend/.env]   # dev config (gitignored) + frontend-owned magic-link contract (D-21)
+    env_file: [holahost/services/lead-capture/envs/dev.env, holahost/frontend/.env]   # service dev config (gitignored) + frontend-owned magic-link contract (D-21)
     environment:
       # the one real secret — supplied from the shell by `make dev-up` (prompt); empty otherwise.
       SAMPLE_SERVER_API_KEY: ${SAMPLE_SERVER_API_KEY:-}
     volumes:
       # business content — mounted (not baked) so it's editable without a rebuild; prod reads it from S3.
-      - ./docs/sample_guidebook.md:/var/task/docs/sample_guidebook.md:ro
+      - ./holahost/services/lead-capture/docs/sample_guidebook.md:/var/task/docs/sample_guidebook.md:ro
     ports: ["9000:8080"]        # Lambda RIE invoke endpoint
     depends_on:
       postgres: { condition: service_healthy }

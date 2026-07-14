@@ -20,4 +20,4 @@
 ## Checklist
 - [ ] pre-commit passed locally
 - [ ] CI green
-- [ ] If the spec changes — `docs/hola_host_spec.md` is updated in this PR
+- [ ] If the spec changes — `holahost/services/lead-capture/docs/lead_capture_spec.md` is updated in this PR

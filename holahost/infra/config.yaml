@@ -1,0 +1,40 @@
+# Holahost platform config (Terraform). The APP owns the domain, frontend hosting, the CDN/edge, the
+# ECR registry, and the GitHub repo settings; it also DECIDES each hosted service's per-env placement.
+# Read by the holahost/infra/envs/* roots via yamldecode. The lead-capture service has its own intrinsic
+# config at holahost/services/lead-capture/infra/config.yaml (env-invariant, owned by the service).
+project:         holahost
+aws_region:      eu-west-3
+domain:          hola.host
+frontend_bucket: holahost-frontend
+alert_email:     kaxcheg@gmail.com # per-env SNS alarm topics subscribe this address
+github_owner:    kaxcheg           # github provider owner + prod deploy reviewer
+
+# One ECR repository per hosted service (created by the `common` root). ECR repo != git repo — it is a
+# free image namespace; mixing services in one repo is the anti-pattern.
+ecr_repos: [capture-lead]
+
+# Published /config/* assets served by the app CDN. The SOURCES live in the capture-lead service tree
+# (the app publishes the service's static content); paths are relative to the holahost app root.
+guidebook_template_path: services/lead-capture/docs/guidebook_template.json
+sample_guidebook_path:   services/lead-capture/docs/sample_guidebook.md
+sample_messages_path:    services/lead-capture/docs/sample_messages.json
+sample_guidebook_key:    config/sample_guidebook.md
+sample_messages_key:     config/sample_messages.json
+
+# Email-auth DNS (SPF/DKIM/DMARC): filled after Resend setup, applied by the `common` root.
+email_dns_records: {}
+
+# Per-environment app settings. subdomain is DERIVED (no duplicated domain): prefix "" => apex (domain),
+# else "<prefix>.<domain>". system_prompt is the capture-lead service's per-env prompt seed the app
+# publishes to the private system-prompt/ prefix.
+envs:
+  staging:
+    subdomain_prefix:   staging
+    price_class:        PriceClass_100
+    system_prompt_key:  system-prompt/staging.md
+    system_prompt_path: services/lead-capture/docs/staging_system_prompt.md
+  prod:
+    subdomain_prefix:   "" # apex
+    price_class:        PriceClass_100
+    system_prompt_key:  system-prompt/prod.md
+    system_prompt_path: services/lead-capture/docs/prod_system_prompt.md

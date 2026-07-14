@@ -1,9 +1,10 @@
-# Contributing to hola.host
+# Contributing to Holahost
 
 Conventions for working in this repository. They mirror the spec
-([`docs/hola_host_spec.md`](docs/hola_host_spec.md) §13) — the spec is the source of truth; this
-file is the day-to-day summary. Toolchain setup lives in [`README.md`](README.md) and
-[`infra/README.md`](infra/README.md).
+([`lead_capture_spec.md`](holahost/services/lead-capture/docs/lead_capture_spec.md) §13) — the spec is
+the source of truth; this file is the day-to-day summary. Toolchain setup lives in
+[`README.md`](README.md) and
+[`infra/README.md`](holahost/services/lead-capture/infra/README.md).
 
 ## Branching (GitFlow)
 
@@ -63,12 +64,12 @@ manually after a successful prod promote + back-merge).
 
 ## Code style
 
-**Python** (`backend/`): modules, files, functions, variables — `snake_case`; classes and type
+**Python** (`holahost/services/lead-capture/backend/`): modules, files, functions, variables — `snake_case`; classes and type
 aliases — `PascalCase`; constants — `UPPER_SNAKE_CASE`; privacy marker — leading underscore
 (`_internal_helper`). Domain entities / value objects follow the spec §7 names without
 abbreviations (`GuidebookId`, not `GbId`).
 
-**TypeScript** (`frontend/`): files — `kebab-case.ts`; variables, functions — `camelCase`; types,
+**TypeScript** (`holahost/frontend/`): files — `kebab-case.ts`; variables, functions — `camelCase`; types,
 interfaces, components — `PascalCase`; env-derived constants — `UPPER_SNAKE_CASE`.
 
 **Postgres**: tables — plural `snake_case` (`leads`, `guidebooks`); columns — `snake_case`;

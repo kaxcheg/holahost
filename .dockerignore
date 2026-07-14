@@ -1,5 +1,6 @@
-# Backend image build context = repo root (to bake docs/sample_guidebook.md). Keep only backend/app +
-# pyproject + lock + the sample asset; trim everything else so the context stays small.
+# Backend image build context = repo root (to bake .tool-versions + the lead-capture backend). Keep only
+# holahost/services/lead-capture/backend/{app,pyproject,poetry.lock} + .tool-versions; trim everything else
+# so the context stays small.
 .git/
 .build-state/
 .claude/
@@ -9,20 +10,21 @@
 **/.ruff_cache/
 **/.pytest_cache/
 **/.coverage
+**/node_modules/
+**/.terraform/
 
-# Frontend and IaC are not part of the backend image.
-frontend/
-infra/
-environments/
+# The Holahost frontend and the lead-capture IaC are not part of the backend image.
+holahost/frontend/
+holahost/services/lead-capture/infra/
 
 # Backend: keep app/ + pyproject + lock; drop the rest.
-backend/.venv/
-backend/tests/
-backend/migrations/
-backend/Makefile
-backend/alembic.ini
-backend/Dockerfile
-backend/.dockerignore
+holahost/services/lead-capture/backend/.venv/
+holahost/services/lead-capture/backend/tests/
+holahost/services/lead-capture/backend/migrations/
+holahost/services/lead-capture/backend/Makefile
+holahost/services/lead-capture/backend/alembic.ini
+holahost/services/lead-capture/backend/Dockerfile
+holahost/services/lead-capture/backend/.dockerignore
 
 # docs/ is not part of the image — the sample guidebook is mounted in dev / read from S3 in prod.
-docs/
+holahost/services/lead-capture/docs/

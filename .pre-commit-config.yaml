@@ -25,9 +25,9 @@ repos:
     hooks:
       - id: ruff-check
         args: [--fix]
-        files: ^backend/(app|tests)/
+        files: ^holahost/services/lead-capture/backend/(app|tests)/
       - id: ruff-format
-        files: ^backend/(app|tests)/
+        files: ^holahost/services/lead-capture/backend/(app|tests)/
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.0
@@ -47,29 +47,29 @@ repos:
         name: mypy (backend, strict)
         entry: make typecheck
         language: system
-        files: ^backend/app/.*\.py$
+        files: ^holahost/services/lead-capture/backend/app/.*\.py$
         pass_filenames: false
       - id: lint-imports
         name: import-linter (clean architecture)
         entry: make lint-imports
         language: system
-        files: ^backend/app/.*\.py$
+        files: ^holahost/services/lead-capture/backend/app/.*\.py$
         pass_filenames: false
       - id: biome
         name: biome check --write (frontend)
-        entry: npm run --prefix frontend format
+        entry: npm run --prefix holahost/frontend format
         language: system
-        files: ^frontend/
+        files: ^holahost/frontend/
         pass_filenames: false
       - id: tsc
         name: tsc --noEmit (frontend)
-        entry: npm run --prefix frontend typecheck
+        entry: npm run --prefix holahost/frontend typecheck
         language: system
-        files: ^frontend/.*\.ts$
+        files: ^holahost/frontend/.*\.ts$
         pass_filenames: false
       - id: validate-sample-messages
         name: validate sample_messages.json (non-empty string array)
         entry: make validate-sample-messages
         language: system
-        files: ^docs/sample_messages\.json$
+        files: ^holahost/services/lead-capture/docs/sample_messages\.json$
         pass_filenames: false
