@@ -1,6 +1,0 @@
-@import "tailwindcss";
-
-/* CSS-first design tokens (Tailwind v4 @theme); extended per component work in G3. */
-@theme {
-  --font-sans: ui-sans-serif, system-ui, sans-serif;
-}

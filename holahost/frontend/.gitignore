@@ -1,8 +1,0 @@
-node_modules/
-dist/
-coverage/
-.vite/
-# .env is COMMITTED — the non-secret magic-link contract, the single source vite + Terraform read.
-# Local overrides (.env.local, .env.*.local) stay ignored via *.local below.
-!.env
-*.local
