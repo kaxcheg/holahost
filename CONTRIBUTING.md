@@ -29,7 +29,7 @@ Long-lived: `main` (production-ready) and `develop` (integration). Default branc
 | `hotfix/v<version>` | `main` | `main` **and** back-merge to `develop` | urgent prod fix |
 
 `<slug>` is kebab-case, ≤ 40 chars; short-lived branches live ≤ 3 days. **A branch developing a
-microservice carries its name** as the `<service>` segment (`feature/lead-capture/<slug>`); shared-part
+microservice carries its name** as the `<service>` segment (e.g. `feature/auth/<slug>`); shared-part
 branches omit it (`feature/<slug>`) or use an area (`feature/frontend/<slug>`). The type prefix stays
 first, so prefix-based branch protection is unaffected.
 
@@ -41,7 +41,7 @@ sequence) — there is no single repo-wide version.
 ## Commits (Conventional Commits)
 
 `<type>(<scope>)?: <subject>` — `<type>` ∈ `feat | fix | chore | refactor | docs | test | build | ci`;
-`<scope>` (optional) names the affected unit/area (`lead-capture`, `frontend`, `infra`, `auth`);
+`<scope>` (optional) names the affected unit/area (`auth`, `frontend`, `infra`);
 subject ≤ 72 chars, imperative, no trailing period; body (optional) after a blank line, ≤ 100 chars/line;
 breaking changes: `!` after `<type>` or a `BREAKING CHANGE:` footer. The `commit-msg` hook
 (`conventional-pre-commit`) enforces the format and allowed types.
