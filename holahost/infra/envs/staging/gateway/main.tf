@@ -1,6 +1,6 @@
 # STAGING app edge (CloudFront today; the API-Gateway home tomorrow). Serves the SPA and routes
-# /api/capture-lead/* to the lead-capture Function URL, and grants CloudFront invoke on it. Reads the
-# platform singletons from `common` and the service endpoint from `staging/capture-lead` — so both must
+# /api/lead-capture/* to the lead-capture Function URL, and grants CloudFront invoke on it. Reads the
+# platform singletons from `common` and the service endpoint from `staging/lead-capture` — so both must
 # be applied first. This is where the app "mounts" the service at a URL.
 locals {
   cfg       = yamldecode(file("${path.module}/../../../config.yaml"))
@@ -23,7 +23,7 @@ data "terraform_remote_state" "capture_lead" {
   backend = "s3"
   config = {
     bucket = "holahost-tfstate-staging"
-    key    = "staging/capture-lead/terraform.tfstate"
+    key    = "staging/lead-capture/terraform.tfstate"
     region = "us-east-1"
   }
 }

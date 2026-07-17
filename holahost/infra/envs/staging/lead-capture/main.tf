@@ -13,7 +13,7 @@ locals {
   svc     = yamldecode(file("${path.module}/../../../../services/lead-capture/infra/config.yaml"))
   svc_env = local.svc.envs[local.env]
 
-  # Parse the service's committed per-env backend config (owned by capture-lead; drop comments/blanks/non-KV).
+  # Parse the service's committed per-env backend config (owned by lead-capture; drop comments/blanks/non-KV).
   beenv_lines = [
     for line in split("\n", file("${path.module}/../../../../services/lead-capture/envs/${local.env}.env")) : trimspace(line)
     if trimspace(line) != "" && !startswith(trimspace(line), "#") && strcontains(line, "=")
@@ -48,7 +48,7 @@ module "lead_capture" {
   env                      = local.env
   name_prefix              = "${local.project}-${local.env}"
   aws_region               = local.platform.aws_region
-  image_uri                = "${data.terraform_remote_state.common.outputs.ecr_repository_urls["capture-lead"]}:latest"
+  image_uri                = "${data.terraform_remote_state.common.outputs.ecr_repository_urls["lead-capture"]}:latest"
   frontend_origin          = "https://${local.subdomain}"
   frontend_bucket          = local.platform.frontend_bucket
   frontend_bucket_arn      = data.terraform_remote_state.common.outputs.frontend_bucket_arn

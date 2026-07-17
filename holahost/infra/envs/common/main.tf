@@ -1,6 +1,6 @@
 # `common` — cross-env platform singletons owned by the Holahost app: the Route 53 zone + ACM cert
 # (domain), the frontend S3 bucket + published /config/* assets, and one ECR repo per hosted service.
-# Applied once, before the per-env `capture-lead` / `gateway` roots (they read these via remote_state).
+# Applied once, before the per-env `lead-capture` / `gateway` roots (they read these via remote_state).
 locals {
   cfg     = yamldecode(file("${path.module}/../../config.yaml"))
   project = local.cfg.project

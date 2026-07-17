@@ -45,7 +45,7 @@ _VALID: dict[str, object] = dict(
     magic_link_url_param="ml",
     email_timeout_seconds=10.0,
     frontend_origin="https://app.test",
-    api_base_url="/api/capture-lead",
+    api_base_url="/api/lead-capture",
 )
 
 

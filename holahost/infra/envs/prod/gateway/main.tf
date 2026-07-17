@@ -1,5 +1,5 @@
 # PROD app edge. Same shape as staging/gateway; serves the SPA at the apex and routes
-# /api/capture-lead/* to the prod lead-capture Function URL.
+# /api/lead-capture/* to the prod lead-capture Function URL.
 locals {
   cfg       = yamldecode(file("${path.module}/../../../config.yaml"))
   project   = local.cfg.project
@@ -21,7 +21,7 @@ data "terraform_remote_state" "capture_lead" {
   backend = "s3"
   config = {
     bucket = "holahost-tfstate-prod"
-    key    = "prod/capture-lead/terraform.tfstate"
+    key    = "prod/lead-capture/terraform.tfstate"
     region = "us-east-1"
   }
 }

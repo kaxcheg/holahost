@@ -7,7 +7,7 @@ from pydantic import SecretStr
 
 @dataclass(frozen=True)
 class UploadGuidebookCmd:
-    """Command for POST /api/capture-lead/ingest/upload (spec §8.1).
+    """Command for POST /api/lead-capture/ingest/upload (spec §8.1).
 
     Args:
         magic_link: Magic-link token (SecretStr); validated inside the use case.

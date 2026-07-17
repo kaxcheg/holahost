@@ -41,5 +41,5 @@ variable "api_origin_domain" {
 
 variable "api_base_url" {
   type        = string
-  description = "Service mount path — SINGLE source of the API prefix (API_BASE_URL, e.g. /api/capture-lead; §11.6). The `<api_base_url>/*` behavior routes to the Lambda Function URL; the backend router strips the same value."
+  description = "Service mount path — SINGLE source of the API prefix (API_BASE_URL, e.g. /api/lead-capture; §11.6). The `<api_base_url>/*` behavior routes to the Lambda Function URL; the backend router strips the same value."
 }

@@ -12,7 +12,7 @@ from tests._support.settings import make_settings
 def _evt(
     *,
     method: str = "POST",
-    path: str = "/api/capture-lead/sample/generate",
+    path: str = "/api/lead-capture/sample/generate",
     body: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -46,7 +46,7 @@ def test_dispatch_sample_generate() -> None:
 def test_dispatch_generate_route_reads_byok() -> None:
     c = _container()
     evt = _evt(
-        path="/api/capture-lead/generate",
+        path="/api/lead-capture/generate",
         headers={"x-magic-link": "M", "x-api-key": "K"},
         body=json.dumps({"message": "q"}),
     )
@@ -59,7 +59,7 @@ def test_dispatch_get_route() -> None:
     c = _container()
     _, use_case = dispatch(
         _evt(
-            method="GET", path="/api/capture-lead/magic-link/resolve", headers={"x-magic-link": "M"}
+            method="GET", path="/api/lead-capture/magic-link/resolve", headers={"x-magic-link": "M"}
         ),
         c,
     )
@@ -68,4 +68,4 @@ def test_dispatch_get_route() -> None:
 
 def test_dispatch_unknown_route_raises_not_found() -> None:
     with pytest.raises(NotFoundError):
-        dispatch(_evt(path="/api/capture-lead/nope"), _container())
+        dispatch(_evt(path="/api/lead-capture/nope"), _container())

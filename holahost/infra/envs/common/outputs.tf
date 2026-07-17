@@ -1,4 +1,4 @@
-# Consumed by the per-env `capture-lead` (bucket + ecr) and `gateway` (bucket + cert + zone) roots via
+# Consumed by the per-env `lead-capture` (bucket + ecr) and `gateway` (bucket + cert + zone) roots via
 # terraform_remote_state, and by the runbook (name servers).
 output "frontend_bucket_id" {
   value       = module.s3_frontend.bucket_id

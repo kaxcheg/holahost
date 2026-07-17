@@ -17,10 +17,10 @@ instantiate. Roots under `holahost/infra/envs/`:
 |---|---|---|
 | `common` | Route 53 + ACM, frontend bucket + published `/config/*`, ECR repo per service (cross-env) | `holahost-tfstate-common` |
 | `codebase` | GitHub repo settings (branch protection, environments) | `holahost-tfstate-codebase` |
-| `<env>/capture-lead` | the lead-capture service instance (Lambda + Secrets Manager + observability) | `holahost-tfstate-<env>` |
-| `<env>/gateway` | app edge: CloudFront (SPA + `/api/capture-lead/*` → Function URL) + alias + invoke-permission | `holahost-tfstate-<env>` |
+| `<env>/lead-capture` | the lead-capture service instance (Lambda + Secrets Manager + observability) | `holahost-tfstate-<env>` |
+| `<env>/gateway` | app edge: CloudFront (SPA + `/api/lead-capture/*` → Function URL) + alias + invoke-permission | `holahost-tfstate-<env>` |
 
-**Apply order (per env):** `common` → `<env>/capture-lead` → `<env>/gateway` (the gateway reads the
+**Apply order (per env):** `common` → `<env>/lead-capture` → `<env>/gateway` (the gateway reads the
 service's Function URL via `terraform_remote_state`). Commands below assume the **repo root** as the
 working directory; `cd` into the specific root before `terraform`. The backend Docker build context stays
 the **repo root** (it bakes the root `.tool-versions`).
@@ -106,7 +106,7 @@ done
 ```
 
 The `codebase` bucket backs the GitHub-settings root (`holahost/infra/envs/codebase/`); `common` backs
-the cross-env platform singletons; `staging` / `prod` each back **two** roots (`<env>/capture-lead` and
+the cross-env platform singletons; `staging` / `prod` each back **two** roots (`<env>/lead-capture` and
 `<env>/gateway`) under distinct state keys.
 
 > S3 bucket names are globally unique. If `holahost-tfstate-<env>` is taken, append a short account
@@ -155,13 +155,13 @@ Mailpit UI: <http://localhost:8025> · API (RIE invoke): <http://localhost:9000>
 Cross-env platform singletons — the frontend S3 bucket `holahost-frontend`, the Route 53 hosted zone
 `hola.host`, the ACM certificate (us-east-1), and one ECR repo per service. Owned by a dedicated
 Terraform root/state (`holahost-tfstate-common`). **Apply this before the per-env roots** — the
-`<env>/capture-lead` and `<env>/gateway` roots read these via data sources / `terraform_remote_state`.
+`<env>/lead-capture` and `<env>/gateway` roots read these via data sources / `terraform_remote_state`.
 
 1. **Terraform init + apply.** Creates the private, versioned `holahost-frontend` bucket (OAC-only read)
    + its published objects (`config/template_schema.json`, `config/sample_guidebook.md`,
    `config/sample_messages.json`, and the per-env
    `system-prompt/<env>.md` seeds), the hosted zone `hola.host`, the ACM cert for `hola.host` +
-   `staging.hola.host` (DNS-validated), and the single **ECR repo `capture-lead`** (I-08) that both envs
+   `staging.hola.host` (DNS-validated), and the single **ECR repo `lead-capture`** (I-08) that both envs
    deploy the API image to.
    ```bash
    cd holahost/infra/envs/common
@@ -179,9 +179,9 @@ Terraform root/state (`holahost-tfstate-common`). **Apply this before the per-en
    **Resend (email) setup** section below (fills `email_dns_records` in `config.yaml`, re-applies
    this root).
 4. **Push a bootstrap API image** (one-time, before the first per-env `lambda` apply — the `lambda`
-   module creates its functions from `capture-lead:latest`, so that tag must exist first):
+   module creates its functions from `lead-capture:latest`, so that tag must exist first):
    ```bash
-   ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."capture-lead"')   # from holahost/infra/envs/common
+   ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."lead-capture"')   # from holahost/infra/envs/common
    aws ecr get-login-password --region eu-west-3 \
      | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
    (cd ../../../../.. && docker build -f holahost/services/lead-capture/backend/Dockerfile -t "$ECR_URL:latest" .)   # build context = repo root
@@ -231,7 +231,7 @@ Terraform deploys into the region set by `aws_region` in `infra/config.yaml` (`e
 Terraform equal to `aws_region`** (in the `lambda` module, I-12), so the app always reads from its own deploy
 region (§12.3).
 
-> **This env is TWO Terraform roots** (§12.2 apply order): apply **`staging/capture-lead`** first (the
+> **This env is TWO Terraform roots** (§12.2 apply order): apply **`staging/lead-capture`** first (the
 > service — `sm` + `lambda` + `observability`), then **`staging/gateway`** (the app edge — CloudFront +
 > alias + invoke-permission, which reads the service's Function URL via `terraform_remote_state`). The
 > steps below describe the combined provisioning; split the `terraform apply` into those two roots.
@@ -242,7 +242,7 @@ region (§12.3).
    (`recovery_window_in_days = 0` → a deleted secret recreates immediately). No values are stored by
    Terraform (§10.3).
    ```bash
-   cd holahost/infra/envs/staging/capture-lead
+   cd holahost/infra/envs/staging/lead-capture
    terraform init
    terraform apply
    ```
@@ -289,13 +289,13 @@ switch, smoke.
 ```bash
 export AWS_PROFILE=holahost AWS_REGION=eu-west-3
 GIT_SHA=$(git rev-parse --short=12 HEAD)
-ECR_URL=$(cd holahost/infra/envs/common && terraform output -json ecr_repository_urls | jq -r '."capture-lead"')
+ECR_URL=$(cd holahost/infra/envs/common && terraform output -json ecr_repository_urls | jq -r '."lead-capture"')
 
 # 1. Backend image: build once, tag by commit, push, capture the immutable digest (§13.5).
 aws ecr get-login-password --region eu-west-3 | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
 docker build -f holahost/services/lead-capture/backend/Dockerfile -t "$ECR_URL:git-$GIT_SHA" .
 docker push "$ECR_URL:git-$GIT_SHA"
-DIGEST=$(aws ecr describe-images --repository-name capture-lead \
+DIGEST=$(aws ecr describe-images --repository-name lead-capture \
   --image-ids imageTag=git-$GIT_SHA --query 'imageDetails[0].imageDigest' --output text)
 
 # 2. DB migrate BEFORE the code switch (§13.5); DATABASE_URL from Secrets Manager.
@@ -337,7 +337,7 @@ After the smoke, check CloudWatch (`/aws/lambda/holahost-staging-api`) for a fre
 - **Backend**: point both functions at the previous digest (release prefixes / tags are never
   deleted; §13.5):
   ```bash
-  aws ecr describe-images --repository-name capture-lead \
+  aws ecr describe-images --repository-name lead-capture \
     --query 'sort_by(imageDetails,&imagePushedAt)[-5:].{tags:imageTags,digest:imageDigest}'
   for FN in holahost-staging-api holahost-staging-cleanup; do
     aws lambda update-function-code --function-name "$FN" --image-uri "$ECR_URL@<previous-digest>"
@@ -364,7 +364,7 @@ Same shape as `staging` (same `AWS_PROFILE` / `AWS_REGION` exports), with a sepa
    shared bucket / zone / cert / **ECR repo** — the **`shared` root must be applied first**, bootstrap
    image pushed).
    ```bash
-   cd holahost/infra/envs/prod/capture-lead
+   cd holahost/infra/envs/prod/lead-capture
    terraform init
    terraform apply
    ```

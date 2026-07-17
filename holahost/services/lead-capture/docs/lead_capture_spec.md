@@ -192,13 +192,13 @@ stateDiagram-v2
 | `open_magic_link` | resolve → Lead + (опц.) Guidebook |
 | `upload` (первая загрузка) | `Guidebook.create()` + `Lead.guidebook_id = new`; magic_link не меняется |
 | `upload` (replace) | DELETE старый Guidebook (cascade chunks) + `Guidebook.create()` новый; magic_link не меняется |
-| `generate` в `template` | фронт рендерит plain text из формы + auto-fills `name = property_name`-value, шлёт в `/api/capture-lead/ingest/upload` (см. §10.6); backend выполняет тот же upload-pipeline (create/replace); magic_link не меняется |
+| `generate` в `template` | фронт рендерит plain text из формы + auto-fills `name = property_name`-value, шлёт в `/api/lead-capture/ingest/upload` (см. §10.6); backend выполняет тот же upload-pipeline (create/replace); magic_link не меняется |
 | Повторный `capture_email` с тем же email | silent_upsert обновляет `Lead.last_seen_at` + перегенерирует magic_link (инвалидация предыдущего) + новое письмо |
 | TTL истёк | DELETE Guidebook (cascade chunks) + DELETE magic_link с Lead'а; строка `leads` с email **не удаляется** (остаётся для analytics); возврат пользователя → повтор пути с `entrypoint` |
 
 #### 1.3.5 Rate limit (обязательно)
 
-Все backend-запросы (sample_response/send, capture_email/send, open_magic_link, upload, send в generate) ограничены **двумя независимыми rate-limit-параметрами**. Submit формы template-flow на бэке — это та же `/api/capture-lead/ingest/upload` ручка (см. §10.6), отдельной точки rate-limit нет.
+Все backend-запросы (sample_response/send, capture_email/send, open_magic_link, upload, send в generate) ограничены **двумя независимыми rate-limit-параметрами**. Submit формы template-flow на бэке — это та же `/api/lead-capture/ingest/upload` ручка (см. §10.6), отдельной точки rate-limit нет.
 - **Per magic_link** — для запросов после открытия magic_link (upload, generate/send, open_magic_link); защита от runaway-цикла одного пользователя.
 - **Per IP** — для всех запросов; защита от анонимных абуз-сценариев (sample-flow, capture_email, open_magic_link до привязки к Lead'у).
 
@@ -220,7 +220,7 @@ stateDiagram-v2
 flowchart LR
     BR[Браузер: Vite TS bundle] -->|HTTPS| CF[CloudFront]
     CF -->|static /*| S3[(S3: frontend bundle)]
-    CF -->|/api/capture-lead/*| LU[Lambda Function URL]
+    CF -->|/api/lead-capture/*| LU[Lambda Function URL]
     LU --> LM[Lambda: container image<br/>Python 3.12 + ONNX embedder]
     LM --> NEON[(Neon Postgres)]
     LM --> AN[Anthropic API]
@@ -233,7 +233,7 @@ flowchart LR
 | HTTP entry | Lambda Function URL (`AuthType: NONE`) за CloudFront | без API Gateway |
 | Frontend hosting | S3 + CloudFront origin | статический Vite-bundle |
 | TLS / CDN / custom domain | CloudFront + ACM (us-east-1) + Route53 | один домен обслуживает фронт и API через path-routing |
-| Reverse proxy | CloudFront (`/api/capture-lead/*` → Function URL, `/*` → S3) | отдельный nginx/Caddy не нужен |
+| Reverse proxy | CloudFront (`/api/lead-capture/*` → Function URL, `/*` → S3) | отдельный nginx/Caddy не нужен |
 | DB | Neon Postgres (serverless, scale-to-zero) | leads (с magic_link), guidebooks, chunks+embeddings (bytea), служебные счётчики |
 | Vector search | numpy cosine в процессе Lambda; embeddings в `bytea` Postgres | без pgvector, без отдельного vector-DB |
 | Email | Resend REST API | транзакционные письма (magic_link) |
@@ -398,7 +398,7 @@ AWS-инфраструктура управляется Terraform; ручной 
 | Безопасность доступа к секретам и транспорта | §10.3 | BYOK через `X-Api-Key` header; magic_link через `X-Magic-Link` header; CORS-whitelist; strict CSP; server-side секреты — boto на cold start |
 | Защита от prompt injection | §10.4 | Anthropic role-разделение (system + user); без regex-санитизации; без post-moderation |
 | Observability | §10.5 | structured JSON; allowlist `log_event`; CloudWatch + Sentry; `IpHash` = 64 lowercase hex (SHA-256 + соль) |
-| Структура шаблона гайдбука | §10.6 | 6 required + 13 optional фиксированных полей в `docs/guidebook_template.json`; фронт читает schema через CloudFront-статику, рендерит форму и plain text; backend не участвует, template-flow обслуживается через `POST /api/capture-lead/ingest/upload` |
+| Структура шаблона гайдбука | §10.6 | 6 required + 13 optional фиксированных полей в `docs/guidebook_template.json`; фронт читает schema через CloudFront-статику, рендерит форму и plain text; backend не участвует, template-flow обслуживается через `POST /api/lead-capture/ingest/upload` |
 | Email capture | §10.7 | упрощённый regex + `EMAIL_MAX_LENGTH=254`; honeypot; Resend single-attempt + rollback; single opt-in |
 | Таксономия error-кодов | §10.8 | envelope `{ error: { code, message, details } }`; 13 ERR_*-кодов с фиксированной `details`-структурой и client retry-семантикой |
 
@@ -452,7 +452,7 @@ AC ссылаются на параметры по символическому 
 - На экране `entrypoint` видна кнопка `Try sample` без скролла.
 - Клик `try_sample` переводит на `sample_response`; фронт фетчит упорядоченный список заготовленных сообщений гостя `SAMPLE_MESSAGES` из статики `/config/sample_messages.json` (§10.9) — сетевой запрос виден в e2e (список не захардкожен в бандле).
 - Поле сообщения **editable**: prefilled первым сообщением из списка; пользователь может изменить или заменить текст; длина ограничена `MAX_GUEST_MESSAGE_LENGTH` на клиенте и на сервере.
-- Submit (`send`) отправляет **фактическое содержимое поля** (в e2e: `message` в body `POST /api/capture-lead/sample/generate` равен значению поля на момент клика); ответ генерируется на серверном ключе; пользовательский API key не запрашивается.
+- Submit (`send`) отправляет **фактическое содержимое поля** (в e2e: `message` в body `POST /api/lead-capture/sample/generate` равен значению поля на момент клика); ответ генерируется на серверном ключе; пользовательский API key не запрашивается.
 - Ответ append'ится в `response area` **в паре с отправленным сообщением** (видно, на какой вопрос какой ответ); предыдущие пары сохраняются.
 - Ответ **заземлён на sample-гайдбук**: на guest_message с вопросом о факте, присутствующем в `docs/sample_guidebook.md` (напр. время check-in), `response_text` содержит этот факт — регресс-защита ретривала (пустой/нерелевантный контекст в ответе — дефект).
 - Ответ отображается как plain text без сырой Markdown-разметки (символы `#`, `**` и т.п. не видны пользователю); системный промпт sample-flow требует plain-text-ответ от первого лица хоста — без отсылок к «хозяину» в третьем лице (§10.3).
@@ -489,14 +489,14 @@ AC ссылаются на параметры по символическому 
 **AC:**
 - URL вида `{origin}{MAGIC_LINK_PATH}?{MAGIC_LINK_URL_PARAM}=<token>` (по умолчанию `/claim?ml=<token>`; путь и параметр — frontend-owned контракт, §10.9 / §11.4) распознаётся клиентом как вход в Magic link app.
 - Сопоставление landing-пути **толерантно к trailing slash**: `/claim?ml=…` и `/claim/?ml=…` обрабатываются одинаково. Ссылки из ранее доставленных писем обязаны работать в течение всего `GUIDEBOOK_TTL`, в том числе после редеплоев и правок контракта.
-- **E2e по реальному письму:** ссылка, извлечённая из фактического письма (Mailpit в dev / Resend в staging) и открытая byte-for-byte, вызывает `GET /api/capture-lead/magic-link/resolve` и приводит на экран `guidebook`. Проверка синтетически собранным URL это AC не закрывает.
+- **E2e по реальному письму:** ссылка, извлечённая из фактического письма (Mailpit в dev / Resend в staging) и открытая byte-for-byte, вызывает `GET /api/lead-capture/magic-link/resolve` и приводит на экран `guidebook`. Проверка синтетически собранным URL это AC не закрывает.
 - Контракт-тест (CI): URL-префикс письма, собираемый бэкендом (`{frontend_origin}{magic_link_path}?{magic_link_url_param}=`), даёт pathname, равный (с точностью до trailing slash) `MAGIC_LINK_PATH` фронта; оба значения — из единственного источника `frontend/.env` (§10.9).
 - Токен на landing-пути не теряется молча: происходит либо resolve (успех или `ERR_INVALID_MAGIC_LINK`), либо показ error-banner'а (сетевая/5xx-ошибка, US-07). Молчаливый показ `entrypoint` при наличии `?ml=` в URL на landing-пути — дефект.
 - Открытие URL вызывает `open_magic_link` → backend resolves magic_link → возвращает Lead + (опционально) Guidebook metadata.
 - При успехе пользователь переходит на экран `guidebook` — **всегда, в том числе при уже привязанном Guidebook'е** (landing-цель не зависит от `Lead.guidebook_id`; редирект — явный `history.replaceState('/guidebook')`, §11.1):
   - Если у Lead'а нет привязанного Guidebook'а — отображается «no guidebook yet».
   - Если есть — отображается info о текущем гайдбуке (название/created_at), кнопка `Next` enabled.
-- **Прямой заход / hard-reload защищённого пути** (`/guidebook`, `/generate`, `/template`; закладка, refresh) без предшествующего in-tab resolve перезапрашивает `GET /api/capture-lead/magic-link/resolve` (по восстановленному из sessionStorage `session.magicLink`) и регидрирует `lead` до рендера экрана → экран отражает фактическую привязку гайдбука (не «no guidebook yet» при наличии гайдбука).
+- **Прямой заход / hard-reload защищённого пути** (`/guidebook`, `/generate`, `/template`; закладка, refresh) без предшествующего in-tab resolve перезапрашивает `GET /api/lead-capture/magic-link/resolve` (по восстановленному из sessionStorage `session.magicLink`) и регидрирует `lead` до рендера экрана → экран отражает фактическую привязку гайдбука (не «no guidebook yet» при наличии гайдбука).
 - Magic_link, уже очищенный cleanup-задачей (§10.1), либо не найденный → `ERR_INVALID_MAGIC_LINK`; UI отображает сообщение и предлагает повторить путь через `entrypoint`. **TTL — cleanup-eventual:** токен, чей `last_seen_at` превысил `GUIDEBOOK_TTL`, но ещё не очищен cleanup'ом, резолвится успешно (200) с `guidebook = null` (sliding-TTL: любой backend-вызов обновляет `last_seen_at`; фактическое истечение — только после полного `GUIDEBOOK_TTL` бездействия и прогона cleanup, §10.1).
 - Успешный `open_magic_link` обновляет `Lead.last_seen_at` (sliding TTL).
 - Превышение `RATE_LIMIT_PER_IP` → `ERR_RATE_LIMIT`.
@@ -527,11 +527,11 @@ AC ссылаются на параметры по символическому 
 
 **AC:**
 - На экране `guidebook` видна кнопка `Generate by template`; клик → переход на `template`.
-- На экране `template` — форма (обязательные/опциональные поля по §10.6, schema подгружается через CloudFront-статику `/config/template_schema.json`) и кнопка `Generate`. На submit фронт рендерит plain text по `<label>: <value>\n\n` per filled поле и шлёт в `POST /api/capture-lead/ingest/upload` с `name = property_name`-value, `mime_type = "text/plain"`.
+- На экране `template` — форма (обязательные/опциональные поля по §10.6, schema подгружается через CloudFront-статику `/config/template_schema.json`) и кнопка `Generate`. На submit фронт рендерит plain text по `<label>: <value>\n\n` per filled поле и шлёт в `POST /api/lead-capture/ingest/upload` с `name = property_name`-value, `mime_type = "text/plain"`.
 - Схема формы фетчится **сетевым запросом** с `/config/template_schema.json` (виден в e2e, не захардкожен в бандле); HTTP-ответ имеет не-HTML `Content-Type`. Ответ, не являющийся JSON-массивом объектов-полей (в т.ч. SPA-fallback `index.html`), → видимая ошибка загрузки формы, а не пустой/сломанный экран (`Array.isArray`-guard на клиенте; регресс-защита от молча отданного `index.html`).
 - Незаполненное обязательное поле блокирует submit; конкретное поле подсвечивается.
 - Поле, превысившее лимит длины, блокирует submit с указанием поля и лимита.
-- Submit запускает: фронт собирает plain text по `<label>: <value>\n\n`, авто-fills `name = property_name`-value, шлёт в `/api/capture-lead/ingest/upload`. На бэке — обычный upload-pipeline (чанкинг → embedding → save), создаёт или replace'ит Guidebook у Lead'а (1:1; magic_link не меняется).
+- Submit запускает: фронт собирает plain text по `<label>: <value>\n\n`, авто-fills `name = property_name`-value, шлёт в `/api/lead-capture/ingest/upload`. На бэке — обычный upload-pipeline (чанкинг → embedding → save), создаёт или replace'ит Guidebook у Lead'а (1:1; magic_link не меняется).
 - После успешной генерации пользователь переводится **сразу на экран `generate`** (минуя возврат на `guidebook`) — явным `navigate('/generate')`, не через state-зависимый резолв (§11.1); см. §1.3.1.
 - Время от submit формы до перехода на `generate` ≤ `INGESTION_P95_BUDGET` (p95).
 - Структура полей шаблона и их лимиты → §10.6.
@@ -711,7 +711,7 @@ CREATE TABLE guidebooks (
 - `guidebook_id` — `GuidebookId.new()` (UUID); создаётся в `Guidebook.create()` при upload (US-04, US-05).
 - `name` — отображаемое имя гайдбука; вводится host'ом при file-upload (US-04); авто-fills из `property_name`-поля при template-flow на фронте (US-05, см. §10.6). Используется в UI (workspace, magic-link-resolve response §5.5).
 - `created_at` — момент создания (первый upload после magic_link).
-- `last_accessed_at` — обновляется на каждом `/api/capture-lead/generate` (`generate → send`); вспомогательно для analytics и отладки.
+- `last_accessed_at` — обновляется на каждом `/api/lead-capture/generate` (`generate → send`); вспомогательно для analytics и отладки.
 - `ip_hash` — IP создателя на момент upload.
 - `access_param` **удалён** из этой таблицы; единый токен входа теперь — `leads.magic_link` (см. §1.3.4).
 
@@ -806,8 +806,8 @@ HTTP-контракт между фронтом (Vite TS bundle) и backend (Lam
 | Конвенция | Значение |
 |---|---|
 | Base URL | `https://hola.host` (CloudFront) |
-| Префикс API | `/api/capture-lead/*` (path-routing на Lambda Function URL) |
-| Content-Type запросов | `application/json` для всех POST'ов, кроме `/api/capture-lead/ingest/upload` (`multipart/form-data`) |
+| Префикс API | `/api/lead-capture/*` (path-routing на Lambda Function URL) |
+| Content-Type запросов | `application/json` для всех POST'ов, кроме `/api/lead-capture/ingest/upload` (`multipart/form-data`) |
 | Content-Type ответов | `application/json; charset=utf-8` |
 | Аутентификация | BYOK Claude key — заголовок `X-Api-Key` (§10.3); magic_link — заголовок `X-Magic-Link` (§10.3) для всех endpoint'ов с привязкой к Lead'у |
 | Тело ошибки | единый envelope `{ "error": { "code": "ERR_*", "message": "<human-readable>", "details": { … } } }`; полная таксономия `code`, поля `details` per `code`, retry-семантика — §10.8 |
@@ -830,13 +830,13 @@ HTTP-контракт между фронтом (Vite TS bundle) и backend (Lam
 
 | # | Метод | Path | Auth | Назначение | Триггер UI (§1.3) |
 |---|---|---|---|---|---|
-| 5.3 | POST | `/api/capture-lead/sample/generate` | — | sample-ответ на заготовку | `sample_response/send` |
-| 5.4 | POST | `/api/capture-lead/leads/capture` | — | захват email + создание/перегенерация magic_link + отправка письма | `capture_email/send` |
-| 5.5 | GET | `/api/capture-lead/magic-link/resolve` | magic_link | resolve magic_link → Lead + (опц.) Guidebook metadata (включая `name`) | `open_magic_link` (loader Magic link app) |
-| 5.6 | POST | `/api/capture-lead/ingest/upload` | magic_link | upload файла или rendered text (фронт-template) → Guidebook + chunks + embeddings | `guidebook/upload`, `template/generate` (см. §10.6) |
-| 5.7 | POST | `/api/capture-lead/generate` | magic_link + BYOK | real-flow ответ на сообщение гостя | `generate/send` |
+| 5.3 | POST | `/api/lead-capture/sample/generate` | — | sample-ответ на заготовку | `sample_response/send` |
+| 5.4 | POST | `/api/lead-capture/leads/capture` | — | захват email + создание/перегенерация magic_link + отправка письма | `capture_email/send` |
+| 5.5 | GET | `/api/lead-capture/magic-link/resolve` | magic_link | resolve magic_link → Lead + (опц.) Guidebook metadata (включая `name`) | `open_magic_link` (loader Magic link app) |
+| 5.6 | POST | `/api/lead-capture/ingest/upload` | magic_link | upload файла или rendered text (фронт-template) → Guidebook + chunks + embeddings | `guidebook/upload`, `template/generate` (см. §10.6) |
+| 5.7 | POST | `/api/lead-capture/generate` | magic_link + BYOK | real-flow ответ на сообщение гостя | `generate/send` |
 
-### 5.3 POST /api/capture-lead/sample/generate
+### 5.3 POST /api/lead-capture/sample/generate
 
 Sample-flow на серверном ключе (§1.3, US-01).
 
@@ -860,7 +860,7 @@ Sample-flow на серверном ключе (§1.3, US-01).
 **Side-effects:**
 - INSERT в `sample_budget` (UPSERT по `date`); инкремент `output_tokens_used`.
 
-### 5.4 POST /api/capture-lead/leads/capture
+### 5.4 POST /api/lead-capture/leads/capture
 
 Захват email (gate в guidebook flow или sample opt-in) + отправка magic_link (§1.3, US-02).
 
@@ -886,12 +886,12 @@ Sample-flow на серверном ключе (§1.3, US-01).
 
 ⚠ Конфликт с §1.3 (UX): если Resend временно недоступен, клиент получает `ERR_INTERNAL`, но при `silent_upsert` magic_link уже перегенерирован (старый инвалидирован). Mitigations — атомарность отправки и инвалидации, retry-политика — §9.
 
-### 5.5 GET /api/capture-lead/magic-link/resolve
+### 5.5 GET /api/lead-capture/magic-link/resolve
 
 Resolve magic_link при открытии URL `?ml=<token>` (§1.3, US-03). GET выбран по двум причинам: (а) операция чисто read (loader Magic link app), (б) удобно для CloudFront-кэширования отрицательных ответов (ERR_INVALID_MAGIC_LINK) при abuse.
 
 **Request:**
-- Headers: `MAGIC_LINK_HEADER: <token>` — клиент читает токен из landing-URL'а (`?<MAGIC_LINK_URL_PARAM>=<token>`) и передаёт его на backend **только** в заголовке; в URL запроса к `/api/capture-lead/*` query-параметр не подставляется. Цель: токен не попадает в CloudFront access-logs (CDN логирует request URI, но не заголовки). Backend валидирует токен внутри use case (`LeadsRepo.get_by_magic_link`, §8.3).
+- Headers: `MAGIC_LINK_HEADER: <token>` — клиент читает токен из landing-URL'а (`?<MAGIC_LINK_URL_PARAM>=<token>`) и передаёт его на backend **только** в заголовке; в URL запроса к `/api/lead-capture/*` query-параметр не подставляется. Цель: токен не попадает в CloudFront access-logs (CDN логирует request URI, но не заголовки). Backend валидирует токен внутри use case (`LeadsRepo.get_by_magic_link`, §8.3).
 - Body: отсутствует.
 
 **Response (200):**
@@ -906,7 +906,7 @@ Resolve magic_link при открытии URL `?ml=<token>` (§1.3, US-03). GET
   }
   ```
   Гайдбука нет → `guidebook_id` / `guidebook_name` / `guidebook_created_at` все `null`.
-- `guidebook_id` — UUID-строка; примитивная сериализация; клиент передаёт её обратно в `/api/capture-lead/generate` без интерпретации.
+- `guidebook_id` — UUID-строка; примитивная сериализация; клиент передаёт её обратно в `/api/lead-capture/generate` без интерпретации.
 - `guidebook_name` — отображаемое имя гайдбука (см. §4.2, §7.3), показывается в UI.
 
 **Ошибки:**
@@ -920,7 +920,7 @@ Resolve magic_link при открытии URL `?ml=<token>` (§1.3, US-03). GET
 **Side-effects:**
 - UPDATE `leads.last_seen_at = now()` (sliding TTL, §4.7).
 
-### 5.6 POST /api/capture-lead/ingest/upload
+### 5.6 POST /api/lead-capture/ingest/upload
 
 Upload гайдбука — обслуживает оба сценария: загрузка файла host'ом (US-04) И submit формы шаблона с фронта (US-05, см. §10.6).
 
@@ -952,7 +952,7 @@ Upload гайдбука — обслуживает оба сценария: за
 - UPDATE `leads.last_seen_at = now()`.
 - magic_link **не меняется**.
 
-### 5.7 POST /api/capture-lead/generate
+### 5.7 POST /api/lead-capture/generate
 
 Real-flow ответ на сообщение гостя (§1.3, US-06).
 
@@ -1013,17 +1013,17 @@ Conceptual-уровень: участники, порядок взаимодей
 | Lambda | `LM` | один процесс; intra-процессная работа (embed, top-K cosine, сборка prompt'а, валидации, dedup-проверка, MagicLink generate, rate-check) — Note over LM, без self-call стрелок |
 | Neon Postgres | `DB` | каждый SQL-вызов отдельной стрелкой, payload-summary в одну строку |
 | Anthropic API | `AN` | вызов и ответ |
-| Resend API | `RS` | только в `/api/capture-lead/leads/capture` |
+| Resend API | `RS` | только в `/api/lead-capture/leads/capture` |
 
 Конвенции:
-- CloudFront в диаграммах опускается: вся связка `BR ↔ LM` идёт через CloudFront по HTTPS (path-routing `/api/capture-lead/*` → Lambda Function URL); инвариант всех флоу.
+- CloudFront в диаграммах опускается: вся связка `BR ↔ LM` идёт через CloudFront по HTTPS (path-routing `/api/lead-capture/*` → Lambda Function URL); инвариант всех флоу.
 - Rate-limit и `last_seen_at`-bump показываются как DB-стрелки (не Note), потому что это явные write'ы.
 - Ошибочные ветки (401, 413, 415, 422, 429, 5xx от внешних) на conceptual-уровне не разворачиваются — фиксируется happy-path. Маппинг внешних кодов → §9; UI-поведение → US-07.
 - Auth-заголовки (`X-Magic-Link`, `X-Api-Key`, см. §10.3) обозначаются как `magic_link` / `byok` в payload-summary.
 
 ### 6.1 Sample-flow: ответ на заготовку
 
-Endpoint: `POST /api/capture-lead/sample/generate` (§5.3). Триггер UI: `sample_response/send` (§1.3). BYOK не вводится; sample-LLM (Haiku) на серверном ключе. Заготовленный гайдбук (чанки + embeddings) загружается в память Lambda на cold start через `SampleGuidebookSource` (§8.6: dev — локальный файл, staging/prod — S3) и фризится SnapStart'ом. Список заготовок `SAMPLE_MESSAGES` — frontend-статика `/config/sample_messages.json` (§10.9); бэкенд его не потребляет.
+Endpoint: `POST /api/lead-capture/sample/generate` (§5.3). Триггер UI: `sample_response/send` (§1.3). BYOK не вводится; sample-LLM (Haiku) на серверном ключе. Заготовленный гайдбук (чанки + embeddings) загружается в память Lambda на cold start через `SampleGuidebookSource` (§8.6: dev — локальный файл, staging/prod — S3) и фризится SnapStart'ом. Список заготовок `SAMPLE_MESSAGES` — frontend-статика `/config/sample_messages.json` (§10.9); бэкенд его не потребляет.
 
 ```mermaid
 sequenceDiagram
@@ -1033,7 +1033,7 @@ sequenceDiagram
     participant DB as Neon Postgres
     participant AN as Anthropic API
 
-    BR->>LM: POST /api/capture-lead/sample/generate<br/>body: {message}
+    BR->>LM: POST /api/lead-capture/sample/generate<br/>body: {message}
     LM->>DB: rate check + increment (scope=ip)
     DB-->>LM: ok
     LM->>DB: SELECT sample_budget WHERE date=today
@@ -1050,7 +1050,7 @@ sequenceDiagram
 
 ### 6.2 Email capture + отправка magic_link
 
-Endpoint: `POST /api/capture-lead/leads/capture` (§5.4). Триггер UI: `capture_email/send` (§1.3). Захват из обеих веток (`use_guidebook` → `flow='guidebook'`, `leave_email` → `flow='sample'`). Политика дедупа: `silent_upsert_with_new_magic_link`.
+Endpoint: `POST /api/lead-capture/leads/capture` (§5.4). Триггер UI: `capture_email/send` (§1.3). Захват из обеих веток (`use_guidebook` → `flow='guidebook'`, `leave_email` → `flow='sample'`). Политика дедупа: `silent_upsert_with_new_magic_link`.
 
 ```mermaid
 sequenceDiagram
@@ -1060,7 +1060,7 @@ sequenceDiagram
     participant DB as Neon Postgres
     participant RS as Resend API
 
-    BR->>LM: POST /api/capture-lead/leads/capture<br/>body: {email, flow}
+    BR->>LM: POST /api/lead-capture/leads/capture<br/>body: {email, flow}
     LM->>DB: rate check + increment (scope=ip)
     DB-->>LM: ok
     Note over LM: валидация email (EMAIL_REGEX, EMAIL_MAX_LENGTH)<br/>валидация flow ∈ LEAD_FLOW_VALUES<br/>генерация new magic_link через MagicLinkGenerator
@@ -1077,7 +1077,7 @@ sequenceDiagram
 
 ### 6.3 Magic link resolve (вход в Magic link app)
 
-Endpoint: `GET /api/capture-lead/magic-link/resolve` (§5.5). Триггер UI: `open_magic_link` (loader Magic link app, §1.3). Клиент извлекает токен из URL-параметра `MAGIC_LINK_URL_PARAM` и переносит в заголовок (URL-параметр в backend не уходит).
+Endpoint: `GET /api/lead-capture/magic-link/resolve` (§5.5). Триггер UI: `open_magic_link` (loader Magic link app, §1.3). Клиент извлекает токен из URL-параметра `MAGIC_LINK_URL_PARAM` и переносит в заголовок (URL-параметр в backend не уходит).
 
 ```mermaid
 sequenceDiagram
@@ -1087,7 +1087,7 @@ sequenceDiagram
     participant DB as Neon Postgres
 
     Note over BR: чтение ?ml=<token> из URL<br/>замена URL на /guidebook (history.replaceState)
-    BR->>LM: GET /api/capture-lead/magic-link/resolve<br/>header: magic_link
+    BR->>LM: GET /api/lead-capture/magic-link/resolve<br/>header: magic_link
     LM->>DB: rate check + increment (scope=ip)
     DB-->>LM: ok
     LM->>DB: SELECT id, email, flow, guidebook_id, last_seen_at FROM leads<br/>WHERE magic_link = ?
@@ -1106,7 +1106,7 @@ sequenceDiagram
 
 ### 6.4 Ingestion: upload файла
 
-Endpoint: `POST /api/capture-lead/ingest/upload` (§5.6). Триггер UI: `guidebook/upload` (§1.3). Replace, если у Lead'а уже есть Guidebook (`EMAIL_GUIDEBOOK_CARDINALITY = 1:1_replace`).
+Endpoint: `POST /api/lead-capture/ingest/upload` (§5.6). Триггер UI: `guidebook/upload` (§1.3). Replace, если у Lead'а уже есть Guidebook (`EMAIL_GUIDEBOOK_CARDINALITY = 1:1_replace`).
 
 ```mermaid
 sequenceDiagram
@@ -1115,7 +1115,7 @@ sequenceDiagram
     participant LM as Lambda
     participant DB as Neon Postgres
 
-    BR->>LM: POST /api/capture-lead/ingest/upload<br/>header: magic_link<br/>multipart: file
+    BR->>LM: POST /api/lead-capture/ingest/upload<br/>header: magic_link<br/>multipart: file
     LM->>DB: rate check + increment (scope=ip, scope=magic_link)
     DB-->>LM: ok
     LM->>DB: SELECT id, guidebook_id FROM leads WHERE magic_link = ?
@@ -1138,7 +1138,7 @@ sequenceDiagram
 
 ### 6.5 Real-flow: ответ на сообщение гостя
 
-Endpoint: `POST /api/capture-lead/generate` (§5.7). Триггер UI: `generate/send` (§1.3). BYOK обязателен.
+Endpoint: `POST /api/lead-capture/generate` (§5.7). Триггер UI: `generate/send` (§1.3). BYOK обязателен.
 
 ```mermaid
 sequenceDiagram
@@ -1148,7 +1148,7 @@ sequenceDiagram
     participant DB as Neon Postgres
     participant AN as Anthropic API
 
-    BR->>LM: POST /api/capture-lead/generate<br/>header: magic_link, byok<br/>body: {message}
+    BR->>LM: POST /api/lead-capture/generate<br/>header: magic_link, byok<br/>body: {message}
     LM->>DB: rate check + increment (scope=ip, scope=magic_link)
     DB-->>LM: ok
     LM->>DB: SELECT id, guidebook_id FROM leads WHERE magic_link = ?
@@ -1170,13 +1170,13 @@ sequenceDiagram
 
 | Переход / loader (§1.3.1) | Endpoint (§5) | Сценарий (§6) |
 |---|---|---|
-| `sample_response/send` | POST `/api/capture-lead/sample/generate` | §6.1 |
-| `capture_email/send` | POST `/api/capture-lead/leads/capture` | §6.2 |
+| `sample_response/send` | POST `/api/lead-capture/sample/generate` | §6.1 |
+| `capture_email/send` | POST `/api/lead-capture/leads/capture` | §6.2 |
 | `email_sent → app` (out-of-band) | (email → клик на URL) | — (нет backend-вызова) |
-| `Magic link app: [*] → guidebook` (loader) | GET `/api/capture-lead/magic-link/resolve` | §6.3 |
-| `guidebook/upload` | POST `/api/capture-lead/ingest/upload` | §6.4 |
-| `template/generate` | POST `/api/capture-lead/ingest/upload` (фронт рендерит форму, отправляет как text/plain — см. §10.6) | §6.4 |
-| `generate/send` | POST `/api/capture-lead/generate` | §6.5 |
+| `Magic link app: [*] → guidebook` (loader) | GET `/api/lead-capture/magic-link/resolve` | §6.3 |
+| `guidebook/upload` | POST `/api/lead-capture/ingest/upload` | §6.4 |
+| `template/generate` | POST `/api/lead-capture/ingest/upload` (фронт рендерит форму, отправляет как text/plain — см. §10.6) | §6.4 |
+| `generate/send` | POST `/api/lead-capture/generate` | §6.5 |
 
 UI-переходы без backend-вызовов (`entrypoint → sample_response`, `entrypoint → capture_email`, `sample_response → capture_email`, `guidebook → template`, `guidebook → generate`, `menu_*`-переходы (US-08), `close_tab`) в §6 не разворачиваются.
 
@@ -1427,7 +1427,7 @@ class Guidebook:
         self.last_accessed_at = datetime.now(tz=UTC)
 ```
 
-- `touch()` вызывается в use case при successful `/api/capture-lead/generate` (§6.5); коммитится через UoW.
+- `touch()` вызывается в use case при successful `/api/lead-capture/generate` (§6.5); коммитится через UoW.
 - `access_param` удалён: единый токен входа — `Lead.magic_link` (§1.3.4, §4.1).
 
 ### 7.4 `Chunk` (`domain/entities/chunk.py`) — persistent
@@ -1596,7 +1596,7 @@ class GuestMessage:
         return cls(text=text)
 ```
 
-- Transient: не персистится; живёт в рамках одного запроса `/api/capture-lead/generate` или `/api/capture-lead/sample/generate`.
+- Transient: не персистится; живёт в рамках одного запроса `/api/lead-capture/generate` или `/api/lead-capture/sample/generate`.
 - Нет `from_repo()` — нет источника persistence.
 - Обоснование «entity, а не VO»: central business input, в дальнейшем будет нести метаданные (timestamp получения, attempts, sanitization-flags), для которых полезна mutable семантика и явный lifecycle.
 
@@ -2514,11 +2514,11 @@ container: Container = build()  # module-level singleton (выполняется
 
 | Endpoint (§5) | DTO | Use case (§8.3) | Sequence flow (§6) |
 |---|---|---|---|
-| POST /api/capture-lead/sample/generate | `SampleGenerateCmd` → `SampleGenerateResult` | `SampleGenerateUseCase` | §6.1 |
-| POST /api/capture-lead/leads/capture | `CaptureLeadCmd` → `None` (200 `{status:"sent"}`) | `CaptureLeadUseCase` | §6.2 |
-| GET /api/capture-lead/magic-link/resolve | `ResolveMagicLinkCmd` → `ResolveMagicLinkResult` | `ResolveMagicLinkUseCase` | §6.3 |
-| POST /api/capture-lead/ingest/upload | `UploadGuidebookCmd` → `IngestionResult` | `UploadGuidebookUseCase` | §6.4 |
-| POST /api/capture-lead/generate | `GenerateResponseCmd` → `GenerateResponseResult` | `GenerateResponseUseCase` | §6.5 |
+| POST /api/lead-capture/sample/generate | `SampleGenerateCmd` → `SampleGenerateResult` | `SampleGenerateUseCase` | §6.1 |
+| POST /api/lead-capture/leads/capture | `CaptureLeadCmd` → `None` (200 `{status:"sent"}`) | `CaptureLeadUseCase` | §6.2 |
+| GET /api/lead-capture/magic-link/resolve | `ResolveMagicLinkCmd` → `ResolveMagicLinkResult` | `ResolveMagicLinkUseCase` | §6.3 |
+| POST /api/lead-capture/ingest/upload | `UploadGuidebookCmd` → `IngestionResult` | `UploadGuidebookUseCase` | §6.4 |
+| POST /api/lead-capture/generate | `GenerateResponseCmd` → `GenerateResponseResult` | `GenerateResponseUseCase` | §6.5 |
 
 ### 8.8 DI, Lambda lifecycle, request flow
 
@@ -2590,7 +2590,7 @@ ip_hash = IpHash(cmd.ip_hash)        # internal: ValueError → 500, вне payl
 
 Subject scope=MAGIC_LINK — `str(lead.id)`, а не сам токен: counter не утечёт секрет в `rate_limit_counters.subject` (§4.4).
 
-### 9.1 `SampleGenerateUseCase.execute` (§6.1, POST `/api/capture-lead/sample/generate`)
+### 9.1 `SampleGenerateUseCase.execute` (§6.1, POST `/api/lead-capture/sample/generate`)
 
 ```python
 def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
@@ -2647,7 +2647,7 @@ def execute(self, cmd: SampleGenerateCmd) -> SampleGenerateResult:
 - `sample_chunks` уже preloaded в `__init__` (см. §8.6); embed'а на чанках в warm-вызовах нет.
 - BYOK не вводится: §5.3 запрещает заголовок; в `SampleGenerateCmd` поля `byok` нет, серверный ключ — из Settings.
 
-### 9.2 `CaptureLeadUseCase.execute` (§6.2, POST `/api/capture-lead/leads/capture`)
+### 9.2 `CaptureLeadUseCase.execute` (§6.2, POST `/api/lead-capture/leads/capture`)
 
 ```python
 def execute(self, cmd: CaptureLeadCmd) -> None:
@@ -2696,7 +2696,7 @@ def execute(self, cmd: CaptureLeadCmd) -> None:
 
 Цена: HTTPS-вызов к Resend держит DB-соединение открытым (таймаут `Settings.resend_timeout_s = 5 c`, §10.7).
 
-### 9.3 `ResolveMagicLinkUseCase.execute` (§6.3, GET `/api/capture-lead/magic-link/resolve`)
+### 9.3 `ResolveMagicLinkUseCase.execute` (§6.3, GET `/api/lead-capture/magic-link/resolve`)
 
 ```python
 def execute(self, cmd: ResolveMagicLinkCmd) -> ResolveMagicLinkResult:
@@ -2739,7 +2739,7 @@ def execute(self, cmd: ResolveMagicLinkCmd) -> ResolveMagicLinkResult:
 
 def _expired(self, lead: Lead) -> bool:
     # сигнал TTL — Lead.last_seen_at (§10.1), НЕ Guidebook.last_accessed_at (аналитика,
-    # бампится только на /api/capture-lead/generate); вызывать ДО lead.touch()
+    # бампится только на /api/lead-capture/generate); вызывать ДО lead.touch()
     return datetime.now(tz=UTC) - lead.last_seen_at > self.settings.magic_link_ttl
 ```
 
@@ -2747,7 +2747,7 @@ def _expired(self, lead: Lead) -> bool:
 - Rate-check `MAGIC_LINK` стоит внутри UoW — конкурентный resolve того же lead'а с разных IP всё равно ограничивается per-lead counter'ом.
 - TTL guidebook'а — soft (возврат `null` для UI), без удаления; hard-delete делает cleanup-Lambda (§4.7, §9.6).
 
-### 9.4 `UploadGuidebookUseCase.execute` (§6.4, POST `/api/capture-lead/ingest/upload`)
+### 9.4 `UploadGuidebookUseCase.execute` (§6.4, POST `/api/lead-capture/ingest/upload`)
 
 ```python
 def execute(self, cmd: UploadGuidebookCmd) -> IngestionResult:
@@ -2826,7 +2826,7 @@ def execute(self, cmd: UploadGuidebookCmd) -> IngestionResult:
 - Двойной resolve (шаг 4 + шаг 7) — компромисс между «не держать соединение во время CPU-bound» и «защита от race с cleanup».
 - `guidebook.id` генерируется в `Guidebook.create()` (§7.3); `Chunk.id` — в `Chunk.create()` (§7.4); use case id не «протаскивает» снаружи.
 
-### 9.5 `GenerateResponseUseCase.execute` (§6.5, POST `/api/capture-lead/generate`)
+### 9.5 `GenerateResponseUseCase.execute` (§6.5, POST `/api/lead-capture/generate`)
 
 ```python
 def execute(self, cmd: GenerateResponseCmd) -> GenerateResponseResult:
@@ -3084,7 +3084,7 @@ ADR фиксируют принятые архитектурные решени�
 | # | Сигнал «activity» для sliding | За | Против |
 |---|---|---|---|
 | α | любое успешное действие на endpoint'е с MAGIC_LINK-scope (resolve / upload / template / generate) | host, который активно тестирует гайдбук, держит TTL раскрытым без явного действия | дублирующие touch'и на короткой сессии (resolve→generate сразу); micro-write пер каждый запрос |
-| β | только `/api/capture-lead/generate` | минимум write'ов; чёткая семантика «гайдбук используется по назначению» | host, который перезагрузил гайдбук (upload/template) и не успел протестировать в течение TTL, теряет доступ — против §3 US-04/US-05 |
+| β | только `/api/lead-capture/generate` | минимум write'ов; чёткая семантика «гайдбук используется по назначению» | host, который перезагрузил гайдбук (upload/template) и не успел протестировать в течение TTL, теряет доступ — против §3 US-04/US-05 |
 | γ | **любое успешное действие на Lead-endpoint'е (resolve / upload / template / generate) + capture с тем же email (через `regenerate_magic_link()`)** | покрывает оба класса «host активен»: тестирует ответы и перезаливает контент; вызов `Lead.touch()` локализован в use case'ах §9.3–§9.5 | те же дублирующие touch'и, что и в α; принимаем как цену консистентного сигнала |
 
 **Альтернативы по cleanup-frequency.**
@@ -3098,7 +3098,7 @@ ADR фиксируют принятые архитектурные решени�
 **Решение.**
 
 - `GUIDEBOOK_TTL = 30 дней` (вариант **B**); один TTL — общий для `Lead.magic_link` и привязанного `Guidebook`.
-- Sliding-window сигнал — вариант **γ**: `Lead.last_seen_at` обновляется в use case'ах §9.3 (resolve), §9.4 (upload), §9.5 (generate) через `Lead.touch()` или внутри `regenerate_magic_link()` / `attach_guidebook()` (уже есть в §7.5). `Guidebook.last_accessed_at` остаётся для аналитики (touch только на `/api/capture-lead/generate`), **не** используется как сигнал TTL.
+- Sliding-window сигнал — вариант **γ**: `Lead.last_seen_at` обновляется в use case'ах §9.3 (resolve), §9.4 (upload), §9.5 (generate) через `Lead.touch()` или внутри `regenerate_magic_link()` / `attach_guidebook()` (уже есть в §7.5). `Guidebook.last_accessed_at` остаётся для аналитики (touch только на `/api/lead-capture/generate`), **не** используется как сигнал TTL.
 - Cleanup-частота — вариант **III**: EventBridge schedule `cron(30 0 * * ? *)` (00:30 UTC), один Lambda-entry запускает `CleanupExpiredUseCase` + `CleanupRateCountersUseCase` последовательно (§9.6, §9.7).
 - Конфигурация (отдельно от кода):
   - `MAGIC_LINK_TTL_DAYS` — env-var Lambda runtime'а (значение задаёт Terraform на этапе deploy, §2.6); читается через pydantic-settings как `Settings.magic_link_ttl_days` и отдаётся use case'ам как property `magic_link_ttl: timedelta`. В Python НЕТ default'а — отсутствие env-var → fail-fast при cold start (нет «случайного» fallback'а на код-уровне). (Символическое имя параметра в §3.0 — по-прежнему `GUIDEBOOK_TTL`; Settings-поле названо по сущности, что истекает — magic_link.)
@@ -3134,8 +3134,8 @@ ADR фиксируют принятые архитектурные решени�
 
 | # | Подход | За | Против |
 |---|---|---|---|
-| α | per-endpoint значения (свой лимит для `/api/capture-lead/sample/generate`, `/api/capture-lead/generate` и т.д.) | точно отделяет дорогие операции (LLM) от дешёвых (resolve) | расходится с §3.0 (две фиксированные scope'ы) и §5.1; требует переработать `RateLimiter` API |
-| β | **per-scope (агрегатный лимит на IP / на magic_link, любые endpoint'ы считаются вместе)** | соответствует §3.0/§5.1; минимальный код | дорогая операция (`/api/capture-lead/generate`) и дешёвая (`/api/capture-lead/magic-link/resolve`) тратят один счётчик; host с тестированием съедает квоту быстрее |
+| α | per-endpoint значения (свой лимит для `/api/lead-capture/sample/generate`, `/api/lead-capture/generate` и т.д.) | точно отделяет дорогие операции (LLM) от дешёвых (resolve) | расходится с §3.0 (две фиксированные scope'ы) и §5.1; требует переработать `RateLimiter` API |
+| β | **per-scope (агрегатный лимит на IP / на magic_link, любые endpoint'ы считаются вместе)** | соответствует §3.0/§5.1; минимальный код | дорогая операция (`/api/lead-capture/generate`) и дешёвая (`/api/lead-capture/magic-link/resolve`) тратят один счётчик; host с тестированием съедает квоту быстрее |
 | γ | per-endpoint × per-scope (двумерная таблица) | максимально гранулярно | взрыв конфигурации; для MVP избыточно |
 
 **Решение по значениям.** Вариант **β** — соответствует уже зафиксированной архитектуре §3.0/§5.1.
@@ -3214,14 +3214,14 @@ ADR фиксируют принятые архитектурные решени�
 
 **Статус:** `accepted (MVP)`.
 
-**Контекст.** §2.8 отложил: передачу BYOK (header vs. body), CORS, CSP, прочие security headers, обработку ключа на сервере (RAM-only, явная очистка). §3.0 ссылается на параметры `API_KEY_HEADER`, `MAGIC_LINK_URL_PARAM`. §5 (`6.0` Конвенции, `6.8` POST `/api/capture-lead/generate`, `6.9` маппинг ошибок) ссылается на header'ы `API_KEY_HEADER`/`MAGIC_LINK_HEADER` без конкретных имён. §6.0 (Conceptual Sequence Flow) использует обозначения `magic_link`/`byok` в payload-summary. §1.3 («ключ — секрет», публичный репозиторий) формулируют user-facing-обещание.
+**Контекст.** §2.8 отложил: передачу BYOK (header vs. body), CORS, CSP, прочие security headers, обработку ключа на сервере (RAM-only, явная очистка). §3.0 ссылается на параметры `API_KEY_HEADER`, `MAGIC_LINK_URL_PARAM`. §5 (`6.0` Конвенции, `6.8` POST `/api/lead-capture/generate`, `6.9` маппинг ошибок) ссылается на header'ы `API_KEY_HEADER`/`MAGIC_LINK_HEADER` без конкретных имён. §6.0 (Conceptual Sequence Flow) использует обозначения `magic_link`/`byok` в payload-summary. §1.3 («ключ — секрет», публичный репозиторий) формулируют user-facing-обещание.
 
 **Альтернативы по transport'у BYOK.**
 
 | # | Способ передачи | За | Против |
 |---|---|---|---|
 | A | URL query (`?api_key=...`) | тривиальная отладка | попадает в access-логи (Lambda invocation log, CloudFront access log), в `Referer` при редиректе, в history браузера — катастрофично для секрета |
-| B | Body JSON-поле | секрет не в URL; стандартный Content-Type | каждый endpoint, требующий BYOK, должен парсить body для auth; одна точка маппинга усложняется (`/api/capture-lead/generate` body содержит и payload, и secret); сложнее middleware-перехват для logging-allowlist |
+| B | Body JSON-поле | секрет не в URL; стандартный Content-Type | каждый endpoint, требующий BYOK, должен парсить body для auth; одна точка маппинга усложняется (`/api/lead-capture/generate` body содержит и payload, и secret); сложнее middleware-перехват для logging-allowlist |
 | C | **HTTP header `X-Api-Key`** | стандартный pattern; не попадает в URL/Referer; легко исключить из логирования single rule; легко проверить в request-parsing'е до bodу parsing'а | header'ы видны в браузерных devtools (Network tab) — но это локально, не серверная утечка |
 
 **Альтернативы по transport'у magic_link.**
@@ -3229,7 +3229,7 @@ ADR фиксируют принятые архитектурные решени�
 | # | Способ передачи | За | Против |
 |---|---|---|---|
 | α | URL query на все endpoint'ы (`?ml=...`) | один способ для landing и API-вызовов | для API попадёт в access-логи (то же что A для BYOK) |
-| β | **URL query только на landing (`?ml=<token>`, §1.3.4), header `X-Magic-Link` на API-вызовы после `/api/capture-lead/magic-link/resolve`** | landing-URL — единственное место, где token виден пользователю (вкладка/история — приемлемо для magic_link с TTL 30 дней); API-вызовы используют header, не утекают в логи | две точки приёма — landing-роут парсит query, API-роуты парсят header |
+| β | **URL query только на landing (`?ml=<token>`, §1.3.4), header `X-Magic-Link` на API-вызовы после `/api/lead-capture/magic-link/resolve`** | landing-URL — единственное место, где token виден пользователю (вкладка/история — приемлемо для magic_link с TTL 30 дней); API-вызовы используют header, не утекают в логи | две точки приёма — landing-роут парсит query, API-роуты парсят header |
 | γ | Cookie (HTTP-only) после resolve | secret недоступен JS на фронте | требует server-side state cookie management (signing, expiration sync); для magic_link, который сам уже opaque, излишний слой |
 
 **Альтернативы по CORS.**
@@ -3250,7 +3250,7 @@ ADR фиксируют принятые архитектурные решени�
 
 **Решение.**
 
-- **BYOK** — вариант **C**: HTTP-header `X-Api-Key` (значение `API_KEY_HEADER = "X-Api-Key"`). Передаётся только на `/api/capture-lead/generate` (единственный endpoint, потребляющий BYOK, §5.7). Сервер:
+- **BYOK** — вариант **C**: HTTP-header `X-Api-Key` (значение `API_KEY_HEADER = "X-Api-Key"`). Передаётся только на `/api/lead-capture/generate` (единственный endpoint, потребляющий BYOK, §5.7). Сервер:
   - парсит в interface-слое в `SecretStr`, кладёт в DTO (`GenerateResponseCmd.byok: SecretStr`, уже зафиксировано в §8.1);
   - передаётся в `LLMClient.generate(..., api_key: SecretStr, is_byok: bool)` (§8.2.4); реализация `anthropic_llm_client.py` строит per-call `langchain_anthropic.ChatAnthropic` (`max_retries=0`) с ключом в поле `anthropic_api_key` — SDK аутентифицируется заголовком **`x-api-key`** (НЕ `Authorization: Bearer`, который у Anthropic используется лишь в OAuth-потоке — фактическая правка спеки, C-02); SecretStr на инстансе адаптера не сохраняется (свежий клиент на каждый invocation);
   - RAM-only: сразу после возврата из `LLMClient.generate(...)` ссылок на raw-значение не остаётся; lifecycle ключа = lifecycle одного Lambda-invocation'а (Function URL request);
@@ -3298,7 +3298,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
 
 **System prompt — тот же cold-start-канал, но НЕ секрет (I-12, D-30).** `system_prompt` для `staging`/`prod` не запекается в образ и не идёт TF-env'ом, а лежит приватным S3-объектом `system-prompt/<env>.md` (префикс `system-prompt/` не матчится ни одним CloudFront-behavior'ом → наружу не раздаётся). На cold start `app/scripts/prompt_loader.load_system_prompt_into_env` (зеркало `sm_loader`; S3-клиент из `infrastructure/boto`) дочитывает его в `os.environ["SYSTEM_PROMPT"]` **до** `Settings`; в `dev` `SYSTEM_PROMPT` — inline в `.env`. Меняется без редеплоя: `aws s3 cp` объекта + `update-function-configuration` форсирует cold-start-перечитку (аналогично ротации секретов, §12.3). Sample-гайдбук читается из S3 тем же способом в рантайме (`S3SampleGuidebookSource`, staging/prod).
 
-**Транспорт `/api/capture-lead/*` (I-11/I-12).** Lambda Function URL — `authorization_type = AWS_IAM`; CloudFront достаёт её через OAC (`origin_access_control_origin_type = "lambda"`, sigv4), так что Function URL публично не инвокится; root-level `aws_lambda_permission` (`lambda:InvokeFunctionUrl`, principal `cloudfront.amazonaws.com`, точный distribution ARN). SPA-fallback переведён с глобального `custom_error_response` на `aws_cloudfront_function` (viewer-request, только default-behavior) — иначе он перехватывал бы и JSON-4xx `/api/capture-lead/*`.
+**Транспорт `/api/lead-capture/*` (I-11/I-12).** Lambda Function URL — `authorization_type = AWS_IAM`; CloudFront достаёт её через OAC (`origin_access_control_origin_type = "lambda"`, sigv4), так что Function URL публично не инвокится; root-level `aws_lambda_permission` (`lambda:InvokeFunctionUrl`, principal `cloudfront.amazonaws.com`, точный distribution ARN). SPA-fallback переведён с глобального `custom_error_response` на `aws_cloudfront_function` (viewer-request, только default-behavior) — иначе он перехватывал бы и JSON-4xx `/api/lead-capture/*`.
 
 **Последствия.**
 
@@ -3307,7 +3307,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
 - §5.8 — маппинг «чужой `guidebook_id` → 401 vs 404» — решение: 404 как для ресурса не существующего (предотвращает enumeration); fixed в §10.3 как часть transport-design (добавляется код `ERR_NOT_FOUND` в таксономию §10.8).
 - §8.0/Settings — добавляются: `frontend_origin: str` (env), `env: str` (env, `"dev"|"prod"`); в `interface/lambda_/response_envelope.py` — middleware, добавляющий security headers + CORS-ответ.
 - §8.0 — `app/scripts/bootstrap.py` на cold start (только `staging`/`prod`) загружает server-side секреты через `sm_loader.load_secrets_into_env` (boto3) в `os.environ` до инициализации `Settings`; Lambda execution role получает inline policy `secretsmanager:GetSecretValue` с `Resource: arn:aws:secretsmanager:*:*:secret:holahost/{env}/*`.
-- §2.6 (IaC) — CloudFront response-headers policy для статики; `/api/capture-lead/*` — отдельный CloudFront-behavior к Lambda Function URL (OAC `lambda`, managed `CachingDisabled` + `AllViewerExceptHostHeader`), security-headers/CORS на API добавляет `response_envelope.py`; SPA-fallback — `aws_cloudfront_function` (viewer-request, default-behavior), не `custom_error_response`; Terraform-модуль `sm` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
+- §2.6 (IaC) — CloudFront response-headers policy для статики; `/api/lead-capture/*` — отдельный CloudFront-behavior к Lambda Function URL (OAC `lambda`, managed `CachingDisabled` + `AllViewerExceptHostHeader`), security-headers/CORS на API добавляет `response_envelope.py`; SPA-fallback — `aws_cloudfront_function` (viewer-request, default-behavior), не `custom_error_response`; Terraform-модуль `sm` управляет только `aws_secretsmanager_secret` без `secret_string` — значения заполняются вне IaC.
 - §12 — раздел инфраструктуры ссылается на §10.3 за runtime-каналом и IAM-формой доступа Lambda к секретам; сам §12 фиксирует storage-backend (Secrets Manager) и storage-location per env.
 - AC §3 US-07 «обработка ошибок без утечки `api_key`» становится численно верифицируемым: e2e-тест с `X-Api-Key: invalid` ожидает в CloudWatch-логах отсутствие подстроки `invalid`.
 
@@ -3418,7 +3418,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
       "level": "INFO",
       "event": "http_request_completed",
       "request_id": "<uuid>",
-      "endpoint": "/api/capture-lead/generate",
+      "endpoint": "/api/lead-capture/generate",
       "method": "POST",
       "status": 200,
       "duration_ms": 5800,
@@ -3434,7 +3434,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
     - `error_count{code}` (extracted из `event=http_request_completed AND level=ERROR`)
     - `sample_budget_tokens_used` (value = `sample_tokens_used` из `event=sample_response_completed`; событие эмитит `SampleGenerateUseCase.execute` сразу после `add_usage` — единственная точка, где известны output-токены; I-13)
     - `cleanup_deleted_guidebooks`, `cleanup_expired_magic_links`, `cleanup_deleted_rate_windows` (extracted из `event=cleanup_completed` cleanup-Lambda).
-  - **CloudWatch Alarms** (I-13): `p95(request_duration_ms{endpoint=/api/capture-lead/generate})` за 15 мин `> 8s` (RESPONSE_P95_BUDGET, §10.2); `p95(request_duration_ms{endpoint=/api/capture-lead/ingest/upload})` за 15 мин `> 60s`; `error_count{code=ERR_INTERNAL} ≥ 1` за 5 мин (unhandled-ошибки «в норме ноль» — любая сигнальна); `Sum(sample_budget_tokens_used)` за сутки `> 0.8 × SAMPLE_BUDGET_DAILY_CAP`. Alarm-action — per-env SNS topic `holahost-<env>-alarms` → email `alert_email` (config.yaml, §10.9); email-подписка подтверждается вручную после apply (runbook). Known gap (принято, I-13): провал cleanup-Lambda не алармится (`cleanup_completed` логирует только успех); кандидат на расширение — alarm на `AWS/Lambda Errors{FunctionName=holahost-<env>-cleanup}`.
+  - **CloudWatch Alarms** (I-13): `p95(request_duration_ms{endpoint=/api/lead-capture/generate})` за 15 мин `> 8s` (RESPONSE_P95_BUDGET, §10.2); `p95(request_duration_ms{endpoint=/api/lead-capture/ingest/upload})` за 15 мин `> 60s`; `error_count{code=ERR_INTERNAL} ≥ 1` за 5 мин (unhandled-ошибки «в норме ноль» — любая сигнальна); `Sum(sample_budget_tokens_used)` за сутки `> 0.8 × SAMPLE_BUDGET_DAILY_CAP`. Alarm-action — per-env SNS topic `holahost-<env>-alarms` → email `alert_email` (config.yaml, §10.9); email-подписка подтверждается вручную после apply (runbook). Known gap (принято, I-13): провал cleanup-Lambda не алармится (`cleanup_completed` логирует только успех); кандидат на расширение — alarm на `AWS/Lambda Errors{FunctionName=holahost-<env>-cleanup}`.
   - **Sentry** (через `sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.env)`): только unhandled-`Exception` (handler в `interface/lambda_/handler.py` ловит `ApplicationError` отдельно — это **не** Sentry-сигнал; всё, что прорвалось до top-level `except Exception`, идёт в Sentry с PII-scrubbing).
   - **Postgres / Neon Insights**: pg_stat_statements нативно (Neon dashboard); top-N slow queries раз в неделю — ручной чек, не автоматизирован.
 - **PII / secret-scrubbing** — вариант **III**: helper `log_event(event_name: str, *, level: int = logging.INFO, **fields)` в `config/logging.py` (дом логирования — `config/`, импортируемый всеми слоями, не `interface/`; уровень задаёт вызывающий — `level=logging.ERROR` для failure-событий, чтобы метрика `error_count{code}` с фильтром `level=ERROR` срабатывала). Allowlist полей фиксированный (на момент MVP):
@@ -3494,7 +3494,7 @@ def load_secrets_into_env(env: str, client: SecretsManagerClient) -> None:
 
 Состав (фиксированный): 6 required (`property_name`, `address`, `contacts`, `check_in`, `check_out`, `wifi`) + 13 optional (`tourist_license`, `emergencies`, `pets`, `keys`, `basic_rules`, `garbage`, `appliances`, `transport`, `parking`, `restaurants`, `supermarkets`, `lockers`, `additional_info`). Расширение списка → правка `docs/guidebook_template.json` + (при необходимости) изменение фронтового рендера.
 
-**Решение по обработке полей.** Фронт читает `docs/guidebook_template.json` (через S3 → CloudFront, см. ниже), рендерит форму, host заполняет, на submit фронт собирает plain text вида `<label>: <value>\n\n` per filled поле и шлёт в существующий **`POST /api/capture-lead/ingest/upload`** (см. §5.6) с `mime_type = "text/plain"` и `name = <property_name value>`. Backend получает обычный text-upload, не отличает source (template vs file).
+**Решение по обработке полей.** Фронт читает `docs/guidebook_template.json` (через S3 → CloudFront, см. ниже), рендерит форму, host заполняет, на submit фронт собирает plain text вида `<label>: <value>\n\n` per filled поле и шлёт в существующий **`POST /api/lead-capture/ingest/upload`** (см. §5.6) с `mime_type = "text/plain"` и `name = <property_name value>`. Backend получает обычный text-upload, не отличает source (template vs file).
 
 Backend **не** валидирует структуру / длины / формат полей формы — нет domain-entity `TemplateFields`, нет порта `TemplateRenderer`, нет Jinja-шаблона `guidebook.j2`, нет use case'а `GenerateFromTemplateUseCase`, нет endpoint'а `/api/ingest/template`, нет `Settings.template_hints`, нет env-var `TEMPLATE_HINTS_JSON`. Бизнес-решение: продуктовая копия и UX-валидация — слой фронта; backend работает только с готовым текстом.
 
@@ -3533,7 +3533,7 @@ Hot-update хинтов:
 **Последствия.**
 
 - §3.0 «Источник» для «структура полей шаблона и их лимиты» — `§10.6` + `docs/guidebook_template.json`.
-- §5 — endpoint'ы `POST /api/ingest/template` и `GET /api/template/schema` удалены; template-flow обслуживается через `POST /api/capture-lead/ingest/upload` (§5.6) с `mime_type = "text/plain"`.
+- §5 — endpoint'ы `POST /api/ingest/template` и `GET /api/template/schema` удалены; template-flow обслуживается через `POST /api/lead-capture/ingest/upload` (§5.6) с `mime_type = "text/plain"`.
 - §5.6 `UploadGuidebookCmd` — добавлено required-поле `name: str` (host-supplied для file-upload; auto-filled из `property_name` для template).
 - §7.7 (`TemplateFields` entity) — удалён.
 - §7.3 `Guidebook` — добавлено поле `name: str` (отображается в UI).
@@ -3543,7 +3543,7 @@ Hot-update хинтов:
 - §8.7 — строки `POST /api/ingest/template` и `GET /api/template/schema` удалены из mapping endpoint → use case.
 - §8.0 / §10.3 — `Settings.template_hints` удалён; env-var `TEMPLATE_HINTS_JSON` удалён; `infrastructure/ingestion/templates/guidebook.j2` удалён.
 - §10.5 — `template_hints_json_bytes` метрика и alarm удалены.
-- §10.8 — `ERR_INVALID_PAYLOAD` упрощается до `details.reason ∈ {"empty", "invalid_json"}` или удаляется целиком (template-endpoint'а нет — единственным источником может остаться невалидный mime/payload на `/api/capture-lead/ingest/upload`).
+- §10.8 — `ERR_INVALID_PAYLOAD` упрощается до `details.reason ∈ {"empty", "invalid_json"}` или удаляется целиком (template-endpoint'а нет — единственным источником может остаться невалидный mime/payload на `/api/lead-capture/ingest/upload`).
 - §11 (Frontend) — `templateSchema` signal фетчит из `/config/template_schema.json` (а не `/api/template/schema`); §11.3 OpenAPI-codegen не покрывает schema-файл, фронт читает JSON напрямую.
 - §4.2 — `guidebooks` таблица получает колонку `name TEXT NOT NULL`.
 - §12 (Infra) — TF-модуль `s3_frontend` дополняется `aws_s3_object` для schema-файла; `cloudfront` — отдельной cache-behavior для `/config/*`.
@@ -3729,9 +3729,9 @@ Every configuration value in the project, grouped by its **consumer** (backend /
 
 | Source | What it is |
 |---|---|
-| **be-env** | `holahost/services/lead-capture/envs/<env>.env` — the per-env backend config file, **committed** for dev/staging/prod (holds NO secrets: the one real dev secret is provided at runtime by `make dev-up`; staging/prod secrets live in Secrets Manager). Read + parsed directly by Terraform (the app's capture-lead root) and injected into the Lambda, I-12 |
+| **be-env** | `holahost/services/lead-capture/envs/<env>.env` — the per-env backend config file, **committed** for dev/staging/prod (holds NO secrets: the one real dev secret is provided at runtime by `make dev-up`; staging/prod secrets live in Secrets Manager). Read + parsed directly by Terraform (the app's lead-capture root) and injected into the Lambda, I-12 |
 | **fe-env** | `frontend/.env` — the frontend-owned config file (**committed**, non-secret; no `.env.example`) |
-| **config.yaml** | TWO files: **`holahost/infra/config.yaml`** (platform — domain, frontend_bucket, subdomain, price_class, github_owner, published-asset paths/keys, ECR repos) and **`holahost/services/lead-capture/infra/config.yaml`** (service intrinsic — secret_keys, per-env Lambda sizing/recovery/log-retention). Read by the roots via `yamldecode`. The rows below that say "config.yaml" split across these two by owner |
+| **config.yaml** | TWO files: **`holahost/infra/config.yaml`** (shared infra — domain, frontend_bucket, subdomain, price_class, github_owner, published-asset paths/keys) and **`holahost/services/lead-capture/infra/config.yaml`** (service — ECR repo, secret_keys, per-env Lambda sizing/recovery/log-retention). Read by the roots via `yamldecode`. The rows below that say "config.yaml" split across these two by owner |
 | **SM** | AWS Secrets Manager — the four secret *values* (staging/prod; out-of-IaC, §10.3). In dev they sit blank in be-env. |
 
 A value's **source can differ from its consumer** — the backend consumes `frontend_origin` (from config.yaml) and `magic_link_path` (from fe-env); the frontend consumes `ENV` (from be-env). Those are the rows below where source ≠ consumer.
@@ -3776,7 +3776,7 @@ Consumes root/module inputs.
 | `aws_region`, `project`, `frontend_bucket`, `domain`, `alert_email` (SNS alarm subscription, I-13), `github_owner` (github provider owner + prod deploy reviewer, I-14), `email_dns_records` (keyed by free-form label, DNS name in the `name` field — Resend puts MX + SPF TXT on one name; I-16), `guidebook_template_path`, `sample_guidebook_path`, `sample_guidebook_key`, `sample_messages_path`, `sample_messages_key`, and per-env `name_prefix` / `subdomain` / `recovery_window_in_days` / `price_class` / `system_prompt_key` / `system_prompt_path` / Lambda sizing (`lambda_api_memory_mb` / `lambda_api_timeout_s` / `lambda_cleanup_*`) / `log_retention_days` | **config.yaml** |
 | `secret_keys` (the SM secret names) | backend `sm_loader.SERVER_SIDE_SECRET_KEYS` — the `sm` module mirrors it as a default and re-exports it (`secret_keys` output); the per-env lambda env-parse consumes that output (uppercased) to drop the secrets from be-env, so no third hardcoded copy exists |
 | the published objects themselves — `docs/guidebook_template.json` + `docs/sample_guidebook.md` + `docs/sample_messages.json` + per-env `docs/<env>_system_prompt.md` (`s3_frontend` publishes as `config/template_schema.json` / `config/sample_guidebook.md` / `config/sample_messages.json` / `system-prompt/<env>.md`; their **paths** come from config.yaml `guidebook_template_path` / `sample_guidebook_path` / `sample_messages_path` / `envs.<env>.system_prompt_path`) | app data files |
-| state-bucket names `holahost-tfstate-{common,codebase,staging,prod}` | literals in each `backend.tf` (Terraform forbids interpolation in the backend block); per-env `capture-lead`/`gateway` roots share the env bucket via distinct `key` |
+| state-bucket names `holahost-tfstate-{common,codebase,staging,prod}` | literals in each `backend.tf` (Terraform forbids interpolation in the backend block); per-env `lead-capture`/`gateway` roots share the env bucket via distinct `key` |
 | CSP / security-header values | `cloudfront` module constants (§10.3, verbatim) |
 
 ---
@@ -3877,7 +3877,7 @@ frontend/
 | `/guidebook` | `<guidebook-screen>` (gb info + upload / выбор template; upload-mode — внутреннее состояние экрана, отдельного пути нет) | требует `session.magicLink` (см. §11.4) |
 | `/template` | `<template-screen>` | требует `session.magicLink` |
 | `/generate` | `<generate-screen>` | требует `session.magicLink` |
-| `{MAGIC_LINK_PATH}?ml=<token>` (по умолчанию `/claim?ml=…`; trailing slash нормализуется, §11.4) | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/capture-lead/magic-link/resolve`, `history.replaceState`; `resolved` → `/guidebook` (всегда, независимо от `Lead.guidebook_id`; §3 US-03), `expired` → error-banner | — |
+| `{MAGIC_LINK_PATH}?ml=<token>` (по умолчанию `/claim?ml=…`; trailing slash нормализуется, §11.4) | landing-handler `boot/magic-link-landing.ts` (вызывается из `main.ts`; не отдельный экран): извлекает token, `GET /api/lead-capture/magic-link/resolve`, `history.replaceState`; `resolved` → `/guidebook` (всегда, независимо от `Lead.guidebook_id`; §3 US-03), `expired` → error-banner | — |
 
 Бывшие пути `/workspace`, `/workspace/upload`, `/workspace/template` упразднены (Spec-extend 2026-07-07): state-зависимый резолв `/workspace` нарушал «1 экран = 1 путь» и уводил returning-хоста мимо `guidebook`.
 
@@ -3891,19 +3891,19 @@ frontend/
 
 | Файл | Signal | Содержимое |
 |---|---|---|
-| `state/session.ts` | `magicLink: Signal<string \| null>` | resolved magic_link, in-memory; `null` после tab-close или после `/api/capture-lead/magic-link/resolve` с 401 |
+| `state/session.ts` | `magicLink: Signal<string \| null>` | resolved magic_link, in-memory; `null` после tab-close или после `/api/lead-capture/magic-link/resolve` с 401 |
 | `state/session.ts` | `lead: Signal<ResolveMagicLinkResult \| null>` | данные Lead после resolve (email, flow, guidebook_id, guidebook_name, guidebook_created_at) |
 | `state/sample-budget.ts` | `sampleBudgetExhausted: Signal<boolean>` | устанавливается в `true` при получении `ERR_SAMPLE_BUDGET_EXHAUSTED` (§10.8), отключает sample-формы |
 | `state/session.ts` | `templateSchema: Signal<readonly unknown[] \| null>` | кэш ответа `fetch('/config/template_schema.json')` через CloudFront-статику (§10.6), грузится при mount template-экрана; ответ, не являющийся JSON-массивом (в т.ч. SPA-fallback `index.html`), → видимая ошибка формы (`Array.isArray`-guard), не пустой экран |
 | `state/sample-messages.ts` | `sampleMessages: Signal<readonly string[] \| null>` | кэш ответа `fetch('/config/sample_messages.json')` через ту же статику (§3 US-01), грузится при mount sample-экрана |
 | `state/error-banner.ts` | `bannerMessage: Signal<string \| null>` | текст глобального error-banner (§11.3/§11.4); `null` — баннер скрыт |
-| `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/capture-lead/leads/capture` + flow-параметризация текста экрана (§3 US-02) |
+| `state/capture-flow.ts` | `captureFlow: Signal<'guidebook' \| 'sample'>` | точка входа в `/capture-email` (мостик через навигацию — роутер не несёт параметров); → поле `flow` в `/api/lead-capture/leads/capture` + flow-параметризация текста экрана (§3 US-02) |
 | `state/generate-fields.ts` | `byokKey: Signal<string>`, `guestMessage: Signal<string>`, `responsePairs: Signal<ReadonlyArray<{message: string; response: string}>>` | in-memory состояние экрана `generate` (поля + история пар «сообщение → ответ»); переживает in-app навигацию через меню (US-06/US-08); НЕ зеркалируется ни в какой storage; hard reload / tab-close очищает |
 | `state/route.ts` | `currentPath: Signal<string>` | текущий путь SPA после guard-резолва; пишет роутер (`navigate()` / `renderCurrentLocation()`), читает `<app-menu>` для active-подсветки (US-08) |
 
 Подписка из компонента — через `effect()` внутри `connectedCallback` (cleanup через возвращаемую функцию в `disconnectedCallback`).
 
-**Сохранение через перезагрузку:** `magicLink` зеркалируется в `sessionStorage["magic_link"]`. При старте `main.ts` читает sessionStorage и инициализирует сигнал. **`lead` не зеркалируется**: при прямом заходе/hard-reload защищённого пути (`/guidebook` / `/generate` / `/template`; `magicLink` восстановлен, но `lead === null`) `main.ts` / роутер-guard перезапрашивает `GET /api/capture-lead/magic-link/resolve` и регидрирует `lead` до рендера экрана (иначе экран покажет «no guidebook yet» при наличии гайдбука; §3 US-03). Tab-close очищает sessionStorage штатно. localStorage не используется (явное решение — magic_link не должен переживать tab-close сверх того, что делает sessionStorage; BYOK Claude key не сохраняется нигде).
+**Сохранение через перезагрузку:** `magicLink` зеркалируется в `sessionStorage["magic_link"]`. При старте `main.ts` читает sessionStorage и инициализирует сигнал. **`lead` не зеркалируется**: при прямом заходе/hard-reload защищённого пути (`/guidebook` / `/generate` / `/template`; `magicLink` восстановлен, но `lead === null`) `main.ts` / роутер-guard перезапрашивает `GET /api/lead-capture/magic-link/resolve` и регидрирует `lead` до рендера экрана (иначе экран покажет «no guidebook yet» при наличии гайдбука; §3 US-03). Tab-close очищает sessionStorage штатно. localStorage не используется (явное решение — magic_link не должен переживать tab-close сверх того, что делает sessionStorage; BYOK Claude key не сохраняется нигде).
 
 **Серверный data-cache:** простая in-memory `Map<key, value>` per screen для повторных запросов на одной сессии (например, `templateSchema`); без TTL, без библиотеки типа React Query.
 
@@ -3914,15 +3914,15 @@ frontend/
 Обёртка:
 - inject `Content-Type: application/json` на POST'ах;
 - inject `X-Magic-Link: <session.magicLink>` если есть и endpoint требует MAGIC_LINK-scope (§10.3);
-- inject `X-Api-Key: <byok>` только на вызове `/api/capture-lead/generate` (BYOK передаётся аргументом, не из global state — см. §11.4);
+- inject `X-Api-Key: <byok>` только на вызове `/api/lead-capture/generate` (BYOK передаётся аргументом, не из global state — см. §11.4);
 - парсит `Error envelope` (§10.8): если `response.json().error` — бросает **единый** `ApplicationError` (поле `code` + типизированный per-code `details`); иначе возвращает `response.json()` как payload-объект;
 - timeout (`AbortController`): дефолт 30 с; upload-вызовы (`/ingest/upload`) передают увеличенный клиентский таймаут (`UPLOAD_TIMEOUT_MS`, frontend-константа), т.к. ingestion p95 ~60 с (§10.2) — иначе клиент оборвёт здоровую медленную загрузку. Это независимый frontend-слой, не зеркало серверного/инфра-таймаута.
 
 **Типизация и константы — backend-эмиттеры (drift-free, вариант B).** Два committed-артефакта генерятся бэком из живых символов, фронт их потребляет:
 
-- **Типы:** `docs/openapi.yaml` (бэк: `app/scripts/export_openapi.py` — из pydantic-DTO §8.1 + path'ов §5; error-envelope — discriminated union по `code` с типизированным per-code `details`) → `npm run generate-types` (`openapi-typescript`) → `src/api/capture-lead/generated.ts`.
+- **Типы:** `docs/openapi.yaml` (бэк: `app/scripts/export_openapi.py` — из pydantic-DTO §8.1 + path'ов §5; error-envelope — discriminated union по `code` с типизированным per-code `details`) → `npm run generate-types` (`openapi-typescript`) → `src/api/lead-capture/generated.ts`.
 - **Доменные константы:** `app/scripts/export_frontend_constants.py` (из домена: `EMAIL_REGEX`, `EMAIL_MAX_LENGTH`, `MAX_GUEST_MESSAGE_LENGTH`) → `src/api/constants.generated.ts` (валидаторы F-05 импортят оттуда).
-- Оба файла коммитятся; drift-detection через `git diff`. В CI (`ci.yml`, §13.4) — `make check-openapi` / `make check-frontend-constants` (бэк: регенерация + `git diff --exit-code`) и `npm run generate-types && git diff --exit-code src/api/capture-lead/generated.ts` (фронт); расхождение блокирует PR.
+- Оба файла коммитятся; drift-detection через `git diff`. В CI (`ci.yml`, §13.4) — `make check-openapi` / `make check-frontend-constants` (бэк: регенерация + `git diff --exit-code`) и `npm run generate-types && git diff --exit-code src/api/lead-capture/generated.ts` (фронт); расхождение блокирует PR.
 
 `client.ts` использует сгенерированные типы как параметры и возврат:
 ```typescript
@@ -3942,16 +3942,16 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 **magic_link** — токен сессии, identifies Lead:
 - источник: landing-URL `{MAGIC_LINK_PATH}?{MAGIC_LINK_URL_PARAM}=<token>` (по умолчанию `/claim?ml=<token>`; путь и имя параметра — frontend-owned контракт, §11.6 / §10.9);
-- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) срабатывает только на пути `MAGIC_LINK_PATH` (сравнение нормализует trailing slash: `/claim` ≡ `/claim/` — ссылки из ранее доставленных писем обязаны работать весь `GUIDEBOOK_TTL`; §3 US-03), извлекает токен через `utils/url.ts`, выполняет `GET /api/capture-lead/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
+- handling: `boot/magic-link-landing.ts` (вызывается из `main.ts`) срабатывает только на пути `MAGIC_LINK_PATH` (сравнение нормализует trailing slash: `/claim` ≡ `/claim/` — ссылки из ранее доставленных писем обязаны работать весь `GUIDEBOOK_TTL`; §3 US-03), извлекает токен через `utils/url.ts`, выполняет `GET /api/lead-capture/magic-link/resolve` с заголовком `X-Magic-Link: <token>`; при 200 — записывает в `session.magicLink` signal + sessionStorage и возвращает `resolved`; при 401 — `clearSession()` и возвращает `expired` (main.ts → редирект на `/` с error-banner «magic_link expired»);
 - `history.replaceState('/', '')` сразу после извлечения — token не остаётся в URL;
 - storage: in-memory signal + `sessionStorage["magic_link"]` (для переживания reload в одной вкладке);
 - передача в API: `X-Magic-Link` header через `client.ts`, автоматически на всех endpoint'ах с MAGIC_LINK-scope;
-- очистка: tab-close (sessionStorage очищается штатно) или `/api/capture-lead/magic-link/resolve` с 401 (frontend-side guard).
+- очистка: tab-close (sessionStorage очищается штатно) или `/api/lead-capture/magic-link/resolve` с 401 (frontend-side guard).
 
 **BYOK Claude key** — не сессионный, передаётся явно:
 - ввод: input на `<generate-screen>`, type `password`;
-- storage: только module-scope signal в JS-памяти (`state/generate-fields.ts`, §11.2) — переживает in-app навигацию через меню в пределах вкладки (US-06/US-08); hard reload / tab-close очищает; в вызов уходит аргументом `client.post('/api/capture-lead/generate', { byok, message })`;
-- передача в API: `X-Api-Key` header только на `/api/capture-lead/generate`;
+- storage: только module-scope signal в JS-памяти (`state/generate-fields.ts`, §11.2) — переживает in-app навигацию через меню в пределах вкладки (US-06/US-08); hard reload / tab-close очищает; в вызов уходит аргументом `client.post('/api/lead-capture/generate', { byok, message })`;
+- передача в API: `X-Api-Key` header только на `/api/lead-capture/generate`;
 - НЕ зеркалируется в sessionStorage / localStorage / cookie.
 
 **Защищённые маршруты** — guard в роутере по `session.magicLink` (§11.1). Никакого refresh-token mechanism: magic_link имеет TTL 30 дней (§10.1) и обновляется только через новый capture_email цикл.
@@ -3988,7 +3988,7 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 
 **Сборка — один раз, один bundle для staging + prod.** Соответствует подходу build-and-promote (§13.4 / §13.5): backend image и frontend bundle строятся одним build-step'ом из ветки `develop` / `release/v*`, кладутся в единый frontend-bucket под префиксом `releases/<git-sha>/`, далее promote-step переключает CloudFront origin path. Frontend per-env-перебилд **не делается**.
 
-Это достижимо за счёт same-origin-архитектуры (§2.1): CloudFront на каждом домене (`staging.hola.host` и `hola.host`) обслуживает один и тот же bundle и проксирует `/api/capture-lead/*` на соответствующую Lambda Function URL. Frontend не знает «своё» окружение на этапе сборки.
+Это достижимо за счёт same-origin-архитектуры (§2.1): CloudFront на каждом домене (`staging.hola.host` и `hola.host`) обслуживает один и тот же bundle и проксирует `/api/lead-capture/*` на соответствующую Lambda Function URL. Frontend не знает «своё» окружение на этапе сборки.
 
 **Переменные окружения фронта (Vite `VITE_*`, baked at build-time).** Два источника (см. §10.9):
 - **per-env** — файл **`holahost/services/lead-capture/envs/<env>.env`** (единый для фронта и бэка, см. §12; **committed** для dev/staging/prod — секретов нет: единственный реальный dev-секрет даётся в рантайме через `make dev-up`, staging/prod — в Secrets Manager; Terraform читает файл напрямую): `ENV`, `API_BASE_URL`;
@@ -3999,11 +3999,11 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 | Ключ | Значение | Источник | Назначение |
 |---|---|---|---|
 | `ENV` | `dev` / `staging` / `prod` | be-env | окружение (дискриминатор, см. ниже) |
-| `API_BASE_URL` | `/api/capture-lead` (relative, same-origin — mount-префикс сервиса, §12.2) | be-env | base URL backend'а; работает на любом домене |
+| `API_BASE_URL` | `/api/lead-capture` (relative, same-origin — mount-префикс сервиса, §12.2) | be-env | base URL backend'а; работает на любом домене |
 | `MAGIC_LINK_URL_PARAM` | `ml` (§10.3) | `frontend/.env` | имя URL-параметра magic_link landing'а |
 | `MAGIC_LINK_PATH` | `/claim` | `frontend/.env` | путь SPA-landing'а magic-link'а (скоуп `boot/magic-link-landing`, §11.4) |
 
-**Определение окружения — по атрибуту `ENV` env-файла** (baked в `VITE_APP_ENV`), **не по hostname**: прежний `detectEnvironment(hostname)` удалён (надёжнее, не зависит от домена). `ENV` используется в error-banner-text и (опц.) Sentry environment-tag. Сегодня per-env (`holahost/services/lead-capture/envs/<env>.env`) различается **только** `ENV` (`API_BASE_URL` = `/api/capture-lead` одинаков во всех окружениях); magic-link-контракт (`MAGIC_LINK_URL_PARAM` / `MAGIC_LINK_PATH`) — frontend-owned и от окружения не зависит вовсе — согласование с build-and-promote (§13.4/§13.5: один bundle staging+prod) решается в CI/CD-слое.
+**Определение окружения — по атрибуту `ENV` env-файла** (baked в `VITE_APP_ENV`), **не по hostname**: прежний `detectEnvironment(hostname)` удалён (надёжнее, не зависит от домена). `ENV` используется в error-banner-text и (опц.) Sentry environment-tag. Сегодня per-env (`holahost/services/lead-capture/envs/<env>.env`) различается **только** `ENV` (`API_BASE_URL` = `/api/lead-capture` одинаков во всех окружениях); magic-link-контракт (`MAGIC_LINK_URL_PARAM` / `MAGIC_LINK_PATH`) — frontend-owned и от окружения не зависит вовсе — согласование с build-and-promote (§13.4/§13.5: один bundle staging+prod) решается в CI/CD-слое.
 
 **Не используется:** `dotenv` runtime, `process.env` runtime patching, server-injected runtime config, runtime hostname-detection.
 
@@ -4047,13 +4047,22 @@ async function post<P extends keyof Paths, B = RequestBody<P>, R = ResponseBody<
 | **dev** | вручную через `docker-compose up` (один `docker-compose.yml` в репо); миграции — Alembic-команда |
 | **staging / prod** | IaC через Terraform |
 
-Terraform двух уровней. **Платформа Holahost** — `holahost/infra/` (владеет доменом `hola.host` [Route 53 + ACM], frontend-бакетом `holahost-frontend` + published `/config/*`, edge/gateway CloudFront, ECR-реестром [repo на сервис], GitHub-настройками); её конфиг — `holahost/infra/config.yaml`. **Сервис lead-capture** — env-агностичный Terraform-**модуль** `holahost/services/lead-capture/infra/` (объявляет Lambda + Secrets Manager + observability); его intrinsic-конфиг — `holahost/services/lead-capture/infra/config.yaml`. Платформенные модули per ресурс — в `holahost/infra/modules/`, сервисные — в модуле сервиса. Значения передаются явными входами (без module-default'ов для конфиг-значений). App-config staging/prod-Lambda берётся из committed `holahost/services/lead-capture/envs/<env>.env` — роут `capture-lead` парсит его inline (минус SM-секреты) и инжектит в Lambda-модуль (§10.9).
+Terraform двух уровней. **Общая инфраструктура** — `holahost/infra/` (домен `hola.host` [Route 53 + ACM], frontend-бакет `holahost-frontend` + published `/config/*`, gateway CloudFront, GitHub-настройки); её конфиг — `holahost/infra/config.yaml`; в спеке сервиса не детализируется. **Сервис lead-capture владеет своим IaC целиком** — `holahost/services/lead-capture/infra/`: TF-**модули** сервиса (ECR + Lambda + Secrets Manager + observability) **и его root'ы** (`envs/common` — реестр; `envs/staging`, `envs/prod` — инстансы), плюс intrinsic-конфиг `holahost/services/lead-capture/infra/config.yaml`. ECR и root'ы — **не** ресурсы общей инфраструктуры; их приносит и применяет сам сервис (self-contained deployable), поэтому добавление нового сервиса общую инфру не трогает. Значения передаются явными входами (без module-default'ов для конфиг-значений). App-config staging/prod-Lambda берётся из committed `holahost/services/lead-capture/envs/<env>.env` — per-env root сервиса парсит его inline (минус SM-секреты) и инжектит в Lambda-модуль (§10.9).
 
-Роуты платформы (`holahost/infra/envs/`): **`common`** (cross-env синглтоны — Route 53/ACM, frontend-бакет+ассеты, ECR-репо на каждый сервис), **`codebase`** (`github_repo`), и per-env пары **`<env>/capture-lead`** (инстанс сервисного модуля) + **`<env>/gateway`** (CloudFront edge, монтирует `/api/capture-lead/*` на Function URL). Приложение **решает, в каком окружении** поднять сервис; сервис лишь **объявляет** ресурсы.
+**Root'ы сервиса** (`holahost/services/lead-capture/infra/envs/`): cross-env **`common`** (ECR-реестр сервиса) + per-env **`staging`/`prod`** (Lambda + Secrets + observability). **Root'ы общей инфраструктуры** (`holahost/infra/envs/`): `common` (Route 53/ACM, frontend-бакет+ассеты), `codebase` (`github_repo`), per-env `<env>/gateway` (CloudFront gateway, монтирует `/api/<svc>/*` на Function URL сервиса). Сервис сам и **объявляет** (модули), и **применяет** (root'ы) свои ресурсы, включая выбор окружений; общая инфра лишь маршрутизирует к нему через gateway.
 
-Порядок apply (на окружение): `common` → `<env>/capture-lead` → `<env>/gateway`. Граф ацикличен: платформа даёт домен/бакет/ECR **статикой** (сервис читает по имени / через `common`-state), сервис отдаёт Function URL **как output**, `gateway` читает его через `terraform_remote_state` и вешает invoke-permission. **Независимый деплой сервиса (гарантия):** рантайм-выкат — build image → `docker push` в ECR → `aws lambda update-function-code` обеих Lambda → `alembic upgrade head` — **не требует `terraform apply` инфры платформы**; на TF-уровне сервис — отдельный роут `<env>/capture-lead`, применяемый сам по себе (нужны лишь уже существующие `common`-ресурсы).
+Порядок apply: root'ы сервиса `…/infra/envs/common` (реестр) → `…/infra/envs/<env>` (инстанс) применяются **самим сервисом**; `<env>/gateway` общей инфры — после (читает output сервиса). Граф ацикличен: сервис даёт свой ECR **статикой** (root `common`, читается по имени) и Function URL **как output** (root `<env>`); `gateway` читает URL через `terraform_remote_state` (на state per-env root'а сервиса) и вешает invoke-permission.
 
-Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated), отдельный bucket per уровень: **`holahost-tfstate-{common,codebase,staging,prod}`** (per-env роуты `capture-lead` / `gateway` делят env-бакет разными `key`). Применение — `terraform init && terraform plan && terraform apply` из каталога соответствующего роута (`holahost/infra/envs/<root>/`).
+**Function URL стабилен на редеплоях** — он привязан к идентичности функции, а не к коду/конфигу: `update-function-code` и in-place `terraform apply` (memory/env/IAM/observability) его **не меняют**; меняет только destroy+create функции (ренейм/удаление). Поэтому `gateway` читает URL один раз при mount'е и **не переприменяется** при выкатах сервиса — только при пересоздании функции (разовая скоординированная миграция service→gateway, §12.4 runbook).
+
+**Независимый деплой сервиса (гарантия).** Любой выкат сервиса замкнут на **его собственные** root'ы (`…/infra/envs/{common,<env>}`) и артефакты и **не требует apply root'ов общей инфраструктуры** (кроме первичного mount'а `/api/<svc>/*` в gateway). Три формы выката, стадии гейтятся тем, что затронул релиз:
+- **infra-only** (memory/IAM/env/alarm) → `terraform apply` root'ов сервиса; без сборки образа и `update-function-code`;
+- **code-only** → build image → `docker push` в ECR → `alembic upgrade head` (если миграция) → `aws lambda update-function-code` обеих Lambda; без `terraform apply` (образ ставит `update-function-code`, TF держит `ignore_changes=[image_uri]`, I-12);
+- **code + infra** → `terraform apply` root'ов сервиса → `alembic upgrade head` → `update-function-code`.
+
+Порядок стадий — **infra → migrate → code** (IAM/конфиг готовы до миграции, схема готова до нового кода; миграции backward-compatible, §13.5). apply **общей инфраструктуры** нужен лишь при смене домена/фронт-хостинга/gateway-маршрутизации/repo-settings.
+
+Backend state — S3 с нативным локом (`use_lockfile = true`, Terraform ≥ 1.10; **без DynamoDB** — DynamoDB-локинг deprecated). Root'ы сервиса держат **собственный** state (S3-бэкенд, ключи под неймспейсом `lead-capture/{common,<env>}`); root'ы общей инфры — свой (`holahost-tfstate-{common,codebase,staging,prod}`). Применение — `terraform init && terraform plan && terraform apply` из каталога соответствующего root'а.
 
 Исключение «chicken-and-egg»: ресурсы backend state'а (S3-bucket'ы) создаются вручную один раз; задокументированы в Environment runbook.
 
@@ -4068,8 +4077,8 @@ Runtime-канал доступа Lambda к server-side секретам (boto �
 | Окружение | Где лежат | Кто имеет доступ |
 |---|---|---|
 | **dev** | **committed** `holahost/services/lead-capture/envs/dev.env` (non-secret); единственный реальный dev-секрет `SAMPLE_SERVER_API_KEY` передаётся в рантайме через `make dev-up` | каждый разработчик передаёт свой ключ в `make dev-up` |
-| **staging** | AWS Secrets Manager, prefix `holahost/staging/` (`database_url`, `resend_api_key` sandbox, `ip_hash_salt`, `sample_server_api_key` — cold-start loader-set, §10.3) | владелец проекта; deploy-IAM-Role `terraform-deploy-staging` (для записи); Lambda execution role `holahost-staging-api` (read-only по prefix, §10.3) |
-| **prod** | AWS Secrets Manager, prefix `holahost/prod/` (тот же набор ключей, production-значения) | владелец проекта только под MFA через deploy-IAM-Role `terraform-deploy-prod`; Lambda execution role `holahost-prod-api` (read-only по prefix, §10.3); консольный доступ к значениям требует MFA |
+| **staging** | AWS Secrets Manager, prefix `holahost/staging/` (`database_url`, `resend_api_key` sandbox, `ip_hash_salt`, `sample_server_api_key` — cold-start loader-set, §10.3) | владелец проекта; deploy-IAM-Role `terraform-deploy-staging` (для записи); Lambda execution role `holahost-staging-lead-capture-api` (read-only по prefix, §10.3) |
+| **prod** | AWS Secrets Manager, prefix `holahost/prod/` (тот же набор ключей, production-значения) | владелец проекта только под MFA через deploy-IAM-Role `terraform-deploy-prod`; Lambda execution role `holahost-prod-lead-capture-api` (read-only по prefix, §10.3); консольный доступ к значениям требует MFA |
 
 **Модель доступа — single-host.** Все секреты держит один владелец проекта; staging-доступ self-serve через AWS Console, prod-доступ только под MFA.
 
@@ -4084,7 +4093,7 @@ Runtime-канал доступа Lambda к server-side секретам (boto �
 
 ### 12.4 Требования к Environment runbook
 
-Environment runbook — отдельный документ `holahost/infra/README.md` (платформенный: он оркестрирует все роуты), который должен:
+Environment runbook сервиса (dev/staging/prod) оркестрирует его root'ы и деплой; общий runbook инфраструктуры — отдельно. Runbook должен:
 
 - описывать prereq на машине разработчика (инструменты с pinned-версиями, доступы к внешним сервисам Neon / Resend / Sentry);
 - описывать initial setup (one-time, chicken-and-egg): AWS account, Terraform backend, Neon project + branches, домен + Route 53, Resend domain, Sentry org, генерация `ip_hash_salt`;
@@ -4107,30 +4116,31 @@ Environment runbook — отдельный документ `holahost/infra/READ
 
 Зафиксированы в `CONTRIBUTING.md` в корне репо; отклонение — сигнал при code review.
 
-**Branching-model — GitFlow** (см. §13.7 за branch protection). Долгоживущие ветки:
-- `main` — production-ready код; каждое слияние тегируется `vYYYYMMDD.N` (см. ниже) и триггерит prod-promote (§13.5);
-- `develop` — интеграционная ветка; staging автодеплоится из `develop` (§13.4).
+**Branching-model — GitFlow** (см. §13.7 за branch protection; общерепозиторная модель и per-component деплой — `holahost/docs/holahost_overview.md`). Долгоживущие ветки — `main` (production-ready) и `develop` (интеграционная). Деплой-роли веток:
+- `develop` — PR-мерджи + CI, **без деплоя** (push в `develop` — это merge PR, не релиз);
+- `release/v*` — push автодеплоит на **staging** затронутые релизом компоненты (per-component, по path-фильтрам, §13.4);
+- `main` — prod-выкат **per-component**: каждый компонент промоутится своим тегом `<component>/vYYYYMMDD.N` на merge-коммите `release/*`/`hotfix/*` (§13.5).
 
 Короткоживущие ветки и их базы / цели слияния:
 
 | Тип | Ветвится от | Сливается обратно в | Назначение |
 |---|---|---|---|
-| `feature/<slug>` | `develop` | `develop` | новая фича |
-| `bugfix/<slug>` | `develop` | `develop` | non-urgent багфикс |
-| `refactor/<slug>` / `chore/<slug>` / `docs/<slug>` / `test/<slug>` | `develop` | `develop` | прочие изменения, не feature/fix |
+| `feature/[<service>/]<slug>` | `develop` | `develop` | новая фича |
+| `bugfix/[<service>/]<slug>` | `develop` | `develop` | non-urgent багфикс |
+| `refactor/…` / `chore/…` / `docs/…` / `test/…` (`[<service>/]<slug>`) | `develop` | `develop` | прочие изменения, не feature/fix |
 | `release/v<version>` | `develop` | `main` **и** back-merge в `develop` | QA / release-prep заморозка перед prod |
 | `hotfix/v<version>` | `main` | `main` **и** back-merge в `develop` | срочный prod-фикс |
 
-`<slug>` в `kebab-case`, ≤ 40 символов. Срок жизни короткоживущей ветки — ≤ 3 дней.
+`<slug>` в `kebab-case`, ≤ 40 символов. Срок жизни короткоживущей ветки — ≤ 3 дней. **Ветка, разрабатывающая микросервис, отражает его имя** сегментом `<service>`: `feature/lead-capture/<slug>`, `bugfix/lead-capture/<slug>` и т.д. Ветки общих частей (фронтенд / общая инфра / репо-широкое) — без сегмента сервиса (`feature/<slug>`) либо с областью (`feature/frontend/<slug>`). Префикс (`feature/`, `bugfix/`, …) — первый сегмент, поэтому branch-protection по префиксу (§13.7) не ломается.
 
-**Версия:** `vYYYYMMDD.N` (календарная: дата UTC + последовательный номер в течение суток). Пример: `v20260603.1`. Создаётся аннотированным git-тегом на коммите слияния `release/v*` или `hotfix/v*` в `main`.
+**Версия — per-component.** Единой репо-широкой версии нет: у каждого деплой-юнита свой календарный тег `<component>/vYYYYMMDD.N` (дата UTC + порядковый номер в течение суток). Пример (сервис): `lead-capture/v20260714.1`. Аннотированный git-тег ставится на merge-коммит `release/v*`/`hotfix/v*` в `main` — **только на те компоненты, что промоутятся** (release-ветки репо-широкие, промоут независимый). Тег сервиса `lead-capture/v*` триггерит его prod-пайплайн (§13.5).
 
 **Коммиты:** Conventional Commits (`<type>(<scope>)?: <subject>`). `<type>` ∈ `feat | fix | chore | refactor | docs | test | build | ci`. Subject ≤ 72 символов, повелительное наклонение, без точки в конце. Body (опц.) через пустую строку, ≤ 100 символов на строку. Breaking changes — суффикс `!` после `<type>` или footer `BREAKING CHANGE: <описание>`. Примеры:
-- `feat(api): add /api/capture-lead/ingest/upload endpoint`
-- `fix(captures): rollback Lead on Resend timeout`
+- `feat(api): add /api/lead-capture/ingest/upload endpoint`
+- `fix(lead-capture): rollback Lead on Resend timeout`
 - `refactor(domain)!: rename Guidebook.id field`
 
-Conventional Commits валидируются `commitlint` через pre-commit hook (см. §13.3).
+`<scope>` (опц.) — затронутый юнит/область (`lead-capture`, `frontend`, `infra`, `api`). Conventional Commits валидируются `conventional-pre-commit` через pre-commit hook (см. §13.3).
 
 **Код (Python, §2.4):**
 - модули, файлы, функции, переменные — `snake_case`;
@@ -4213,43 +4223,41 @@ Strict с первого коммита; ослабление настроек �
 
 ### 13.4 CI/CD-пайплайны (GitHub Actions)
 
-Расположение — `.github/workflows/` в корне репо. Архитектура — **build-and-promote**: артефакты собираются один раз (в build-and-deploy-staging), идентифицируются по immutable digest и продвигаются на prod без повторной сборки.
+Пайплайны **принадлежат сервису и живут внутри него** — их логика (workflow-определения, composite-actions, Make-цели, скрипты) лежит в `holahost/services/lead-capture/` (напр. `holahost/services/lead-capture/.github/`). GitHub Actions стартует только из корневого `.github/workflows/`, поэтому там — лишь **тонкие триггер-стабы** `lead-capture-*.yml` (`on:` + **path-фильтр сервиса** `holahost/services/lead-capture/**` — весь IaC сервиса теперь внутри него), делегирующие в service-owned логику (`uses: ./holahost/services/lead-capture/…` / `make -C holahost/services/lead-capture …`). Правки других юнитов их не запускают. Окружения — **local dev / staging / prod** (§12.0). Модель веток/релизов — §13.0. Сохраняется **build-and-promote**: образ собирается один раз на `release/*`, идентифицируется по immutable digest и промоутится на prod без пересборки.
 
-| Workflow | Триггер | Шаги |
-|---|---|---|
-| `ci.yml` | `pull_request` в `develop`, `main`, `release/*`, `hotfix/*`; `push` в `feature/*`, `bugfix/*`, `refactor/*`, `chore/*`, `docs/*`, `test/*` | (1) `pre-commit run --all-files`; (2) `pytest backend/tests/`; (3) `npm test --prefix frontend/`; (4) `docker build` backend image (dry-run, без push); (5) `npm run build --prefix frontend/` (dry-run); (6) `terraform plan` для `infra/envs/staging` |
-| `build-and-deploy-staging.yml` | `push` в `develop`; `push` в `release/v*` | (1) полный `ci.yml`-набор; (2) `docker build` backend image; (3) `docker push` в единый ECR `capture-lead` с tag'ами `git-<sha>` и (если `release/v*`) `release-v<version>`; (4) capture digest из push-response (`sha256:<digest>`); (5) `vite build` frontend, `aws s3 sync` в единый frontend-bucket `holahost-frontend` под префикс `releases/<git-sha>/`; (6) `alembic upgrade head` к staging Neon-branch'у; (7) `aws lambda update-function-code --image-uri <ecr-uri><digest>` для staging-api и staging-cleanup; (8) обновление staging-CloudFront origin path на `releases/<git-sha>/` + invalidation; (9) smoke-check (`curl https://staging.hola.host/`, ожидаем 200) |
-| `promote-prod.yml` | `push` git-тега `v*` в `main` (создаётся при merge `release/v*` или `hotfix/v*` в `main`, §13.0) | (1) разрешить digest по ECR-тегу `release-v<version>`: `aws ecr describe-images --image-ids imageTag=release-v<version> --query 'imageDetails[0].imageDigest'`; (2) resolve `git_sha` тега (`git rev-list -n 1 v<version>`); (3) `alembic upgrade head` к prod Neon-branch'у; (4) `aws lambda update-function-code --image-uri <ecr-uri><digest>` для prod-api и prod-cleanup; (5) обновление prod-CloudFront origin path на тот же `releases/<git-sha>/` префикс единого frontend-bucket'а; (6) `aws cloudfront create-invalidation`; (7) smoke-check (`curl https://hola.host/`, ожидаем 200); (8) environment `prod` с required reviewers (§13.7) |
+**local dev — без облачного пайплайна:** стек поднимается локально `make dev-up` (docker-compose, §12.1), миграции — `make migrate-dev`; CI-паритет прогоняется `make ci-local` перед push.
 
-Источник истины для соответствия `release-version ↔ digest ↔ git-sha` — ECR (tag `release-v<version>` + git-сча в тегах + immutable digest) и сам git-репозиторий (annotated tag `v<version>`). Промежуточные deployment-manifest'ы не ведутся.
+**`lead-capture-ci.yml` — валидация (staging/prod-путь), без деплоя.** Триггер: `pull_request` в `develop`/`main`/`release/*`/`hotfix/*`; `push` в `feature/*`/`bugfix/*`/`refactor/*`/`chore/*`/`docs/*`/`test/*`; **path-фильтр сервиса**. Шаги: `pre-commit` (ruff/mypy/import-linter) → `pytest` → `docker build` dry-run (без push) → `terraform plan` root'ов сервиса. Деплоя нет — только merge-гейт. Job гейтится path-фильтром; **скипнутый по фильтру job обязан репортить success в свой required-контекст** (§13.7) — иначе PR залипнет на отсутствующем check'е.
 
-**Authentication AWS:** GitHub OIDC-federation с AWS IAM Role (без long-lived access keys). Role'ы:
-- `github-actions-deploy-staging` — assume из workflows `build-and-deploy-staging.yml` (subject `repo:<owner>/<repo>:ref:refs/heads/develop` или `repo:<owner>/<repo>:ref:refs/heads/release/v*`);
-- `github-actions-deploy-prod` — assume из workflow `promote-prod.yml` (subject `repo:<owner>/<repo>:ref:refs/tags/v*`); дополнительно environment `prod` с required reviewers (см. §13.7).
+**`lead-capture-deploy-staging.yml` — выкат на staging** (`push` в `release/v*`, path-фильтр сервиса; порядок **infra → migrate → code**): (1) `terraform apply` затронутых релизом root'ов сервиса staging (`envs/common` и/или `envs/staging`; идемпотентно — отрабатывает infra-only); (2) если менялся код: `docker build` → `docker push` в ECR `lead-capture` (`git-<sha>` + `release-v<version>`) → **capture digest** (`sha256:<hex>`); (3) `alembic upgrade head` staging Neon (если миграция); (4) `aws lambda update-function-code --image-uri <ecr>@<digest>` для `holahost-staging-lead-capture-{api,cleanup}`; (5) smoke (health через staging-gateway, 200).
 
-**Local check (без CI):** `make ci-local` запускает тот же набор шагов локально — `pre-commit run --all-files && cd backend && pytest && cd ../frontend && npm test && npm run build`. Используется перед push при оффлайн-разработке.
+**`lead-capture-promote-prod.yml` — промоут на prod** (`push` git-тега `lead-capture/v*` в `main`): (1) `terraform apply` root'ов сервиса prod (`envs/common` + `envs/prod`); (2) code-релиз: resolve digest по ECR-тегу `release-v<version>` (`aws ecr describe-images`, **без пересборки**); (3) `alembic upgrade head` prod Neon; (4) `update-function-code` для `holahost-prod-lead-capture-{api,cleanup}` тем же digest; (5) smoke; (6) gate — environment `prod` (required reviewer, §13.7). infra-only релиз — шаги 2/4 пропускаются.
+
+Источник истины для соответствия сервиса `release-version ↔ digest ↔ git-sha` — ECR-репо `lead-capture` (tag `release-v<version>` + immutable digest) и git-тег `lead-capture/v<version>`. Промежуточные deployment-manifest'ы не ведутся.
+
+**Authentication AWS:** GitHub OIDC-federation с AWS IAM Role (без long-lived access keys), least-privilege — роль ограничена ресурсами сервиса (ECR/Lambda/secrets/observability lead-capture):
+- `github-actions-lead-capture-staging` — assume из `lead-capture-deploy-staging.yml` (subject `…:ref:refs/heads/release/v*`);
+- `github-actions-lead-capture-prod` — assume из `lead-capture-promote-prod.yml` (subject `…:ref:refs/tags/lead-capture/v*`); + environment `prod`.
+
+**Local check (без CI):** `make ci-local` запускает hook-набор + backend-тесты локально (`pre-commit run --all-files` + `pytest`). Используется перед push при оффлайн-разработке.
 
 ### 13.5 Инструменты и стратегия деплоя
 
-**Build-and-promote, ссылка по digest.** Артефакт собирается один раз на staging-build (или release-build), получает immutable digest вида `sha256:<hex>`, и тот же digest продвигается на prod без перебилда. Это исключает класс расхождений «собрали из того же коммита, но получили разный байт-код из-за нестабильных deps». Все runtime-параметры (env-vars, секреты) приходят из Secrets Manager на cold start (см. §10.3), в image не запекаются.
+**Build-and-promote, ссылка по digest.** Артефакт сервиса собирается один раз на release-build (push в `release/*`), получает immutable digest вида `sha256:<hex>`, и тот же digest продвигается на prod без перебилда. Это исключает класс расхождений «собрали из того же коммита, но получили разный байт-код из-за нестабильных deps». Все runtime-параметры (env-vars, секреты) приходят из Secrets Manager на cold start (см. §10.3), в image не запекаются.
 
 **Инструменты:**
 - backend: `docker build` → `docker push <ecr>:<git-sha>` → `aws lambda update-function-code --image-uri <ecr><digest>`. Terraform управляет инфраструктурой Lambda (§12.2); `update-function-code` — единственная команда, меняющая выполняемый образ. Kubernetes / Helm / CDK / Serverless Framework не используются;
-- frontend: `vite build` → `aws s3 sync ./dist/ s3://<bucket>/releases/<git-sha>/` → обновление CloudFront origin path на новый префикс или `aws cloudfront create-invalidation`;
 - DB-миграции: `alembic upgrade head` через wrapper Makefile, запускается per-env (`make migrate-staging` / `make migrate-prod`).
 
-**Image registry.** ECR-репо `capture-lead` — **один на сервис** (не per-env); реестр — платформенный ресурс `common`-роута. Frontend-бандл и CloudFront — тоже платформенные (роуты `common` / `<env>/gateway`), поэтому фронт-деплой (`s3 sync` + origin-path) владеется платформой, а сервис (образ Lambda + миграции) деплоится независимо (§12.2). Tag'и: `git-<sha>` для всех билдов; `release-v<version>` дополнительно для билдов из `release/v*`. Lifecycle policy — `keep last 30 untagged + keep all release-v* tagged + keep last 50 git-<sha> tagged`. Идентификатор деплоя — всегда digest (`<ecr>sha256:...`), tag'и — только для человеко-навигации.
+**Image registry.** ECR-репо `lead-capture` — **один на сервис** (не per-env) и **принадлежит сервису** (объявлен его модулем, root `envs/common`, §12.2). Tag'и: `git-<sha>` для всех билдов; `release-v<version>` дополнительно для билдов из `release/v*`. Lifecycle policy — `keep last 30 untagged + keep all release-v* tagged + keep last 50 git-<sha> tagged`. Идентификатор деплоя — всегда digest (`<ecr>sha256:...`), tag'и — только для человеко-навигации.
 
-**Стратегия выката — promote-by-digest:**
-- staging получает свежий digest на каждый push в `develop` или `release/v*`; deploy всё-или-ничего (`update-function-code` атомарен);
-- prod получает digest, ранее принятый staging-ом, через `promote-prod.yml`; никаких новых build-шагов на prod-стороне;
-- frontend bundle сопровождает image (same release): хранится в S3 под `releases/<git-sha>/`, CloudFront-origin-path/invalidation атомарно переключаются на новый префикс;
+**Стратегия выката сервиса — promote-by-digest:**
+- сервис на staging получает свежий digest на push в `release/v*` (не на develop); deploy всё-или-ничего (`update-function-code` атомарен);
+- сервис на prod получает digest, ранее принятый staging-ом, через `lead-capture-promote-prod.yml` (триггер — тег `lead-capture/v*`); новых build-шагов на prod-стороне нет;
 - DB: `alembic upgrade head` применяется **до** `aws lambda update-function-code`. Миграции обязаны быть backward-compatible (старый код во время cold-start окна продолжает работать на новой схеме). Прерывание совместимости делится на два релиза: (a) добавить новую колонку nullable, (b) ↓ release ↓ — мигрировать данные, переключить код на новую колонку, (c) удалить старую колонку — следующим release'ом.
 
 **Rollback:**
-- backend prod: `aws lambda update-function-code --image-uri <ecr><previous-digest>`. Список предыдущих digest'ов — `aws ecr describe-images --filter tagStatus=TAGGED` с фильтром по `release-v*` тегам (сортировка по `imagePushedAt`);
-- frontend: переключение CloudFront origin path обратно на предыдущий `releases/<git-sha>/` префикс (S3-bucket иммутабелен — предыдущие release-prefix'ы не удаляются, lifecycle keep last 30);
-- DB: `alembic downgrade -1` если миграция reversible; для destructive миграций — restore через Neon PITR (только prod, retention 7 дней, §12.0).
+- backend prod: `aws lambda update-function-code --image-uri <ecr><previous-digest>`. Список предыдущих digest'ов — `aws ecr describe-images --filter tagStatus=TAGGED` с фильтром по `release-v*` тегам (сортировка по `imagePushedAt`);- DB: `alembic downgrade -1` если миграция reversible; для destructive миграций — restore через Neon PITR (только prod, retention 7 дней, §12.0).
 
 Альтернативы (Lambda alias + traffic shifting, blue/green) — не используются: для single-host MVP overhead превышает выгоду (recreate-окно 10–30 с приемлемо). Build-once + promote-by-digest даёт необходимые гарантии reproducibility без alias-overhead.
 
@@ -4270,6 +4278,7 @@ Strict с первого коммита; ослабление настроек �
 ## Branch / merge target
 - [ ] Source branch conforms to §13.0 (`feature/`, `bugfix/`, `refactor/`, `chore/`, `docs/`, `test/`, `release/v*`, `hotfix/v*`)
 - [ ] Target branch is correct: feature/bugfix/refactor/chore/docs/test → `develop`; release/v* and hotfix/v* → `main` + back-merge to `develop`
+- [ ] Release/hotfix only: components to promote are listed; each will be tagged `<component>/v<version>` on the merge commit (§13.0)
 
 ## DB / API / breaking changes
 - [ ] Alembic migrations are backward-compatible (add nullable → switch code → drop old; §13.5)
@@ -4287,13 +4296,13 @@ Strict с первого коммита; ослабление настроек �
 
 ### 13.7 Настройки репозитория (GitHub)
 
-Управляются через `terraform-provider-github` в Terraform-модуле `infra/modules/github_repo/` (см. §12.2). Конкретные значения:
+Управляются через `terraform-provider-github` в Terraform-модуле `holahost/infra/modules/github_repo/` (см. §12.2). Конкретные значения:
 
 **Default branch:** `develop` (точка ветвления feature-веток; см. §13.0). `main` — production-ready, защищена строже.
 
 **Branch protection для `main`:**
 - `require_pull_request_reviews`: required, `required_approving_review_count = 1`, `dismiss_stale_reviews = true`;
-- `require_status_checks`: required, контексты — `ci / pre-commit`, `ci / backend-tests`, `ci / frontend-tests`, `ci / terraform-plan`; `strict = true` (source-ветка должна быть up-to-date перед merge);
+- `require_status_checks`: required, контекст сервиса — `lead-capture-ci` (path-filtered, §13.4; каждый микросервис добавляет свой контекст); `strict = true` (source-ветка up-to-date перед merge). **Скипнутый по path-фильтру job обязан репортить success в свой required-контекст** (job-gate по `changes` + status-reporter), иначе PR залипнет на отсутствующем check'е;
 - `enforce_admins = true`;
 - `require_conversation_resolution = true`;
 - `require_signed_commits = false` (pre-commit `gitleaks` + GitHub secret scanning покрывают утечку credentials; signing вводится при появлении compliance-требования);
@@ -4319,16 +4328,16 @@ Strict с первого коммита; ослабление настроек �
 
 Правило выбора стратегии (документировано в `CONTRIBUTING.md`):
 - PR из feature/bugfix/refactor/chore/docs/test в develop — **squash-and-merge**;
-- PR из release/v* в main — **create-merge-commit** (затем тегирование `v<version>` на merge-commit);
+- PR из release/v* в main — **create-merge-commit** (затем per-component тегирование `<component>/v<version>` промоутируемых компонентов на merge-commit);
 - PR из release/v* в develop (back-merge) — **create-merge-commit**;
-- PR из hotfix/v* в main — **create-merge-commit** + тег `v<version>`;
+- PR из hotfix/v* в main — **create-merge-commit** + per-component тег `<component>/v<version>`;
 - PR из hotfix/v* в develop (back-merge) — **create-merge-commit**.
 
 **Auto-delete head branches:** `delete_branch_on_merge = true` (применяется только к коротким веткам; `main`/`develop`/`release/*` сохраняются — release-ветки удаляются вручную после успешного prod-promote и back-merge).
 
 **GitHub Environments:**
-- `staging` — без required reviewers; используется в `build-and-deploy-staging.yml` (§13.4); привязан к OIDC-role `github-actions-deploy-staging`.
-- `prod` — `protection_rules`: `required_reviewers` = 1 maintainer; `wait_timer = 0`; используется в `promote-prod.yml`; привязан к OIDC-role `github-actions-deploy-prod`.
+- `staging` — без required reviewers; используется staging-деплой-пайплайном сервиса (`lead-capture-deploy-staging.yml`, §13.4); привязан к OIDC-role `github-actions-lead-capture-staging`.
+- `prod` — `protection_rules`: `required_reviewers` = 1 maintainer; `wait_timer = 0`; используется prod-промоут-пайплайном сервиса (`lead-capture-promote-prod.yml`); привязан к OIDC-role `github-actions-lead-capture-prod`.
 
 **Прочие настройки:**
 - `has_issues = true`, `has_projects = false`, `has_wiki = false`;
@@ -4423,7 +4432,7 @@ Strict с первого коммита; ослабление настроек �
 - `F-13` Component `<sample-response-screen>` — §1.3.2 / §10.2
 - `F-14` Component `<capture-email-screen>` (с honeypot-полем) — §1.3.2 / §10.7
 - `F-15` Component `<guidebook-screen>` (upload-mode имеет input `name`; template-mode — переход на template-screen) — §1.3.2
-- `F-16` Component `<template-screen>` (динамическая форма из `/config/template_schema.json`; на submit рендерит plain text по `<label>: <value>\n\n` и шлёт в `/api/capture-lead/ingest/upload` с auto-filled `name = property_name`) — §10.6
+- `F-16` Component `<template-screen>` (динамическая форма из `/config/template_schema.json`; на submit рендерит plain text по `<label>: <value>\n\n` и шлёт в `/api/lead-capture/ingest/upload` с auto-filled `name = property_name`) — §10.6
 - `F-17` Component `<llm-key-msg-screen>` (BYOK input + guest message) — §1.3.2 / §10.3 (переименование в `<generate-screen>` — F-25, Spec-extend 2026-07-07)
 - `F-18` Component `<processing-screen>` — inline loading-индикатор (НЕ роут/состояние; §11.3 loading-state), показывается экранами upload/generate во время in-flight
 - `F-19` `main.ts` (bootstrap, mount, router start, session init из sessionStorage) — §11.1
@@ -4437,11 +4446,11 @@ Strict с первого коммита; ослабление настроек �
 - `I-05` Terraform `infra/` layout: `modules/` + `envs/{staging,prod}/{main.tf,backend.tf}` + единый `infra/config.yaml` (single-source, §10.9; `terraform.tfvars` не используется — заменён config.yaml в I-09…I-11; `shared`-root добавлен там же) — §12.2
 - `I-06` TF module `sm` (`aws_secretsmanager_secret` без значений, value-less; значения заполняются вне IaC, §10.3) — §10.3 / §12.3
 - `I-07` Neon project + ветки `staging`/`prod`, connection strings → Secrets Manager — §12.0
-- `I-08` TF module `ecr` (единый `capture-lead` в `shared`-root; `IMMUTABLE_WITH_EXCLUSION` — `latest*` mutable для bootstrap-образа; lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
+- `I-08` TF module `ecr` (единый `lead-capture` в `shared`-root; `IMMUTABLE_WITH_EXCLUSION` — `latest*` mutable для bootstrap-образа; lifecycle: keep 30 untagged + 50 `git-*` + all `release-v*`) — §13.5
 - `I-09` TF module `s3_frontend` (единый bucket `holahost-frontend` в `shared`-root + PAB/versioning/SSE + bucket policy OAC-only через account-scoped `AWS:SourceArn` + публикация `config/template_schema.json` и `config/sample_guidebook.md`) — §12.0 / §13.4 / §10.6
 - `I-10` TF module `route53` (hosted zone `hola.host` в `shared`-root + ACM cert us-east-1 DNS-validated + `email_dns_records` passthrough — DKIM/SPF/DMARC пусты до I-16; map ключуется свободным label'ом, DNS-имя — поле `name`: MX и SPF TXT Resend делят имя `send.<domain>`, I-16) — §10.3 / §10.7 / §12.4
 - `I-11` TF module `cloudfront` (per-env distribution staging/prod + response-headers policy §10.3 + cache-behavior `/config/*` TTL 300 + OAC к shared-bucket + SPA-fallback 403/404→index + origin path `releases/<git-sha>/`) — §10.3 / §13.4 / §10.6
-- `I-12` TF module `lambda` (`holahost-{env}-api` Function URL `AWS_IAM` + `holahost-{env}-cleanup` + EventBridge `cron(30 0 * * ? *)`; exec-role: `GetSecretValue` на `sm`-ARN'ы + `s3:GetObject` на sample-guidebook + приватный `system-prompt/*` + own log-groups; `image_uri=<ecr>:latest` + `ignore_changes` (CI меняет образ `update-function-code`); расширяет `cloudfront` — `/api/capture-lead/*` origin+OAC + SPA CloudFront Function вместо `custom_error_response`; env собирается inline-парсом committed `<env>.env` в root'е; `SYSTEM_PROMPT`→S3 cold-start (D-30); boto-фабрики в `infrastructure/boto`) — §10.1 / §10.2 / §8.6 / §10.3
+- `I-12` TF module `lambda` (`holahost-{env}-api` Function URL `AWS_IAM` + `holahost-{env}-cleanup` [ренейм → `holahost-{env}-lead-capture-{api,cleanup}`, I-20] + EventBridge `cron(30 0 * * ? *)`; exec-role: `GetSecretValue` на `sm`-ARN'ы + `s3:GetObject` на sample-guidebook + приватный `system-prompt/*` + own log-groups; `image_uri=<ecr>:latest` + `ignore_changes` (CI меняет образ `update-function-code`); расширяет `cloudfront` — `/api/lead-capture/*` origin+OAC + SPA CloudFront Function вместо `custom_error_response`; env собирается inline-парсом committed `<env>.env` в root'е; `SYSTEM_PROMPT`→S3 cold-start (D-30); boto-фабрики в `infrastructure/boto`) — §10.1 / §10.2 / §8.6 / §10.3
 - `I-13` TF module `observability` (metric filters, CloudWatch alarms, SNS + email subscription; log group'ы созданы `lambda`-модулем в I-12 — observability потребляет их имена через outputs; +эмиссия `sample_response_completed` в `SampleGenerateUseCase`) — §10.5
 - `I-14` TF module `github_repo` (settings — репо public (§10.3), branch protection для `main` + `develop` со стадированным включением (§13.7), GitHub Environments staging/prod; отдельный root `holahost/infra/envs/codebase/` + state-bucket `holahost-tfstate-codebase`, §12.2) — §13.7
 - `I-15` Environment runbook `infra/README.md` (prereq, initial setup, repo/dev/staging/prod секции, deploy, rollback, access) — §12.4
@@ -4460,6 +4469,8 @@ Strict с первого коммита; ослабление настроек �
 - `C-08` OIDC IAM Role'ы `github-actions-deploy-staging` + `github-actions-deploy-prod` в TF (часть `I-14`-расширения) — §13.4
 - `C-09` Pre-commit hook `validate-template-schema`: проверка что `docs/guidebook_template.json` парсится как valid JSON-array объектов с required-полями (`name`, `label`, `required`, `max_length`, `hint`) — §13.3 / §10.6
 
+> **Superseded (§14.7, 2026-07-14).** Монолитные `C-04` / `C-06` / `C-07` / `C-08` переписаны под service-owned пайплайны (path-filtered `lead-capture-ci.yml` + staging/promote-пайплайны сервиса + OIDC-роли сервиса) — тикеты `C-12`, `C-13`, `C-14`, `C-16` (`C-15` пропущен: занят inline-рядом ссылок §2.4/§10.4).
+
 ### 14.5 AC-extend 2026-07-06 (пробелы AC)
 
 Тикеты прогона `/ac-extend` от 2026-07-06 (карта и evidence: `.claude/ac-runs/2026-07-06-ac-gaps.md`). Закрывают известные баги sample-flow / magic-link (1–4) и новые пробелы AC (AF-1…AF-7); AC берутся из §3 (US-01…US-07) и §10.X, тикет не дублирует. Каждый цитирует anchor находки.
@@ -4473,7 +4484,7 @@ Strict с первого коммита; ослабление настроек �
 - `F-20` `<sample-response-screen>` v2: editable-поле + список `SAMPLE_MESSAGES` из `/config/sample_messages.json` (signal `sampleMessages` в `state/sample-messages.ts` + dev-serve из `docs/`) + отправка фактического содержимого поля + пары «сообщение → ответ» в response area + подстановка следующей заготовки (только если поле не тронуто) — §3 US-01 — `#AF-0` (баги 2, 4)
 - `F-21` Download-ссылка sample-гайдбука → `/config/sample_guidebook.md` (`download="sample_guidebook.md"`; dev-serve из `docs/`; non-HTML `Content-Type`) — §3 US-01 / §10.9 — `#AF-0` (баг 3)
 - `F-22` Magic-link landing: нормализация trailing slash в сравнении с `MAGIC_LINK_PATH` + error-banner вместо молчаливого `entrypoint` при неразрешённом токене на landing-пути — §11.4 / §3 US-03 — `#AF-0` (баг 1)
-- `F-23` Workspace-регидрация: при прямом заходе/hard-reload защищённого пути (`/guidebook` / `/generate` / `/template` — пути актуализированы Spec-extend 2026-07-07; `magicLink` восстановлен, `lead === null`) — повторный `GET /api/capture-lead/magic-link/resolve` + регидрация `lead` до рендера экрана — §11.2 / §3 US-03 — `#AF-5`
+- `F-23` Workspace-регидрация: при прямом заходе/hard-reload защищённого пути (`/guidebook` / `/generate` / `/template` — пути актуализированы Spec-extend 2026-07-07; `magicLink` восстановлен, `lead === null`) — повторный `GET /api/lead-capture/magic-link/resolve` + регидрация `lead` до рендера экрана — §11.2 / §3 US-03 — `#AF-5`
 - `F-24` `<template-screen>`: `Array.isArray`-guard на ответе `/config/template_schema.json` + видимая ошибка загрузки формы при не-JSON/не-массиве (SPA-fallback `index.html`) — §3 US-05 / §11.2 — `#AF-2`
 
 **Infrastructure**
@@ -4496,3 +4507,20 @@ Strict с первого коммита; ослабление настроек �
 - `F-27` Flow-параметризованная копия `capture_email` (по сигналу `captureFlow`): guidebook-флоу — текст «продолжите работу с guidebook после отправки email», sample-флоу — waitlist-семантика — §3 US-02 — `#AF-4`
 - `F-28` Компонент меню `components/app-menu.ts` (тег `<app-menu>`): пункты `guidebook` · `generate`, рендер при `session.magicLink !== null` на всех экранах, active-подсветка текущего экрана (сигнал `currentPath`, §11.2), навигация через роутер — §3 US-08 / §11.1 — `#AF-5`
 - `F-29` `state/generate-fields.ts`: module-scope signals `byokKey` / `guestMessage` / `responsePairs` (история пар «сообщение → ответ»); экран `generate` читает/пишет их вместо component-state; персистентность при in-app навигации, очистка на hard reload / tab-close — §3 US-06 / §11.2 / §11.4 — `#AF-6`
+
+### 14.7 Микросервисы / независимый деплой (2026-07-14)
+
+Рефактор под микросервисную модель: **микросервис — самодостаточный деплой-юнит** со своими CI/CD-пайплайнами (dev/staging/prod), своим набором инфра-ресурсов (вкл. ECR) и своими Terraform-**root'ами внутри сервиса**. В этом изменении переписаны доки/спека: `holahost/docs/holahost_overview.md` (контракт микросервиса + состав приложения: фронтенд / общая инфра / набор микросервисов; взаимодействие по HTTP без событий), `CONTRIBUTING.md` (микросервисный фрейминг, имена веток по сервису), spec §12.2 (весь IaC сервиса — модули + root'ы — внутри `holahost/services/lead-capture/infra/`; ECR — ресурс сервиса; гарантия независимого деплоя; стабильный Function URL) и §13.0/§13.4/§13.5/§13.7 (ветки/версии/пайплайны/статус-контексты сервиса). Решения гейта: `develop` — интеграция без деплоя, staging из `release/*`, prod по тегу `lead-capture/v*`; ренейм `capture-lead → lead-capture` (ECR + mount + версии); ECR и root'ы — собственность сервиса; Lambda несут имя сервиса; термин Terraform-**root** (не «роут» — во избежание путаницы с gateway-маршрутизацией). CI/CD общей инфры и фронта здесь не описывается. Ниже — implementation-тикеты (код/TF/workflow); монолитные `C-04`/`C-06`/`C-07`/`C-08` (§14.4) — superseded.
+
+**Infrastructure**
+
+- `I-19` IaC сервиса — внутрь сервиса: перенести ECR + все root'ы сервиса из общей инфры (`holahost/infra/envs/*/lead-capture`, `ecr`-модуль `I-08`) в `holahost/services/lead-capture/infra/` (`modules/` + `envs/{common,staging,prod}`); репо `capture-lead` → `lead-capture`; свой backend-state (неймспейс `lead-capture/*`); убрать ECR и сервис-root'ы из `holahost/infra` — §12.2 / §13.5 — supersedes `I-08` topology
+- `I-20` Lambda-ренейм `holahost-{env}-{api,cleanup}` → `holahost-{env}-lead-capture-{api,cleanup}` (пересоздание функций → новый Function URL) + разовая скоординированная re-mount миграция service→gateway (`terraform_remote_state` URL + CloudFront origin) — §12.2 / §13.4 — extends `I-12`
+- `I-21` Mount `/api/capture-lead/*` → `/api/lead-capture/*` по всему single-source `API_BASE_URL`: gateway CloudFront behavior/origin, frontend `VITE_API_BASE_URL`, backend router (prefix-strip), `openapi.yaml`, `config.yaml` — §11.6 / §5 / §12.2 — extends `I-11`/`I-12`
+
+**CI/CD**
+
+- `C-12` `lead-capture-ci.yml` (тонкий триггер-стаб в корне → service-owned логика): path-filtered валидация сервиса (`pre-commit` + `pytest` + `docker build` dry-run + `terraform plan` root'ов) + skip-guard required-контекста (job-gate по `changes` + status-reporter, §13.7) — §13.4 / §13.7 — переписывает `C-04`
+- `C-13` `lead-capture-deploy-staging.yml` (`push` `release/v*`, path-filter сервиса: `terraform apply` service-root'ов → build + ECR-push + digest → Alembic migrate → `update-function-code` `holahost-staging-lead-capture-{api,cleanup}` → smoke; три формы выката infra-only / code-only / both) — §13.4 / §13.5 — переписывает сервисную часть `C-06`
+- `C-14` `lead-capture-promote-prod.yml` (тег `lead-capture/v*`: `terraform apply` prod-root'ов → resolve digest `release-v<version>` → Alembic migrate prod → Lambda update → smoke → env `prod`) — §13.4 / §13.5 — переписывает `C-07`
+- `C-16` OIDC IAM-роли сервиса (`github-actions-lead-capture-{staging,prod}`, least-privilege — только ресурсы lead-capture) + required-status-контекст сервиса и Environments-привязка в `github_repo` — §13.4 / §13.7 — переписывает `C-08`, extends `I-14`

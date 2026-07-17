@@ -14,7 +14,7 @@ def test_log_event_emits_json_with_allowlisted_fields(capsys: pytest.CaptureFixt
     log_event(
         "http_request_completed",
         request_id="r-1",
-        endpoint="/api/capture-lead/generate",
+        endpoint="/api/lead-capture/generate",
         method="POST",
         status=200,
         duration_ms=42,
