@@ -1,7 +1,7 @@
-# Consumed by the prod `gateway` root via terraform_remote_state to mount /api/capture-lead/*.
+# Consumed by the staging `gateway` root via terraform_remote_state to mount /api/lead-capture/*.
 output "function_url_domain" {
   value       = module.lead_capture.function_url_domain
-  description = "Lambda Function URL host — the gateway CloudFront origin for /api/capture-lead/*."
+  description = "Lambda Function URL host — the gateway CloudFront origin for /api/lead-capture/*."
 }
 
 output "api_function_name" {

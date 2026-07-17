@@ -7,7 +7,7 @@ from pydantic import SecretStr
 
 @dataclass(frozen=True)
 class CaptureLeadCmd:
-    """Command for POST /api/capture-lead/leads/capture (spec §8.1).
+    """Command for POST /api/lead-capture/leads/capture (spec §8.1).
 
     Args:
         email: Raw email (validated by the use case via Email VO).
@@ -26,7 +26,7 @@ class CaptureLeadCmd:
 
 @dataclass(frozen=True)
 class ResolveMagicLinkCmd:
-    """Command for GET /api/capture-lead/magic-link/resolve (spec §8.1).
+    """Command for GET /api/lead-capture/magic-link/resolve (spec §8.1).
 
     Args:
         magic_link: The magic-link token, wrapped in SecretStr to avoid leaking in

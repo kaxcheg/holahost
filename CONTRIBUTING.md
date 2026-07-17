@@ -1,101 +1,85 @@
 # Contributing to Holahost
 
-Conventions for working in this repository. They mirror the spec
-([`lead_capture_spec.md`](holahost/services/lead-capture/docs/lead_capture_spec.md) §13) — the spec is
-the source of truth; this file is the day-to-day summary. Toolchain setup lives in
-[`README.md`](README.md) and
-[`infra/README.md`](holahost/services/lead-capture/infra/README.md).
+Conventions for this **microservice monorepo**: a **frontend** (`holahost/frontend/`), **shared
+infrastructure** (`holahost/infra/`: domain, CloudFront, API Gateway, EC2 + `backbone` Docker network,
+GitHub settings), and **backend microservices** (`holahost/services/<svc>/`) — each a container on the
+shared `backbone` network, talking over HTTP (no event integration).
+
+**Each microservice is a self-contained deployable** — it owns its ECR repo, Terraform roots (one
+`workspace` per environment) and CI/CD pipelines for local dev / staging / prod, with its own version
+tag `<svc>/vYYYYMMDD.N`. The contract every service must satisfy (container `:8080`, `GET /health`,
+JWT-or-public auth, OpenAPI, independent deploy) lives in
+[`holahost/docs/holahost_overview.md`](holahost/docs/holahost_overview.md); each service's pipeline is
+in its own spec. CI/CD of the frontend and shared infrastructure is out of scope of these conventions.
+
+The overview is the source of truth for architecture; this file is the day-to-day summary. Toolchain
+setup lives in [`README.md`](README.md) and the infrastructure runbook
+[`holahost/infra/README.md`](holahost/infra/README.md).
 
 ## Branching (GitFlow)
 
-Long-lived branches: `main` (production-ready; every merge is tagged and promotes to prod) and
-`develop` (integration; staging auto-deploys from it). Default branch is `develop`.
+Long-lived: `main` (production-ready) and `develop` (integration). Default branch is `develop`.
 
-| Type | Branches from | Merges back into | Purpose |
+| Type | From | Back into | Purpose |
 |---|---|---|---|
-| `feature/<slug>` | `develop` | `develop` | new feature |
-| `bugfix/<slug>` | `develop` | `develop` | non-urgent bug fix |
-| `refactor/<slug>` / `chore/<slug>` / `docs/<slug>` / `test/<slug>` | `develop` | `develop` | other non-feature changes |
-| `release/v<version>` | `develop` | `main` **and** back-merge into `develop` | QA / release freeze before prod |
-| `hotfix/v<version>` | `main` | `main` **and** back-merge into `develop` | urgent prod fix |
+| `feature/[<service>/]<slug>` | `develop` | `develop` | new feature |
+| `bugfix/[<service>/]<slug>` | `develop` | `develop` | non-urgent bug fix |
+| `refactor/…` `chore/…` `docs/…` `test/…` (`[<service>/]<slug>`) | `develop` | `develop` | other changes |
+| `release/v<version>` | `develop` | `main` **and** back-merge to `develop` | release freeze before prod |
+| `hotfix/v<version>` | `main` | `main` **and** back-merge to `develop` | urgent prod fix |
 
-`<slug>` is kebab-case, ≤ 40 characters. Short-lived branches live ≤ 3 days.
+`<slug>` is kebab-case, ≤ 40 chars; short-lived branches live ≤ 3 days. **A branch developing a
+microservice carries its name** as the `<service>` segment (`feature/lead-capture/<slug>`); shared-part
+branches omit it (`feature/<slug>`) or use an area (`feature/frontend/<slug>`). The type prefix stays
+first, so prefix-based branch protection is unaffected.
 
-**Versioning:** `vYYYYMMDD.N` — calendar version (UTC date + sequence number within the day), e.g.
-`v20260603.1`. Created as an annotated git tag on the `release/v*` / `hotfix/v*` merge commit in
-`main`; the tag triggers the prod promotion (spec §13.5).
+**Deploy roles:** `develop` — integration + CI, **no deploy**; `release/v*` — deploys the touched units
+to **staging**; `main` — prod is promoted per unit by a unit-scoped tag `<unit>/v<version>` on the
+`release/*` / `hotfix/*` merge commit. **Versioning is per unit** (`<unit>/vYYYYMMDD.N`, UTC date + daily
+sequence) — there is no single repo-wide version.
 
 ## Commits (Conventional Commits)
 
-Format: `<type>(<scope>)?: <subject>`
-
-- `<type>` ∈ `feat | fix | chore | refactor | docs | test | build | ci`;
-- subject ≤ 72 characters, imperative mood, no trailing period;
-- body (optional) after a blank line, ≤ 100 characters per line;
-- breaking changes: `!` after `<type>` or a `BREAKING CHANGE: <description>` footer.
-
-Examples:
-
-```
-feat(api): add /api/ingest/upload endpoint
-fix(captures): rollback Lead on Resend timeout
-refactor(domain)!: rename Guidebook.id field
-```
-
-The `commit-msg` hook (`conventional-pre-commit`) enforces the format and the allowed types.
-Length limits (72 / 100) are convention enforced in review — the hook does not measure them.
+`<type>(<scope>)?: <subject>` — `<type>` ∈ `feat | fix | chore | refactor | docs | test | build | ci`;
+`<scope>` (optional) names the affected unit/area (`lead-capture`, `frontend`, `infra`, `auth`);
+subject ≤ 72 chars, imperative, no trailing period; body (optional) after a blank line, ≤ 100 chars/line;
+breaking changes: `!` after `<type>` or a `BREAKING CHANGE:` footer. The `commit-msg` hook
+(`conventional-pre-commit`) enforces the format and allowed types.
 
 ## Merge strategy
 
-Repository merge settings are Terraform-managed (`infra/modules/github_repo/`, spec §13.7).
-Pick the strategy by source branch:
+Repository merge settings are Terraform-managed (`holahost/infra/modules/github_repo/`). Pick by source
+branch:
 
 | PR | Strategy |
 |---|---|
-| `feature/` `bugfix/` `refactor/` `chore/` `docs/` `test/` → `develop` | **squash-and-merge** (one commit per PR; the PR title becomes the commit subject — it must follow Conventional Commits) |
-| `release/v*` → `main` | **create-merge-commit**, then tag `v<version>` on the merge commit |
-| `release/v*` → `develop` (back-merge) | **create-merge-commit** |
-| `hotfix/v*` → `main` | **create-merge-commit** + tag `v<version>` |
-| `hotfix/v*` → `develop` (back-merge) | **create-merge-commit** |
+| `feature/` `bugfix/` `refactor/` `chore/` `docs/` `test/` → `develop` | **squash-and-merge** (PR title becomes the commit subject — Conventional Commits) |
+| `release/v*` → `main` | **merge commit**, then tag the promoted units `<unit>/v<version>` |
+| `release/v*` → `develop` (back-merge) | **merge commit** |
+| `hotfix/v*` → `main` | **merge commit** + tag `<unit>/v<version>` |
+| `hotfix/v*` → `develop` (back-merge) | **merge commit** |
 
-Direct pushes to `main` / `develop` are blocked — everything lands via PR. Head branches are
-auto-deleted on merge (`main` / `develop` / `release/*` persist; release branches are removed
-manually after a successful prod promote + back-merge).
+Direct pushes to `main` / `develop` are blocked — everything lands via PR. Head branches auto-delete on
+merge (`main` / `develop` / `release/*` persist).
 
 ## Code style
 
-**Python** (`holahost/services/lead-capture/backend/`): modules, files, functions, variables — `snake_case`; classes and type
-aliases — `PascalCase`; constants — `UPPER_SNAKE_CASE`; privacy marker — leading underscore
-(`_internal_helper`). Domain entities / value objects follow the spec §7 names without
-abbreviations (`GuidebookId`, not `GbId`).
-
-**TypeScript** (`holahost/frontend/`): files — `kebab-case.ts`; variables, functions — `camelCase`; types,
-interfaces, components — `PascalCase`; env-derived constants — `UPPER_SNAKE_CASE`.
-
-**Postgres**: tables — plural `snake_case` (`leads`, `guidebooks`); columns — `snake_case`;
-PK — `id`; FK — `<referenced_table_singular>_id`; indexes — `idx_<table>_<col>[_<col>...]`;
-Alembic migrations — `YYYYMMDD_HHMM_<slug>.py` (e.g. `20250601_1200_add_guidebook_name_column.py`).
-
-Formatting and linting are enforced by the hooks below (ruff for Python, biome for TypeScript) —
-don't hand-format against them.
+**Python** (`holahost/services/<svc>/backend/`): `snake_case` modules/files/functions/variables;
+`PascalCase` classes and type aliases; `UPPER_SNAKE_CASE` constants; leading-underscore privacy marker.
+**TypeScript** (`holahost/frontend/`): `kebab-case.ts` files; `camelCase` variables/functions;
+`PascalCase` types/interfaces/components; `UPPER_SNAKE_CASE` env-derived constants. **Postgres**: plural
+`snake_case` tables; `snake_case` columns; PK `id`; FK `<table_singular>_id`; indexes
+`idx_<table>_<col>…`; Alembic migrations `YYYYMMDD_HHMM_<slug>.py`. Formatting and linting are
+hook-enforced (ruff for Python, biome for TypeScript) — don't hand-format against them.
 
 ## Tooling & hooks
 
-One-time after cloning:
+One-time after cloning: `make hooks-install` (installs the `pre-commit` + `commit-msg` git hooks). The
+set (`.pre-commit-config.yaml`): ruff check `--fix` + format, mypy (strict), import-linter, biome check
+`--write`, tsc `--noEmit`, `conventional-pre-commit`, gitleaks, and the pre-commit-hooks basics
+(whitespace / EOF / yaml / json / merge-conflict / large files > 1 MB).
 
-```bash
-make hooks-install   # installs the git hooks (pre-commit + commit-msg stages)
-```
-
-The hook set (`.pre-commit-config.yaml`, spec §13.3): ruff check `--fix` + ruff format, mypy
-(strict), import-linter (clean-architecture contract), biome check `--write`, tsc `--noEmit`,
-validate-sample-messages (docs/sample_messages.json shape guard, C-10b),
-conventional-pre-commit, gitleaks, and the pre-commit-hooks basics (whitespace / EOF / yaml / json /
-merge-conflict / large files > 1 MB).
-
-- Bypassing hooks (`git commit --no-verify`) is forbidden by policy; CI re-runs the full set and
-  blocks the PR on any mismatch.
-- `make ci-local` runs the full CI-parity suite locally (hooks + backend tests + frontend tests +
-  build) — use it before pushing when working offline.
-- Every PR must fill the template (`.github/PULL_REQUEST_TEMPLATE.md`); an empty section is a
-  review finding.
+- Bypassing hooks (`git commit --no-verify`) is forbidden by policy; CI re-runs the full set.
+- `make ci-local` runs the CI-parity suite locally (hooks + tests + build) — use it before pushing when
+  offline.
+- Every PR fills the template (`.github/PULL_REQUEST_TEMPLATE.md`); an empty section is a review finding.

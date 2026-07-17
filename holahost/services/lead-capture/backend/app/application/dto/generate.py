@@ -7,7 +7,7 @@ from pydantic import SecretStr
 
 @dataclass(frozen=True)
 class GenerateResponseCmd:
-    """Command for POST /api/capture-lead/generate (spec §8.1).
+    """Command for POST /api/lead-capture/generate (spec §8.1).
 
     ``guidebook_id`` is intentionally absent: the backend reads ``lead.guidebook_id`` after
     resolving the magic link.

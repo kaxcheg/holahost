@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class SampleGenerateCmd:
-    """Command for POST /api/capture-lead/sample/generate (spec §8.1).
+    """Command for POST /api/lead-capture/sample/generate (spec §8.1).
 
     Args:
         message: Guest message (validated by the use case via GuestMessage.create).

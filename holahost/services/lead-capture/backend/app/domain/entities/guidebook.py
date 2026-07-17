@@ -82,7 +82,7 @@ class Guidebook:
         )
 
     def touch(self) -> None:
-        """Advance ``last_accessed_at`` to now (UTC) — on successful ``/api/capture-lead/generate`` (§6.5)."""
+        """Advance ``last_accessed_at`` to now (UTC) — on successful ``/api/lead-capture/generate`` (§6.5)."""
         self.last_accessed_at = datetime.now(tz=UTC)
 
     def __eq__(self, other: object) -> bool:

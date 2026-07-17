@@ -79,7 +79,7 @@ data "aws_cloudfront_cache_policy" "optimized" {
   name = "Managed-CachingOptimized"
 }
 
-# /api/capture-lead/* must not be cached and must NOT forward the viewer Host (Function URL SigV4 needs its own
+# /api/lead-capture/* must not be cached and must NOT forward the viewer Host (Function URL SigV4 needs its own
 # Host) — managed policies.
 data "aws_cloudfront_cache_policy" "caching_disabled" {
   name = "Managed-CachingDisabled"
@@ -90,7 +90,7 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
 }
 
 # SPA fallback (replaces the global custom_error_response, D-29). Attached to the DEFAULT behavior only
-# → /api/capture-lead/* and /config/* (own behaviors) are untouched, so API 4xx are never rewritten. Any request
+# → /api/lead-capture/* and /config/* (own behaviors) are untouched, so API 4xx are never rewritten. Any request
 # without a file extension is a client-side route → serve index.html.
 resource "aws_cloudfront_function" "spa_rewrite" {
   name    = "${var.name_prefix}-spa-rewrite"
@@ -131,7 +131,7 @@ resource "aws_cloudfront_distribution" "frontend" {
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
   }
 
-  # Lambda Function URL origin for /api/capture-lead/* (I-12).
+  # Lambda Function URL origin for /api/lead-capture/* (I-12).
   origin {
     origin_id                = "lambda-api"
     domain_name              = var.api_origin_domain
@@ -185,7 +185,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   # SPA fallback is handled by aws_cloudfront_function.spa_rewrite (viewer-request, default behavior),
-  # not custom_error_response — otherwise a global 403/404→index rewrite would swallow /api/capture-lead/* JSON
+  # not custom_error_response — otherwise a global 403/404→index rewrite would swallow /api/lead-capture/* JSON
   # errors (D-29).
 
   restrictions {

@@ -63,7 +63,7 @@ class ResolveMagicLinkUseCase:
         """True if the lead has been inactive past the TTL.
 
         Signal is ``Lead.last_seen_at`` (§10.1), aligned with the cleanup-Lambda (§9.6) — NOT
-        ``Guidebook.last_accessed_at`` (analytics-only, bumped solely on ``/api/capture-lead/generate``). Must be
+        ``Guidebook.last_accessed_at`` (analytics-only, bumped solely on ``/api/lead-capture/generate``). Must be
         called before ``lead.touch()`` so the prior activity is still reflected.
         """
         return datetime.now(tz=UTC) - lead.last_seen_at > self.settings.magic_link_ttl

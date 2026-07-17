@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from config.config import Settings
 
 # (method, sub-path) → (event→Cmd parser, Container use-case attribute name) (§8.7). Routes are
-# service-relative — the mount prefix (Settings.api_base_url, e.g. /api/capture-lead) is stripped in
+# service-relative — the mount prefix (Settings.api_base_url, e.g. /api/lead-capture) is stripped in
 # ``dispatch``, so API_BASE_URL is the single source of the prefix (§11.6).
 _ROUTES: dict[tuple[str, str], tuple[Callable[[dict[str, Any], Settings], Any], str]] = {
     ("POST", "/sample/generate"): (rp.parse_sample_generate, "sample_generate"),

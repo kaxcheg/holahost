@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "/api/capture-lead",
+      "url": "/api/lead-capture",
       "description": "Same-origin via CloudFront (§2.1)."
     }
   ],

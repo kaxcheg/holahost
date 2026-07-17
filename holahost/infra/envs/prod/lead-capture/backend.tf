@@ -2,7 +2,7 @@
 terraform {
   backend "s3" {
     bucket       = "holahost-tfstate-prod"
-    key          = "prod/capture-lead/terraform.tfstate"
+    key          = "prod/lead-capture/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
     use_lockfile = true

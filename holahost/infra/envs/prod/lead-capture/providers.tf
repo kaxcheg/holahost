@@ -6,7 +6,7 @@ provider "aws" {
     tags = {
       Project     = local.project
       Environment = local.env
-      Service     = "capture-lead"
+      Service     = "lead-capture"
       ManagedBy   = "terraform"
     }
   }

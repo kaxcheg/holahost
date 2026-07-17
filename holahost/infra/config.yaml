@@ -11,9 +11,9 @@ github_owner:    kaxcheg           # github provider owner + prod deploy reviewe
 
 # One ECR repository per hosted service (created by the `common` root). ECR repo != git repo — it is a
 # free image namespace; mixing services in one repo is the anti-pattern.
-ecr_repos: [capture-lead]
+ecr_repos: [lead-capture]
 
-# Published /config/* assets served by the app CDN. The SOURCES live in the capture-lead service tree
+# Published /config/* assets served by the app CDN. The SOURCES live in the lead-capture service tree
 # (the app publishes the service's static content); paths are relative to the holahost app root.
 guidebook_template_path: services/lead-capture/docs/guidebook_template.json
 sample_guidebook_path:   services/lead-capture/docs/sample_guidebook.md
@@ -25,7 +25,7 @@ sample_messages_key:     config/sample_messages.json
 email_dns_records: {}
 
 # Per-environment app settings. subdomain is DERIVED (no duplicated domain): prefix "" => apex (domain),
-# else "<prefix>.<domain>". system_prompt is the capture-lead service's per-env prompt seed the app
+# else "<prefix>.<domain>". system_prompt is the lead-capture service's per-env prompt seed the app
 # publishes to the private system-prompt/ prefix.
 envs:
   staging:

@@ -13,9 +13,9 @@ Run with ``make -C backend export-openapi``; the CI drift guard is ``make -C bac
 The document is emitted as JSON, which is a strict subset of YAML 1.2 -- so ``docs/openapi.yaml`` is
 valid YAML (consumed by ``openapi-typescript``) and valid JSON, while needing no YAML dependency.
 
-OpenAPI paths are the sub-paths under a ``/api/capture-lead`` server (e.g. ``/sample/generate``), matching
-the frontend ``VITE_API_BASE_URL=/api/capture-lead`` convention (§11.6): server URL + path = the backend
-``rawPath`` (``/api/capture-lead/sample/generate``). The service is mounted at ``/api/capture-lead`` by the
+OpenAPI paths are the sub-paths under a ``/api/lead-capture`` server (e.g. ``/sample/generate``), matching
+the frontend ``VITE_API_BASE_URL=/api/lead-capture`` convention (§11.6): server URL + path = the backend
+``rawPath`` (``/api/lead-capture/sample/generate``). The service is mounted at ``/api/lead-capture`` by the
 Holahost gateway (API-Gateway model: ``/api/<service>/*``).
 """
 
@@ -52,7 +52,7 @@ _OUTPUT_PATH = Path(__file__).resolve().parents[3] / "docs" / "openapi.yaml"
 
 # Single source of the mount prefix: API_BASE_URL (§11.6), the same value the router strips and the
 # gateway routes; the canonical default keeps `make export-openapi` runnable offline.
-_API_PREFIX = os.getenv("API_BASE_URL", "/api/capture-lead")
+_API_PREFIX = os.getenv("API_BASE_URL", "/api/lead-capture")
 
 # Per-endpoint contract metadata (§5). ``path`` is the service-relative sub-path — it IS the router
 # ``_ROUTES`` key and the emitted OpenAPI path; the mount prefix lives only in the ``_API_PREFIX`` server.

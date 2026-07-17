@@ -6,7 +6,7 @@ import { parse as parseEnvFile } from 'dotenv';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
-// Non-secret config the frontend bakes into the bundle (a subset of the capture-lead service's
+// Non-secret config the frontend bakes into the bundle (a subset of the lead-capture service's
 // envs/<env>.env — the frontend is a client of the service across the ownership boundary).
 // MAGIC_LINK_URL_PARAM is NOT here — it is frontend-owned config, resolved from frontend/.env (see
 // resolveContract).

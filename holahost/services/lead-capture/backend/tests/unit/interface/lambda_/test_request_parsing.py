@@ -12,7 +12,7 @@ from tests._support.settings import make_settings
 def _evt(
     *,
     method: str = "POST",
-    path: str = "/api/capture-lead/sample/generate",
+    path: str = "/api/lead-capture/sample/generate",
     headers: dict[str, str] | None = None,
     body: str | None = None,
     b64: bool = False,
@@ -35,7 +35,7 @@ def test_parse_sample_generate() -> None:
 
 def test_parse_capture_lead_reads_fields_and_ua() -> None:
     evt = _evt(
-        path="/api/capture-lead/leads/capture",
+        path="/api/lead-capture/leads/capture",
         headers={"user-agent": "Mozilla/5.0"},
         body=json.dumps({"email": "h@example.com", "flow": "guidebook", "honeypot": ""}),
     )
@@ -48,7 +48,7 @@ def test_parse_capture_lead_reads_fields_and_ua() -> None:
 
 def test_parse_resolve_magic_link_from_header() -> None:
     evt = _evt(
-        method="GET", path="/api/capture-lead/magic-link/resolve", headers={"x-magic-link": "MTOK"}
+        method="GET", path="/api/lead-capture/magic-link/resolve", headers={"x-magic-link": "MTOK"}
     )
     cmd = rp.parse_resolve_magic_link(evt, make_settings())
     assert cmd.magic_link.get_secret_value() == "MTOK"
@@ -57,7 +57,7 @@ def test_parse_resolve_magic_link_from_header() -> None:
 
 def test_parse_generate_response_reads_secrets() -> None:
     evt = _evt(
-        path="/api/capture-lead/generate",
+        path="/api/lead-capture/generate",
         headers={"x-magic-link": "MTOK", "x-api-key": "sk-byok"},
         body=json.dumps({"message": "q"}),
     )
@@ -106,7 +106,7 @@ def test_capture_missing_required_field_raises_invalid_json() -> None:
     body = json.dumps({"flow": "guidebook"})  # email absent
     with pytest.raises(InvalidPayloadError) as exc:
         rp.parse_capture_lead(
-            _evt(path="/api/capture-lead/leads/capture", body=body), make_settings()
+            _evt(path="/api/lead-capture/leads/capture", body=body), make_settings()
         )
     assert exc.value.field == "email"
     assert exc.value.reason == "invalid_json"
@@ -115,7 +115,7 @@ def test_capture_missing_required_field_raises_invalid_json() -> None:
 def test_capture_honeypot_optional_defaults_empty() -> None:
     body = json.dumps({"email": "h@example.com", "flow": "guidebook"})  # honeypot absent → ""
     cmd = rp.parse_capture_lead(
-        _evt(path="/api/capture-lead/leads/capture", body=body), make_settings()
+        _evt(path="/api/lead-capture/leads/capture", body=body), make_settings()
     )
     assert cmd.honeypot == ""
 
@@ -126,7 +126,7 @@ def test_upload_missing_name_raises_invalid_json() -> None:
         b"Content-Type: application/pdf\r\n\r\n%PDF data\r\n--B--\r\n"
     )
     evt = _evt(
-        path="/api/capture-lead/ingest/upload",
+        path="/api/lead-capture/ingest/upload",
         headers={"x-magic-link": "M", "content-type": "multipart/form-data; boundary=B"},
         body=base64.b64encode(raw).decode("ascii"),
         b64=True,
@@ -139,7 +139,7 @@ def test_upload_missing_name_raises_invalid_json() -> None:
 def test_upload_missing_file_raises_invalid_json() -> None:
     raw = b'--B\r\nContent-Disposition: form-data; name="name"\r\n\r\nMy Place\r\n--B--\r\n'
     evt = _evt(
-        path="/api/capture-lead/ingest/upload",
+        path="/api/lead-capture/ingest/upload",
         headers={"x-magic-link": "M", "content-type": "multipart/form-data; boundary=B"},
         body=base64.b64encode(raw).decode("ascii"),
         b64=True,
@@ -159,7 +159,7 @@ def test_parse_upload_multipart() -> None:
         b"Content-Type: application/pdf\r\n\r\n" + file_content + b"\r\n--B--\r\n"
     )
     evt = _evt(
-        path="/api/capture-lead/ingest/upload",
+        path="/api/lead-capture/ingest/upload",
         headers={"x-magic-link": "MTOK", "content-type": "multipart/form-data; boundary=B"},
         body=base64.b64encode(raw).decode("ascii"),
         b64=True,

@@ -110,13 +110,13 @@ def _magic_link(event: dict[str, Any]) -> SecretStr:
 
 
 def parse_sample_generate(event: dict[str, Any], settings: Settings) -> SampleGenerateCmd:
-    """POST /api/capture-lead/sample/generate → SampleGenerateCmd."""
+    """POST /api/lead-capture/sample/generate → SampleGenerateCmd."""
     body = _validate_body(_SampleBody, event)
     return SampleGenerateCmd(message=body.message, ip_hash=_ip_hash(event, settings))
 
 
 def parse_capture_lead(event: dict[str, Any], settings: Settings) -> CaptureLeadCmd:
-    """POST /api/capture-lead/leads/capture → CaptureLeadCmd."""
+    """POST /api/lead-capture/leads/capture → CaptureLeadCmd."""
     body = _validate_body(_CaptureBody, event)
     return CaptureLeadCmd(
         email=body.email,
@@ -128,12 +128,12 @@ def parse_capture_lead(event: dict[str, Any], settings: Settings) -> CaptureLead
 
 
 def parse_resolve_magic_link(event: dict[str, Any], settings: Settings) -> ResolveMagicLinkCmd:
-    """GET /api/capture-lead/magic-link/resolve → ResolveMagicLinkCmd (token from the X-Magic-Link header)."""
+    """GET /api/lead-capture/magic-link/resolve → ResolveMagicLinkCmd (token from the X-Magic-Link header)."""
     return ResolveMagicLinkCmd(magic_link=_magic_link(event), ip_hash=_ip_hash(event, settings))
 
 
 def parse_generate_response(event: dict[str, Any], settings: Settings) -> GenerateResponseCmd:
-    """POST /api/capture-lead/generate → GenerateResponseCmd (magic-link + BYOK key from headers)."""
+    """POST /api/lead-capture/generate → GenerateResponseCmd (magic-link + BYOK key from headers)."""
     body = _validate_body(_GenerateBody, event)
     return GenerateResponseCmd(
         magic_link=_magic_link(event),
@@ -144,7 +144,7 @@ def parse_generate_response(event: dict[str, Any], settings: Settings) -> Genera
 
 
 def parse_upload_guidebook(event: dict[str, Any], settings: Settings) -> UploadGuidebookCmd:
-    """POST /api/capture-lead/ingest/upload → UploadGuidebookCmd (multipart ``name`` + ``file``, §5.6)."""
+    """POST /api/lead-capture/ingest/upload → UploadGuidebookCmd (multipart ``name`` + ``file``, §5.6)."""
     name, file_bytes, mime_type = _parse_multipart(event)
     return UploadGuidebookCmd(
         magic_link=_magic_link(event),

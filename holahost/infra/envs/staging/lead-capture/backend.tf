@@ -2,7 +2,7 @@
 terraform {
   backend "s3" {
     bucket       = "holahost-tfstate-staging"
-    key          = "staging/capture-lead/terraform.tfstate"
+    key          = "staging/lead-capture/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
     use_lockfile = true
