@@ -20,12 +20,6 @@ htmlcov/
 # Environment files
 *.env
 .env.*
-# The per-env backend config is COMMITTED (owned by the capture-lead service): it holds NO secrets —
-# the one real dev secret (SAMPLE_SERVER_API_KEY) is provided at runtime by `make dev-up`, and
-# staging/prod secrets live in AWS Secrets Manager. Terraform reads these files as the Lambda env (I-12).
-!holahost/services/lead-capture/envs/dev.env
-!holahost/services/lead-capture/envs/staging.env
-!holahost/services/lead-capture/envs/prod.env
 
 # OS / editor
 .DS_Store
