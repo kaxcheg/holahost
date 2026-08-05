@@ -29,6 +29,7 @@ htmlcov/
 .build-state/
 .claude/
 settings.json
+CLAUDE.md
 
 # Node
 node_modules/
