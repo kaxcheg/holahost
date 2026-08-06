@@ -29,3 +29,35 @@ repos:
       - id: conventional-pre-commit
         stages: [commit-msg]
         args: [feat, fix, chore, refactor, docs, test, build, ci]
+
+  # One set of hooks for every Python package in the repo (any dir with its own
+  # pyproject.toml), auto-discovered — not one hook block per package. Each
+  # package still runs in its own `poetry run` venv, so mypy/ruff see that
+  # package's real installed dependencies rather than a shared guess. Adding a
+  # new package (rag-documents' backend, llm-client, ...) needs no edit here.
+  - repo: local
+    hooks:
+      - id: python-ruff
+        name: python · ruff check (all packages)
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run ruff check --fix .) || exit 1; done'
+        language: system
+        files: \.py$|pyproject\.toml$
+        pass_filenames: false
+      - id: python-ruff-format
+        name: python · ruff format (all packages)
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run ruff format .) || exit 1; done'
+        language: system
+        files: \.py$|pyproject\.toml$
+        pass_filenames: false
+      - id: python-mypy
+        name: python · mypy (all packages)
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run mypy .) || exit 1; done'
+        language: system
+        files: \.py$|pyproject\.toml$
+        pass_filenames: false
+      - id: python-import-linter
+        name: python · import-linter (all packages)
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run lint-imports) || exit 1; done'
+        language: system
+        files: \.py$|pyproject\.toml$
+        pass_filenames: false
