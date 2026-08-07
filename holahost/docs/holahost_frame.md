@@ -666,21 +666,20 @@ squash. Head-ветки удаляются автоматически. PR-шаб
 Всё, что одинаково у любого микросервиса, живёт в одном месте и не переписывается в каждой спеке.
 Спека сервиса на такую сущность **ссылается**, а не дублирует её.
 
-**Правило заполнения:** если содержимого ещё нет (не было в `lead-capture` или требует переработки),
-здесь стоит только плейсхолдер — имя, место и назначение. Наполнение появляется при первой
-разработке, которой эта сущность понадобилась, и с этого момента становится обязательным для всех
-последующих сервисов.
+**Правило заполнения:** если содержимого ещё нет (или требует переработки), здесь стоит только
+плейсхолдер — имя, место и назначение. Наполнение появляется при первой разработке, которой эта
+сущность понадобилась, и с этого момента становится обязательным для всех последующих сервисов.
 
-| Сущность | Где живёт | Прототип | Статус |
-|---|---|---|---|
-| `holahost-auth` — мидлварь оффлайн-валидации JWT (подпись, claims, кэш JWKS, дисциплина 401/403) | `holahost/libs/holahost-auth/` | нет: в `lead-capture` авторизации не было | разрабатывается в объёме спеки `rag-documents` |
-| `holahost-errors` — envelope `{error:{code,message,details}}`, базовые классы ошибок, обработчик для FastAPI | `holahost/libs/holahost-errors/` | `lead-capture` §10.8 + `application/exceptions/` | плейсхолдер |
-| `holahost-observability` — structured JSON logging, allowlist полей, сквозной `X-Request-ID` | `holahost/libs/holahost-observability/` | `lead-capture` §10.5 | плейсхолдер |
-| `holahost-ratelimit` — in-memory limiter по `client_id`+`sub`, ответ 429 + `Retry-After` | `holahost/libs/holahost-ratelimit/` | нет: в `lead-capture` счётчики были в БД и по другим ключам | плейсхолдер |
-| Шаблон сервиса: дерево каталогов clean-arch, `Dockerfile`, `docker-compose.yml`, `.env.dev.example`, `alembic.ini` | `holahost/templates/service/` | структура `lead-capture/backend/` | плейсхолдер |
-| Базовый `pyproject.toml`: `ruff` (target `py312`, набор правил), `mypy` strict, контракт `import-linter` (`layers = ["interface","infrastructure","application","domain"]`), `pytest` | часть шаблона сервиса | `lead-capture` §13.1–13.2 | плейсхолдер |
-| Общие make-цели (`lint`, `format`, `typecheck`, `lint-imports`, `test`, `ci-local`, `dev-up`, `migrate`) | `holahost/make/common.mk`, подключается `include` из `Makefile` сервиса | `lead-capture/Makefile` | плейсхолдер |
-| Общие composite-actions CI (setup toolchain, build & push образа, smoke) | `holahost/.github/actions/` | `lead-capture` §13.4 | плейсхолдер |
+| Сущность | Где живёт | Статус |
+|---|---|---|
+| `holahost-auth` — мидлварь оффлайн-валидации JWT (подпись, claims, кэш JWKS, дисциплина 401/403) | `holahost/libs/holahost-auth/` | разрабатывается в объёме спеки `rag-documents` |
+| `holahost-errors` — envelope `{error:{code,message,details}}`, базовые классы ошибок, обработчик для FastAPI | `holahost/libs/holahost-errors/` | плейсхолдер |
+| `holahost-observability` — structured JSON logging, allowlist полей, сквозной `X-Request-ID` | `holahost/libs/holahost-observability/` | плейсхолдер |
+| `holahost-ratelimit` — in-memory limiter по `client_id`+`sub`, ответ 429 + `Retry-After` | `holahost/libs/holahost-ratelimit/` | плейсхолдер |
+| Шаблон сервиса: дерево каталогов clean-arch, `Dockerfile`, `docker-compose.yml`, `.env.dev.example`, `alembic.ini` | `holahost/templates/service/` | плейсхолдер |
+| Базовый `pyproject.toml`: `ruff` (target `py312`, набор правил), `mypy` strict, контракт `import-linter` (`layers = ["interface","infrastructure","application","domain"]`), `pytest` | часть шаблона сервиса | плейсхолдер |
+| Общие make-цели (`lint`, `format`, `typecheck`, `lint-imports`, `test`, `ci-local`, `dev-up`, `migrate`) | `holahost/make/common.mk`, подключается `include` из `Makefile` сервиса | плейсхолдер |
+| Общие composite-actions CI (setup toolchain, build & push образа, smoke) | `holahost/.github/actions/` | плейсхолдер |
 
 Репо-уровневые артефакты — общие для всех сервисов и уже существуют в корне репозитория:
 `.tool-versions` (версии тулчейна), `.pre-commit-config.yaml` (единый набор хуков, дублируется в CI),
