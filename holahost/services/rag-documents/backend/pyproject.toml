@@ -1,0 +1,56 @@
+[project]
+name = "rag-documents"
+version = "0.1.0"
+description = "RAG document ingestion and search microservice."
+requires-python = ">=3.12,<4.0"
+
+[tool.poetry]
+# Explicit src-layout packaging (app/domain -> importable as bare `domain`).
+# `package-mode = false` was tried first and reverted: it skips installing the
+# project's own code into the venv entirely, which works for pytest/mypy (they
+# have their own pythonpath/mypy_path settings) but leaves import-linter unable
+# to find `domain` at all — it has no config-level path option, only real
+# Python import resolution. Real packaging fixes that for every tool uniformly,
+# including a developer running `poetry run lint-imports` by hand.
+packages = [{ include = "domain", from = "app" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["app"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's whole assertion idiom is bare `assert`; S101 targets production code
+# where asserts get stripped under `-O`, not test files.
+"tests/*" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "app"
+
+[tool.importlinter]
+root_packages = ["domain"]
+# The real "layers" contract (interface/infrastructure/application/domain) is
+# added once a second layer exists — a single-layer list has nothing to check
+# import direction against yet.
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
