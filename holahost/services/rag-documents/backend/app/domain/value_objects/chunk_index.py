@@ -1,0 +1,26 @@
+"""A chunk's position within its document."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkIndex:
+    """A chunk's position within its document — >= 0 (spec §4.1).
+
+    Cross-chunk invariants ("unique, no gaps within the document") are a
+    whole-collection property this single-value VO cannot check — enforced
+    wherever the full chunk collection is assembled (chunker infra, R-16, or
+    the use case), not here.
+
+    :param value: The zero-based position.
+    """
+
+    value: int
+
+    def __post_init__(self) -> None:
+        # Chunker-computed, not client input — a negative value is an
+        # internal defect, so this stays a plain ValueError.
+        if self.value < 0:
+            raise ValueError("ChunkIndex must not be negative")
