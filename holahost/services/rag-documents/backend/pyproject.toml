@@ -12,7 +12,10 @@ requires-python = ">=3.12,<4.0"
 # to find `domain` at all — it has no config-level path option, only real
 # Python import resolution. Real packaging fixes that for every tool uniformly,
 # including a developer running `poetry run lint-imports` by hand.
-packages = [{ include = "domain", from = "app" }]
+packages = [
+    { include = "domain", from = "app" },
+    { include = "application", from = "app" },
+]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0"
@@ -25,7 +28,18 @@ import-linter = "^2.1"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["app"]
+# "app" resolves domain/application as bare imports; "." resolves `tests` itself as
+# a namespace package (PEP 420, no __init__.py needed) so `tests._support.*` test
+# helpers are importable — needed once application-layer tests share fakes/builders,
+# unlike the domain-layer tests, which don't cross files and got by without it.
+pythonpath = ["app", "."]
+# Default "prepend" mode inserts each test file's first __init__.py-less ancestor
+# directory into sys.path — with `tests/unit/application/{exceptions,dto}/` both
+# lacking one, that ancestor is `tests/unit/`, which then shadows the real
+# top-level `application` package with the *directory* `tests/unit/application/`.
+# importlib mode collects test files by exact path instead, sidestepping sys.path
+# entirely for collection (pytest's own recommended fix for this bug class).
+addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py312"
@@ -43,13 +57,33 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
-mypy_path = "app"
+mypy_path = ["app", "."]
+# Same bug class as pytest's --import-mode=importlib fix above, hit independently:
+# mypy has its own file-to-module resolution, unrelated to pytest's addopts, and by
+# default walks up through __init__.py-less directories the same way pytest's old
+# "prepend" mode did — `tests/unit/domain/test_exceptions.py` and
+# `tests/unit/application/exceptions/test_exceptions.py` both resolve to the bare
+# name `test_exceptions` and collide ("Duplicate module named..."). Fix: explicit,
+# path-based module names instead of the __init__.py-walk heuristic.
+namespace_packages = true
+explicit_package_bases = true
 
 [tool.importlinter]
-root_packages = ["domain"]
-# The real "layers" contract (interface/infrastructure/application/domain) is
-# added once a second layer exists — a single-layer list has nothing to check
-# import direction against yet.
+root_packages = ["domain", "application"]
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+# `interface`/`infrastructure` are wrapped in parentheses (import-linter's "optional
+# layer" syntax) because a `layers` contract fails outright if a *required* layer
+# module doesn't exist yet, and those two don't exist until later tickets (R-13, R-20).
+# Drop the parentheses once they land — no contract restructuring needed then.
+layers = [
+    "(interface)",
+    "(infrastructure)",
+    "application",
+    "domain",
+]
 
 [build-system]
 requires = ["poetry-core>=2.0"]

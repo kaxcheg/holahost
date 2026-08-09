@@ -1,6 +1,11 @@
+"""Tests for SimilarityScore (the concrete type in ports/vector.py; the VectorSearch
+Protocol itself has no runtime behavior to test)."""
+
+from __future__ import annotations
+
 import pytest
 
-from domain.value_objects.similarity_score import SimilarityScore
+from application.ports.vector import SimilarityScore
 
 
 class TestSimilarityScore:
