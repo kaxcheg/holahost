@@ -528,13 +528,18 @@ sequenceDiagram
 | `MimeType` | `str` | только значение из `ALLOWED_MIME_TYPES` |
 | `ChunkIndex` | `int` | ≥ 0; в пределах документа уникален и не имеет разрывов |
 | `PageNumber` | `int \| None` | если задан — ≥ 1; `None` для форматов без страниц |
-| `TextFragment` | `(text: str, page: PageNumber)` | непустой текст с провенансом; используется на обеих стадиях пайплайна — парсер отдаёт фрагменты размером со страницу, чанкер режет их до размера окна |
 | `Embedding` | `tuple[float, ...]` | длина = `EMBEDDING_DIM`; все значения конечны (без `NaN`/`inf`); L2-норма = 1 с допуском 1e-6 |
-| `SimilarityScore` | `float` | в диапазоне −1…1 (косинус на нормализованных векторах) |
 
 Нормализация `Embedding` — инвариант, а не операция вызывателя: конструктор принимает уже
 нормализованный вектор и отвергает остальные, поэтому косинус в поиске сводится к скалярному
 произведению и «забыть нормализовать» невозможно.
+
+`TextFragment` и `SimilarityScore` в этот список не входят — обе структуры оказались
+application-слоя, не домена. Тест простой: становится ли значение полем `Document`/`Chunk`? Нет
+у обеих: `TextFragment (text, page)` — только пайплайновая передача данных между `FileParser` и
+`TextChunker` (§8.0), `Chunk` хранит `text`/`page` отдельными полями, а не вложенным
+`TextFragment`; `SimilarityScore` явно не поле сущности (§4.4). Определены в `application/ports/`
+рядом со своими портами.
 
 ### 4.2 `Document`
 
@@ -577,8 +582,9 @@ sequenceDiagram
 ### 4.4 Что сущностями не является
 
 `SearchQuery` и результат поиска не моделируются как доменные сущности: у запроса нет идентичности и
-жизненного цикла, он живёт внутри одного вызова. Оценка сходства (`SimilarityScore`) принадлежит паре
-«запрос ↔ чанк», а не чанку, и возвращается рядом с ним, не становясь его полем.
+жизненного цикла, он живёт внутри одного вызова. Оценка сходства (`SimilarityScore`, application-слой
+— см. §4.1) принадлежит паре «запрос ↔ чанк», а не чанку, и возвращается рядом с ним, не становясь
+его полем.
 
 ---
 
@@ -845,14 +851,21 @@ GET /health          # без авторизации
 
 | Код | HTTP | Когда | `details` | Повторять? |
 |---|---|---|---|---|
-| `ERR_INVALID_PAYLOAD` | 400 | пустое или слишком длинное имя, пустой или слишком длинный запрос, отсутствующее поле | `field`, `limit` | нет |
+| `ERR_INVALID_PAYLOAD` | 400 | пустое или слишком длинное имя, пустой или слишком длинный запрос, отсутствующее поле, файл повреждён или не разбирается (`DocumentParseError`) | `field`, `limit` | нет |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | MIME вне `ALLOWED_MIME_TYPES` | `allowed` | нет |
-| `ERR_PAYLOAD_TOO_LARGE` | 413 | файл больше `MAX_UPLOAD_SIZE` либо текст длиннее `MAX_PARSED_TEXT_LENGTH` | `limit`, `actual` | нет |
+| `ERR_PAYLOAD_TOO_LARGE` | 413 | файл больше `MAX_UPLOAD_SIZE` — проверка **до** парсинга | `limit`, `actual` | нет |
+| `ERR_PAYLOAD_TOO_LARGE` | 422 | текст после парсинга длиннее `MAX_PARSED_TEXT_LENGTH` — проверка **после** парсинга | `limit`, `actual` | нет |
 | `ERR_EMPTY_DOCUMENT` | 422 | извлечено меньше `MIN_EXTRACTED_TEXT_CHARS` | `min_chars` | нет |
 | `ERR_TOO_MANY_CHUNKS` | 422 | чанков больше `MAX_CHUNKS_PER_DOCUMENT` | `limit`, `actual` | нет |
 | `ERR_NOT_FOUND` | 404 | документа нет либо он принадлежит другому субъекту | — | нет |
 | `ERR_RATE_LIMIT` | 429 | превышен per-caller лимит; заголовок `Retry-After` обязателен | `retry_after_seconds` | да, после паузы |
 | `ERR_INTERNAL` | 500 | необработанная ошибка | — | да, однократно |
+
+`ERR_PAYLOAD_TOO_LARGE` встречается дважды с разными статусами — это два разных исключения
+(`UploadTooLargeError`/`ParsedTextTooLargeError`, §8.0) с одним wire-кодом: код описывает *факт*
+для клиента («слишком большой»), а статус — *момент* проверки (413 до парсинга, дёшево; 422 после
+парсинга, уже потрачен CPU на разбор файла). Обработчик интерфейсного слоя (R-22) различает их по
+типу исключения, не по коду.
 
 `401` и `403` тела с кодом не имеют: `401` не раскрывает причину (не помогаем перебору), `403`
 означает только «токен валиден, прав нет». Обе дисциплины принадлежат общей библиотеке авторизации.
@@ -868,6 +881,16 @@ GET /health          # без авторизации
 Типы-Protocol'ы из `application/ports/`; реализации — в `infrastructure/`, сборка — в `scripts/`.
 
 ```python
+# TextFragment и SimilarityScore — application-слоя, не домена (§4.1): обе структуры не
+# становятся полем Document/Chunk, а только переносят значение между портами/этапами пайплайна.
+
+class TextFragment:
+    """Текст с провенансом страницы. Один и тот же тип на обоих этапах пайплайна:
+    выход FileParser (фрагмент размером со страницу) и выход TextChunker (фрагмент
+    размером с окно)."""
+    text: str
+    page: PageNumber
+
 class FileParser(Protocol):
     def parse(self, content: bytes, mime_type: MimeType) -> list[TextFragment]: ...
     # фрагмент размером со страницу
@@ -886,10 +909,14 @@ class EmbeddingModel(Protocol):
     #              вызовы приходят из разных потоков пула (A-9)
 
 class DocumentsRepo(Protocol):
-    def add(self, document: Document) -> None: ...
+    # каждый метод берёт owner явно, даже когда его несёт сам аргумент (document.owner) —
+    # контракт обоих репо: фильтрация по owner, и explicit-параметр — единственное, что
+    # реализация не может случайно забыть использовать (альтернатива — .scoped(owner)-фабрика
+    # или публичное поле repo.owner — рассмотрены и отклонены, см. clarifications.md)
+    def add(self, document: Document, owner: OwnerSubject) -> None: ...
     def get(self, document_id: DocumentId, owner: OwnerSubject,
             *, lock: bool = False) -> Document | None: ...
-    def update(self, document: Document) -> None: ...
+    def update(self, document: Document, owner: OwnerSubject) -> None: ...
     def delete(self, document_id: DocumentId, owner: OwnerSubject) -> None: ...
     # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError
     # lock: `lock=True` удерживает строку документа до конца транзакции. Обязателен для замены и
@@ -898,12 +925,24 @@ class DocumentsRepo(Protocol):
     #       согласованность снимка обеспечивает сама транзакция.
 
 class ChunksRepo(Protocol):
-    def add_many(self, chunks: list[Chunk]) -> None: ...
-    def delete_by_document(self, document_id: DocumentId) -> None: ...
+    def add_many(self, chunks: list[Chunk], owner: OwnerSubject) -> None: ...
+    def delete_by_document(self, document_id: DocumentId, owner: OwnerSubject) -> None: ...
+    # owner здесь — defense in depth (Chunk своего owner не хранит): ограничивает запись/удаление
+    # чанками документа, реально принадлежащего owner, на случай если проверка владения в юзкейсе
+    # была пропущена
     # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError
     # lock: собственных блокировок не берут — вызываются внутри транзакции, уже удерживающей
     #       строку документа; вызов вне такой транзакции — ошибка использования
 
+class SimilarityScore:
+    """Косинусное сходство двух L2-нормализованных векторов, диапазон [-1, 1]. Значение,
+    привязанное к паре запрос↔чанк, а не к самому Chunk — не становится его полем."""
+    value: float
+
+# VectorSearch — CQRS-lite read-side Chunk'а (ChunksRepo — write-side, одна БД/схема, не
+# отдельное хранилище): вычисление косинусного сходства выполняет pgvector на стороне БД
+# (A-2), поэтому порт принимает document_id, а не список чанков — юзкейс не тянет чанки
+# из ChunksRepo, чтобы передать их сюда.
 class VectorSearch(Protocol):
     def top_k(self, document_id: DocumentId, query: Embedding,
               k: int, threshold: float) -> list[SearchHit]: ...
@@ -911,21 +950,34 @@ class VectorSearch(Protocol):
     # Это проекция, а не дубль Chunk: вернуть сам Chunk нельзя — его инвариант обязывает нести
     # вектор, а отдавать вектор наружу и тянуть его из БД на каждый поиск незачем.
     # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError
-    # lock: не берётся; конкурентная замена документа видна атомарно — до её коммита поиск
-    #       возвращает прежний набор чанков, после — новый, смеси не бывает
+    # lock: не берётся; поиск не блокируется на конкурентной замене документа — конкурентная
+    #       замена видна атомарно: до её коммита поиск возвращает прежний набор чанков, после —
+    #       новый, смеси не бывает
 
 class UnitOfWork(Protocol):
     def __enter__(self) -> "UnitOfWork": ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
+    # __exit__: коммит при чистом выходе, откат и re-raise при исключении
     # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError на commit
     # lock: границы транзакции задаёт он; блокировки, взятые внутри, держатся до commit/rollback
 
+# RateLimiter — мидлварь вызывает его до входа в юзкейс (§8.1 шаг 3), не use case сам.
+# Остаётся портом application-слоя: кодирует бизнес-правило (per-bucket квоты, US-R08), а не
+# деталь хранилища — та же логика, что и для holahost-auth (LIB-01) как отдельной библиотеки, а
+# не inline-кода мидлвари. Реализуется в тикете R-18 (in-memory per-bucket счётчики); общей
+# платформенной либой пока не становится — счётчики намеренно process-local (A-8).
 class RateLimiter(Protocol):
     def check(self, client_id: str, subject: str, bucket: str) -> None: ...
     # raises: RateLimitExceededError (несёт retry_after)
-    # concurrency: счётчик в памяти процесса; проверка и инкремент выполняются атомарно
-    #              относительно других потоков пула, иначе лимит протекает под нагрузкой
+    # concurrency: check-and-increment должен быть атомарным — счётчик защищён локом
+    #              (например, threading.Lock на bucket-ключ) или атомарным примитивом;
+    #              иначе два конкурентных запроса читают одно pre-increment-значение и оба
+    #              проходят, лимит протекает. Не сравним по цене с отказом от блокировки строки
+    #              в top_k: это in-process мьютекс вокруг инкремента целого числа (наносекунды,
+    #              без сети), а не кросс-транзакционная блокировка, чьё время ожидания зависит
+    #              от чужого round trip к БД.
 ```
 
 Сигнатуры следуют общей конвенции проекта: запрос возвращает объект, `None` или список;
@@ -942,6 +994,13 @@ class RateLimiter(Protocol):
 
 `FileParser` и `EmbeddingModel` не участвуют в транзакции — они вызываются до её открытия, чтобы
 секунды CPU не удерживали соединение и блокировки.
+
+Классы исключений application-слоя несут только `code` и `details_dict()` — без HTTP-статуса:
+статус — деталь HTTP-протокола и принадлежит обработчику ошибок интерфейсного слоя (тикет R-22, ещё
+не реализован), который сопоставляет **тип** исключения статусу (`@app.exception_handler(SpecificType)`
+в идиоме FastAPI), а не `code` статусу — `ERR_PAYLOAD_TOO_LARGE` требует двух разных статусов в
+зависимости от того, какой из `UploadTooLargeError`/`ParsedTextTooLargeError` брошен, а сопоставление
+по типу решает это без дополнительной логики.
 
 ### 8.1 Общий контур запроса
 
@@ -965,15 +1024,15 @@ class RateLimiter(Protocol):
 |---|---|---|
 | 1.1 | `domain.value_objects.MimeType(cmd.mime_type)` | MIME определён по содержимому и сверен с whitelist; иначе `UnsupportedMediaTypeError` |
 | 1.2 | `domain.value_objects.DocumentName(cmd.name)` | длина и непустота; иначе `InvalidPayloadError` |
-| 1.3 | проверка `len(cmd.content) <= MAX_UPLOAD_SIZE` | иначе `PayloadTooLargeError` |
-| 1.4 | `FileParser.parse(cmd.content, mime) -> list[TextFragment]` | текст с провенансом страниц, всё в памяти |
-| 1.5 | проверка суммарной длины и `MIN_EXTRACTED_TEXT_CHARS` | иначе `EmptyDocumentError` / `PayloadTooLargeError` |
+| 1.3 | проверка `len(cmd.content) <= MAX_UPLOAD_SIZE` | иначе `UploadTooLargeError` (413, проверка до парсинга) |
+| 1.4 | `FileParser.parse(cmd.content, mime) -> list[TextFragment]` | текст с провенансом страниц, всё в памяти; парсер сам бросает `UnsupportedMediaTypeError`/`DocumentParseError`, юзкейс их не транслирует |
+| 1.5 | проверка суммарной длины и `MIN_EXTRACTED_TEXT_CHARS` | иначе `EmptyDocumentError` / `ParsedTextTooLargeError` (422, проверка после парсинга) |
 | 1.6 | `TextChunker.split(fragments) -> list[TextFragment]` | окно и перекрытие по токенайзеру модели |
 | 1.7 | проверка `len(fragments) <= MAX_CHUNKS_PER_DOCUMENT` | иначе `TooManyChunksError` |
 | 1.8 | `EmbeddingModel.embed_texts([f.text for f in fragments]) -> list[Embedding]` | самый дорогой шаг, вне транзакции |
 | 1.9 | `Document.create(owner, name, mime, chunk_count) -> Document` | инварианты сущности |
 | 1.10 | `Chunk.create(document.id, index, fragment, embedding) -> Chunk` для каждого | `index` — позиция во списке фрагментов |
-| 1.11 | `with UnitOfWork(): DocumentsRepo.add(document); ChunksRepo.add_many(chunks)` | одна транзакция; ошибка → откат, документа не существует |
+| 1.11 | `with UnitOfWork(): DocumentsRepo.add(document, owner); ChunksRepo.add_many(chunks, owner)` | одна транзакция; ошибка → откат, документа не существует |
 | 1.12 | `DocumentView.of(document)` | |
 
 ### 8.3 UC-R2 «Заменить документ»
@@ -984,9 +1043,9 @@ class RateLimiter(Protocol):
 |---|---|---|
 | 2.1 | `DocumentsRepo.get(document_id, owner)` — без блокировки | `None` → `NotFoundError` (чужой и несуществующий неразличимы). Дешёвая проверка до пайплайна, чтобы не тратить эмбеддинг впустую |
 | 2.2–2.7 | шаги 1.1, 1.3–1.8 | тот же пайплайн до открытия транзакции |
-| 2.8 | `document.rename(new_name)` / `document.touch(chunk_count)` | обновление изменяемых полей сущности |
+| 2.8 | `document.rename(new_name)` / `document.replace_content(mime_type, chunk_count)` | обновление изменяемых полей сущности |
 | 2.9 | `with UnitOfWork(): DocumentsRepo.get(document_id, owner, lock=True)` | блокировка берётся **после** пайплайна, поэтому транзакция короткая (A-6). Повторная проверка обязательна: документ мог быть удалён или заменён, пока считались эмбеддинги; `None` → `NotFoundError` |
-| 2.10 | в той же транзакции: `ChunksRepo.delete_by_document(id)`; `ChunksRepo.add_many(new)`; `DocumentsRepo.update(document)` | вторая конкурентная замена ждёт на блокировке и работает уже с новым состоянием; конкурентный поиск до коммита видит прежнюю версию |
+| 2.10 | в той же транзакции: `ChunksRepo.delete_by_document(id, owner)`; `ChunksRepo.add_many(new, owner)`; `DocumentsRepo.update(document, owner)` | вторая конкурентная замена ждёт на блокировке и работает уже с новым состоянием; конкурентный поиск до коммита видит прежнюю версию |
 | 2.11 | `DocumentView.of(document)` | `document_id` прежний |
 
 ### 8.4 UC-R3 «Найти фрагменты»
@@ -1003,9 +1062,11 @@ class RateLimiter(Protocol):
 
 ### 8.5 UC-R4 и UC-R5
 
-`GetDocumentUseCase.execute(document_id, owner) -> DocumentView` — шаг 3.1 и возврат представления.
-`DeleteDocumentUseCase.execute(document_id, owner) -> None` — в одной транзакции
+`GetDocumentUseCase.execute(cmd: GetDocumentCmd) -> DocumentView` — шаг 3.1 и возврат представления.
+`DeleteDocumentUseCase.execute(cmd: DeleteDocumentCmd) -> None` — в одной транзакции
 `DocumentsRepo.get(..., lock=True)`, `None` → `NotFoundError`, затем `DocumentsRepo.delete(...)`.
+`GetDocumentCmd`/`DeleteDocumentCmd = (document_id: str, owner: str)` — выделены как отдельные DTO
+ради единообразия с Cmd-паттерном UC-R1–UC-R3, а не потому что параметров тут больше двух.
 Пайплайна здесь нет, поэтому блокировка берётся сразу и транзакция всё равно короткая. Чанки уходят
 каскадом, отдельного вызова `ChunksRepo` нет. Конкурентная замена ждёт на той же блокировке: она
 либо успеет до удаления, либо получит `NotFoundError` на своей повторной проверке.
@@ -1014,13 +1075,14 @@ class RateLimiter(Protocol):
 
 | Исключение порта | Кто обрабатывает | Как |
 |---|---|---|
-| `UnsupportedMediaTypeError`, `DocumentParseError` | use case | транслирует в доменную ошибку ingest — наружу `415` либо `422` |
+| `UnsupportedMediaTypeError`, `DocumentParseError` | `FileParser.parse` бросает напрямую | use case не транслирует и не перехватывает — оба уже являются `ApplicationError`-типами (§8.0); наружу `415` либо `400` через type-based dispatch обработчика (R-22) |
 | `EmbeddingFailedError` | **никто по пути** — осознанный пропуск | наружу `500 ERR_INTERNAL`; сбой модели не восстановим повтором в рамках запроса и не должен маскироваться |
 | `ConcurrentUpdateError` | use case | транзакция замены или удаления повторяется целиком, но **не более двух раз** — конкурентная замена того же документа встречается и обязана завершаться, а не отдавать `500`. Пайплайн при этом не пересчитывается: векторы уже готовы |
 | `StorageUnavailableError` | осознанный пропуск до обработчика | наружу `500 ERR_INTERNAL`; повтор внутри запроса бессмыслен |
 | `IntegrityError` | осознанный пропуск до обработчика | наружу `500 ERR_INTERNAL`; это дефект — инварианты сущностей или блокировка должны были снять конфликт раньше |
 | `RateLimitExceededError` | мидлварь, до use case | `429` + `Retry-After` из самого исключения |
-| `NotFoundError` (доменное, не порт) | обработчик | `404` |
+| `NotFoundError` (application, не порт) | обработчик | `404` |
+| голый `ValueError` (VO-инварианты, вкл. `TextFragment`/`SimilarityScore` — application-слой, §4.1) | декоратор use case `wrap_value_error` | перехватывает и перевызывает как базовый `ApplicationError` (`code=ERR_INTERNAL`), `from e` — наружу `500`; вызывающий код видит только `ApplicationError`-типы, никогда голый `ValueError` |
 
 ### 8.7 Технические метрики
 
@@ -1096,13 +1158,13 @@ op_completed { request_id, route, outcome, duration_ms,
 
 ### Backend — Domain
 
-- `R-01` Value objects — идентификаторы, `OwnerSubject`, `DocumentName`, `MimeType`, `ChunkIndex`, `PageNumber`, `TextFragment`, `Embedding` с проверкой размерности и нормы, `SimilarityScore`
+- `R-01` Value objects — идентификаторы, `OwnerSubject`, `DocumentName`, `MimeType`, `ChunkIndex`, `PageNumber`, `Embedding` с проверкой размерности и нормы
 - `R-02` Сущности `Document` и `Chunk` — фабричные методы и инварианты §4.2–4.3
 - `R-03` Доменные исключения
 
 ### Backend — Application
 
-- `R-04` Порты §8.0 — протоколы с объявленными `raises` и контрактом конкурентности
+- `R-04` Порты §8.0 — протоколы с объявленными `raises` и контрактом конкурентности; включает `TextFragment` и `SimilarityScore` (application-слой, не домен — §4.1)
 - `R-05` DTO — команды use case'ов и `DocumentView`
 - `R-06` Application-исключения и их соответствие кодам `ERR_*`
 - `R-07` UC-R1 — создание документа
