@@ -1,7 +1,12 @@
+"""Tests for TextFragment (the concrete type in ports/ingestion.py; the FileParser/
+TextChunker Protocols themselves have no runtime behavior to test)."""
+
+from __future__ import annotations
+
 import pytest
 
+from application.ports.ingestion import TextFragment
 from domain.value_objects.page_number import PageNumber
-from domain.value_objects.text_fragment import TextFragment
 
 
 class TestTextFragment:
