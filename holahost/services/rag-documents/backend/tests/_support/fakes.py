@@ -5,13 +5,15 @@ from __future__ import annotations
 from types import TracebackType
 
 from application.ports.ingestion import TextFragment
-from application.ports.vector import SearchHit
-from domain.entities.chunk import Chunk
+from application.ports.repos import DocumentsRepo
+from application.ports.vector import SearchHit, VectorSearch
 from domain.entities.document import Document
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.embedding import Embedding
 from domain.value_objects.mime_type import MimeType
 from domain.value_objects.owner_subject import OwnerSubject
+
+_DEFAULT_OWNER = OwnerSubject("user-123")  # matches every test command's owner in this suite
 
 
 class FakeFileParser:
@@ -52,63 +54,70 @@ class FakeEmbeddingModel:
         return self._embedding
 
 
-class FakeDocumentsRepo:
-    """In-memory ``DocumentsRepo`` keyed by document id, owner-scoped reads."""
+class FakeDocumentsRepo(DocumentsRepo):
+    """In-memory ``DocumentsRepo``, owner bound at construction like the real
+    adapter — defaults to ``_DEFAULT_OWNER`` since every command in this test suite
+    uses that owner, so most call sites never need to pass one explicitly.
 
-    def __init__(self, documents: list[Document] | None = None) -> None:
+    Also implements ``DocumentsRepoFactory`` via ``__call__``: an instance can be
+    passed directly wherever a use case expects a factory (``owner`` is already
+    bound, so the call just returns ``self``), no separate factory needed in tests.
+    """
+
+    def __init__(
+        self, documents: list[Document] | None = None, *, owner: OwnerSubject = _DEFAULT_OWNER
+    ) -> None:
+        super().__init__(uow=FakeUnitOfWork(), owner=owner)
         self._by_id: dict[DocumentId, Document] = {d.id: d for d in (documents or [])}
         self.added: list[Document] = []
         self.updated: list[Document] = []
         self.deleted: list[DocumentId] = []
 
-    def add(self, document: Document, owner: OwnerSubject) -> None:
-        assert document.owner == owner, "add() called with mismatched owner"
+    def __call__(self, owner: OwnerSubject) -> DocumentsRepo:
+        return self
+
+    def _bind_owner(self) -> None:
+        pass  # no real RLS to simulate — filtering below is against self._owner directly
+
+    def _add_impl(self, document: Document) -> None:
+        assert document.owner == self._owner, "add() called with mismatched owner"
         self._by_id[document.id] = document
         self.added.append(document)
 
-    def get(
-        self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-    ) -> Document | None:
+    def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None:
         document = self._by_id.get(document_id)
-        if document is None or document.owner != owner:
+        if document is None or document.owner != self._owner:
             return None
         return document
 
-    def update(self, document: Document, owner: OwnerSubject) -> None:
-        assert document.owner == owner, "update() called with mismatched owner"
+    def _update_impl(self, document: Document) -> None:
+        assert document.owner == self._owner, "update() called with mismatched owner"
         self._by_id[document.id] = document
         self.updated.append(document)
 
-    def delete(self, document_id: DocumentId, owner: OwnerSubject) -> None:
-        del self._by_id[document_id]
+    def _delete_impl(self, document_id: DocumentId) -> None:
+        self._by_id.pop(document_id, None)
         self.deleted.append(document_id)
 
 
-class FakeChunksRepo:
-    """In-memory ``ChunksRepo`` keyed by document id."""
+class FakeVectorSearch(VectorSearch):
+    """Returns a preset list of hits regardless of the query. Owner bound at
+    construction like ``FakeDocumentsRepo``; also usable directly as a
+    ``VectorSearchFactory`` via ``__call__``."""
 
-    def __init__(self) -> None:
-        self._by_document: dict[DocumentId, list[Chunk]] = {}
-        self.added: list[Chunk] = []
-        self.deleted_documents: list[DocumentId] = []
-
-    def add_many(self, chunks: list[Chunk], owner: OwnerSubject) -> None:
-        for chunk in chunks:
-            self._by_document.setdefault(chunk.document_id, []).append(chunk)
-        self.added.extend(chunks)
-
-    def delete_by_document(self, document_id: DocumentId, owner: OwnerSubject) -> None:
-        self._by_document.pop(document_id, None)
-        self.deleted_documents.append(document_id)
-
-
-class FakeVectorSearch:
-    """Returns a preset list of hits regardless of the query."""
-
-    def __init__(self, hits: list[SearchHit] | None = None) -> None:
+    def __init__(
+        self, hits: list[SearchHit] | None = None, *, owner: OwnerSubject = _DEFAULT_OWNER
+    ) -> None:
+        super().__init__(uow=FakeUnitOfWork(), owner=owner)
         self._hits = hits if hits is not None else []
 
-    def top_k(
+    def __call__(self, owner: OwnerSubject) -> VectorSearch:
+        return self
+
+    def _bind_owner(self) -> None:
+        pass
+
+    def _top_k_impl(
         self, document_id: DocumentId, query: Embedding, k: int, threshold: float
     ) -> list[SearchHit]:
         return self._hits

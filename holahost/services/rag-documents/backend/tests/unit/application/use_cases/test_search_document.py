@@ -6,7 +6,12 @@ import uuid
 
 import pytest
 from tests._support.builders import make_document, make_embedding
-from tests._support.fakes import FakeDocumentsRepo, FakeEmbeddingModel, FakeVectorSearch
+from tests._support.fakes import (
+    FakeDocumentsRepo,
+    FakeEmbeddingModel,
+    FakeUnitOfWork,
+    FakeVectorSearch,
+)
 
 from application.dto.search import SearchCmd
 from application.exceptions import InvalidPayloadError, NotFoundError
@@ -23,9 +28,10 @@ def _uc(
     documents_repo: FakeDocumentsRepo, vector_search: FakeVectorSearch | None = None
 ) -> SearchDocumentUseCase:
     return SearchDocumentUseCase(
-        documents_repo=documents_repo,
+        documents_repo_factory=documents_repo,
         embedder=FakeEmbeddingModel(make_embedding()),
-        vector_search=vector_search or FakeVectorSearch(),
+        vector_search_factory=vector_search or FakeVectorSearch(),
+        uow=FakeUnitOfWork(),
     )
 
 
@@ -85,7 +91,7 @@ class TestSearchDocumentUseCase:
         captured: dict[str, object] = {}
 
         class _CapturingVectorSearch(FakeVectorSearch):
-            def top_k(
+            def _top_k_impl(
                 self, document_id: DocumentId, query: Embedding, k: int, threshold: float
             ) -> list[SearchHit]:
                 captured["k"] = k

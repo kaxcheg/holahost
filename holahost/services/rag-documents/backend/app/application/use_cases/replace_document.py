@@ -17,7 +17,7 @@ from application.exceptions import (
 from application.limits import MAX_PARSED_TEXT_LENGTH, MAX_UPLOAD_SIZE, MIN_EXTRACTED_TEXT_CHARS
 from application.ports.embedding import EmbeddingModel
 from application.ports.ingestion import FileParser, TextChunker
-from application.ports.repos import ChunksRepo, DocumentsRepo
+from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.use_cases._internal_errors import wrap_value_error
 from application.use_cases._retry import retry_on_concurrent_update
@@ -38,8 +38,7 @@ class ReplaceDocumentUseCase:
     parser: FileParser
     chunker: TextChunker
     embedder: EmbeddingModel
-    documents_repo: DocumentsRepo
-    chunks_repo: ChunksRepo
+    documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
 
     @wrap_value_error
@@ -68,12 +67,16 @@ class ReplaceDocumentUseCase:
         """
         owner = OwnerSubject(cmd.owner)
         document_id = DocumentId.from_str(cmd.document_id)
+        documents_repo = self.documents_repo_factory(owner)
 
         # Unlocked pre-check: cheap, may be stale — re-verified under lock below,
         # so a false positive here just means wasted pipeline work, not corruption.
-        existing = self.documents_repo.get(document_id, owner)
-        if existing is None:
-            raise NotFoundError
+        # Still runs inside a transaction — every DocumentsRepo call does (§8.0) —
+        # a short one of its own, distinct from the locked write's transaction below.
+        with self.uow:
+            existing = documents_repo.get(document_id)
+            if existing is None:
+                raise NotFoundError
 
         try:
             mime_type = MimeType(cmd.mime_type)
@@ -113,20 +116,18 @@ class ReplaceDocumentUseCase:
             with self.uow:
                 # Locked re-check: guards against a concurrent replace/delete that
                 # landed between the pre-check above and here.
-                document = self.documents_repo.get(document_id, owner, lock=True)
+                document = documents_repo.get(document_id, lock=True)
                 if document is None:
                     raise NotFoundError
                 if new_name is not None:
                     document.rename(new_name)
                 try:
-                    document.replace_content(mime_type, len(chunks))
+                    document.replace_content(mime_type, new_chunks)
                 except DomainValidationError:
                     raise TooManyChunksError(
                         limit=MAX_CHUNKS_PER_DOCUMENT, actual=len(chunks)
                     ) from None
-                self.chunks_repo.delete_by_document(document_id, owner)
-                self.chunks_repo.add_many(new_chunks, owner)
-                self.documents_repo.update(document, owner)
+                documents_repo.update(document)
                 return document
 
         document = retry_on_concurrent_update(_write)

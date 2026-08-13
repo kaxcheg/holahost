@@ -14,28 +14,27 @@ from application.ports.exceptions import ConcurrentUpdateError
 from application.use_cases.delete_document import DeleteDocumentUseCase
 from domain.entities.document import Document
 from domain.value_objects.document_id import DocumentId
-from domain.value_objects.owner_subject import OwnerSubject
 
 
 class TestDeleteDocumentUseCase:
     def test_deletes_document(self) -> None:
         existing = make_document(owner="user-123")
         documents_repo = FakeDocumentsRepo([existing])
-        uc = DeleteDocumentUseCase(documents_repo=documents_repo, uow=FakeUnitOfWork())
+        uc = DeleteDocumentUseCase(documents_repo_factory=documents_repo, uow=FakeUnitOfWork())
 
         uc.execute(DeleteDocumentCmd(document_id=str(existing.id), owner="user-123"))
 
         assert documents_repo.deleted == [existing.id]
 
     def test_missing_document_raises_not_found(self) -> None:
-        uc = DeleteDocumentUseCase(documents_repo=FakeDocumentsRepo(), uow=FakeUnitOfWork())
+        uc = DeleteDocumentUseCase(documents_repo_factory=FakeDocumentsRepo(), uow=FakeUnitOfWork())
         with pytest.raises(NotFoundError):
             uc.execute(DeleteDocumentCmd(document_id=str(uuid.uuid4()), owner="user-123"))
 
     def test_repeated_delete_is_idempotent_by_effect(self) -> None:
         existing = make_document(owner="user-123")
         documents_repo = FakeDocumentsRepo([existing])
-        uc = DeleteDocumentUseCase(documents_repo=documents_repo, uow=FakeUnitOfWork())
+        uc = DeleteDocumentUseCase(documents_repo_factory=documents_repo, uow=FakeUnitOfWork())
         cmd = DeleteDocumentCmd(document_id=str(existing.id), owner="user-123")
 
         uc.execute(cmd)
@@ -50,17 +49,15 @@ class TestDeleteDocumentUseCase:
                 super().__init__([existing])
                 self._locked_gets = 0
 
-            def get(
-                self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-            ) -> Document | None:
+            def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None:
                 if lock:
                     self._locked_gets += 1
                     if self._locked_gets == 1:
                         raise ConcurrentUpdateError
-                return super().get(document_id, owner, lock=lock)
+                return super()._get_impl(document_id, lock=lock)
 
         documents_repo = _FlakyDocumentsRepo()
-        uc = DeleteDocumentUseCase(documents_repo=documents_repo, uow=FakeUnitOfWork())
+        uc = DeleteDocumentUseCase(documents_repo_factory=documents_repo, uow=FakeUnitOfWork())
         uc.execute(DeleteDocumentCmd(document_id=str(existing.id), owner="user-123"))
         assert documents_repo.deleted == [existing.id]
 
@@ -68,14 +65,12 @@ class TestDeleteDocumentUseCase:
         existing = make_document(owner="user-123")
 
         class _AlwaysConflictingDocumentsRepo(FakeDocumentsRepo):
-            def get(
-                self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-            ) -> Document | None:
+            def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None:
                 if lock:
                     raise ConcurrentUpdateError
-                return super().get(document_id, owner, lock=lock)
+                return super()._get_impl(document_id, lock=lock)
 
         documents_repo = _AlwaysConflictingDocumentsRepo([existing])
-        uc = DeleteDocumentUseCase(documents_repo=documents_repo, uow=FakeUnitOfWork())
+        uc = DeleteDocumentUseCase(documents_repo_factory=documents_repo, uow=FakeUnitOfWork())
         with pytest.raises(ConcurrentUpdateError):
             uc.execute(DeleteDocumentCmd(document_id=str(existing.id), owner="user-123"))

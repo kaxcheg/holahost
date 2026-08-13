@@ -15,16 +15,32 @@ requires-python = ">=3.12,<4.0"
 packages = [
     { include = "domain", from = "app" },
     { include = "application", from = "app" },
+    { include = "infrastructure", from = "app" },
+    { include = "config", from = "app" },
 ]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0"
+sqlalchemy = "^2.0"
+psycopg = {extras = ["binary", "pool"], version = "^3.2"}
+alembic = "^1.14"
+pgvector = ">=0.3,<1.0"
+fastembed = ">=0.4,<1.0"
+numpy = ">=2.4,<3"
+langchain-text-splitters = ">=0.3,<1.0"
+pymupdf = ">=1.24,<2"
+python-docx = "^1.1"
+boto3 = "^1.35"
+pydantic-settings = "^2.7"
+python-json-logger = "^3.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
 ruff = "^0.8"
 mypy = "^1.13"
 import-linter = "^2.1"
+testcontainers = {extras = ["postgres"], version = "^4.9"}
+boto3-stubs = {extras = ["secretsmanager"], version = "^1.35"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -40,6 +56,9 @@ pythonpath = ["app", "."]
 # importlib mode collects test files by exact path instead, sidestepping sys.path
 # entirely for collection (pytest's own recommended fix for this bug class).
 addopts = "--import-mode=importlib"
+markers = [
+    "integration: requires a real Postgres via testcontainers (Docker); excluded from the fast unit run",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -51,13 +70,20 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
 
 [tool.ruff.lint.per-file-ignores]
 # pytest's whole assertion idiom is bare `assert`; S101 targets production code
-# where asserts get stripped under `-O`, not test files.
-"tests/*" = ["S101"]
+# where asserts get stripped under `-O`, not test files. S105/S106/S107 (hardcoded
+# password/secret string checks) are ignored here too: tests exercise the secret-
+# loading adapter with fake secret literals, which read identically to a real leak
+# to that checker.
+"tests/*" = ["S101", "S105", "S106", "S107"]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
 mypy_path = ["app", "."]
+# Without this, mypy treats every pydantic-settings field as a required constructor
+# kwarg (it doesn't know BaseSettings populates them from os.environ, not __init__
+# args) — matches ~/repos/lead-capture's own pyproject.toml, which hit the same issue.
+plugins = ["pydantic.mypy"]
 # Same bug class as pytest's --import-mode=importlib fix above, hit independently:
 # mypy has its own file-to-module resolution, unrelated to pytest's addopts, and by
 # default walks up through __init__.py-less directories the same way pytest's old
@@ -68,19 +94,42 @@ mypy_path = ["app", "."]
 namespace_packages = true
 explicit_package_bases = true
 
+# python-docx / pymupdf / langchain_text_splitters ship no type stubs; strict = true
+# otherwise treats a missing-stub import as an error. fastembed does NOT belong here
+# — it ships a real py.typed marker + full annotations (verified: `mypy --strict` on
+# a standalone `reveal_type(TextEmbedding().embed(...))` resolves a precise
+# Iterable[NDArray[...]] union with no override at all).
+[[tool.mypy.overrides]]
+module = ["docx.*", "pymupdf.*", "langchain_text_splitters.*"]
+ignore_missing_imports = true
+
+# python-docx and pymupdf ship partial/incomplete stubs (not just "no stubs at all" —
+# ignore_missing_imports above covers that case): some of their own calls are
+# themselves untyped. strict = true's disallow_untyped_calls flags this at the CALL
+# SITE, so the override targets our own modules that call into them, not the
+# third-party modules themselves (a per-module override only changes how mypy checks
+# files belonging to that module — docx/pymupdf source isn't part of this project).
+[[tool.mypy.overrides]]
+module = ["infrastructure.ingestion.*", "tests.unit.infrastructure.ingestion.*"]
+disallow_untyped_calls = false
+
 [tool.importlinter]
-root_packages = ["domain", "application"]
+# `config` is listed here (import-linter needs every top-level package it should
+# recognize) but stays out of the `layers` contract below: it's a leaf-exception
+# (CLAUDE.md project convention) — every layer may import it, it imports nothing
+# from domain/application/infrastructure/interface. `scripts/` (composition root,
+# R-24) stays outside the contract entirely.
+root_packages = ["domain", "application", "infrastructure", "config"]
 
 [[tool.importlinter.contracts]]
 name = "Layered architecture"
 type = "layers"
-# `interface`/`infrastructure` are wrapped in parentheses (import-linter's "optional
-# layer" syntax) because a `layers` contract fails outright if a *required* layer
-# module doesn't exist yet, and those two don't exist until later tickets (R-13, R-20).
-# Drop the parentheses once they land — no contract restructuring needed then.
+# `interface` stays parenthesized (import-linter's "optional layer" syntax) because
+# it doesn't exist as a package until R-20. `infrastructure` lands in this ticket,
+# so its parens come off — no contract restructuring needed when R-20 lands either.
 layers = [
     "(interface)",
-    "(infrastructure)",
+    "infrastructure",
     "application",
     "domain",
 ]
