@@ -16,13 +16,14 @@ from application.exceptions import (
 from application.limits import MAX_PARSED_TEXT_LENGTH, MAX_UPLOAD_SIZE, MIN_EXTRACTED_TEXT_CHARS
 from application.ports.embedding import EmbeddingModel
 from application.ports.ingestion import FileParser, TextChunker
-from application.ports.repos import ChunksRepo, DocumentsRepo
+from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.use_cases._internal_errors import wrap_value_error
 from domain.entities.chunk import Chunk
 from domain.entities.document import MAX_CHUNKS_PER_DOCUMENT, Document
 from domain.exceptions import DomainValidationError
 from domain.value_objects.chunk_index import ChunkIndex
+from domain.value_objects.document_id import DocumentId
 from domain.value_objects.document_name import DocumentName
 from domain.value_objects.mime_type import ALLOWED_MIME_TYPES, MimeType
 from domain.value_objects.owner_subject import OwnerSubject
@@ -35,8 +36,7 @@ class CreateDocumentUseCase:
     parser: FileParser
     chunker: TextChunker
     embedder: EmbeddingModel
-    documents_repo: DocumentsRepo
-    chunks_repo: ChunksRepo
+    documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
 
     @wrap_value_error
@@ -89,21 +89,22 @@ class CreateDocumentUseCase:
         embeddings = self.embedder.embed_texts([c.text for c in chunks])
 
         owner = OwnerSubject(cmd.owner)
+        document_id = DocumentId.new()  # chunks need the id before the document exists
+        new_chunks = [
+            Chunk.create(document_id, ChunkIndex(i), fragment.text, embedding, fragment.page)
+            for i, (fragment, embedding) in enumerate(zip(chunks, embeddings, strict=True))
+        ]
+
         try:
-            document = Document.create(owner, name, mime_type, len(chunks))
+            document = Document.create(document_id, owner, name, mime_type, new_chunks)
         except DomainValidationError:
             # Backstop: the check above already enforces len(chunks) <= MAX_CHUNKS_PER_DOCUMENT,
             # so this should be unreachable — kept because Document.create's own contract
             # declares it a possible client-facing raise (domain/entities/document.py).
             raise TooManyChunksError(limit=MAX_CHUNKS_PER_DOCUMENT, actual=len(chunks)) from None
 
-        new_chunks = [
-            Chunk.create(document.id, ChunkIndex(i), fragment.text, embedding, fragment.page)
-            for i, (fragment, embedding) in enumerate(zip(chunks, embeddings, strict=True))
-        ]
-
+        documents_repo = self.documents_repo_factory(owner)
         with self.uow:
-            self.documents_repo.add(document, owner)  # no lock: fresh row, nothing to race
-            self.chunks_repo.add_many(new_chunks, owner)
+            documents_repo.add(document)  # no lock: fresh row, nothing to race
 
         return DocumentView.of(document)

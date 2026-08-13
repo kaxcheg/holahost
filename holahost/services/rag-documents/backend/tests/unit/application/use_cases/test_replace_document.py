@@ -7,7 +7,6 @@ import uuid
 import pytest
 from tests._support.builders import make_document, make_embedding
 from tests._support.fakes import (
-    FakeChunksRepo,
     FakeDocumentsRepo,
     FakeEmbeddingModel,
     FakeFileParser,
@@ -28,19 +27,16 @@ from application.exceptions import (
 from application.limits import MAX_PARSED_TEXT_LENGTH, MAX_UPLOAD_SIZE
 from application.ports.exceptions import ConcurrentUpdateError
 from application.ports.ingestion import TextFragment
-from application.ports.repos import DocumentsRepo
 from application.use_cases.replace_document import ReplaceDocumentUseCase
 from domain.entities.document import MAX_CHUNKS_PER_DOCUMENT, Document
 from domain.value_objects.document_id import DocumentId
-from domain.value_objects.owner_subject import OwnerSubject
 from domain.value_objects.page_number import PageNumber
 
 _FRAGMENT = TextFragment(text="x" * 250, page=PageNumber(1))
 
 
 def _uc(
-    documents_repo: DocumentsRepo,
-    chunks_repo: FakeChunksRepo | None = None,
+    documents_repo: FakeDocumentsRepo,
     *,
     fragments: list[TextFragment] | None = None,
     chunks: list[TextFragment] | None = None,
@@ -49,8 +45,7 @@ def _uc(
         parser=FakeFileParser(fragments if fragments is not None else [_FRAGMENT]),
         chunker=FakeTextChunker(chunks),
         embedder=FakeEmbeddingModel(make_embedding()),
-        documents_repo=documents_repo,
-        chunks_repo=chunks_repo or FakeChunksRepo(),
+        documents_repo_factory=documents_repo,
         uow=FakeUnitOfWork(),
     )
 
@@ -59,7 +54,6 @@ class TestReplaceDocumentUseCase:
     def test_replaces_content_keeping_document_id(self) -> None:
         existing = make_document(owner="user-123", chunk_count=1)
         documents_repo = FakeDocumentsRepo([existing])
-        chunks_repo = FakeChunksRepo()
         cmd = ReplaceDocumentCmd(
             document_id=str(existing.id),
             owner="user-123",
@@ -67,11 +61,13 @@ class TestReplaceDocumentUseCase:
             mime_type="application/pdf",
         )
 
-        view = _uc(documents_repo, chunks_repo).execute(cmd)
+        view = _uc(documents_repo).execute(cmd)
 
         assert view.document_id == str(existing.id)
-        assert chunks_repo.deleted_documents == [existing.id]
-        assert len(chunks_repo.added) == 1
+        assert len(documents_repo.updated) == 1
+        updated_chunks = documents_repo.updated[0].chunks
+        assert updated_chunks is not None
+        assert len(updated_chunks) == 1
 
     def test_replace_of_missing_document_raises_not_found(self) -> None:
         cmd = ReplaceDocumentCmd(
@@ -98,13 +94,11 @@ class TestReplaceDocumentUseCase:
     def test_pipeline_failure_leaves_previous_version_intact(self) -> None:
         existing = make_document(owner="user-123", chunk_count=1)
         documents_repo = FakeDocumentsRepo([existing])
-        chunks_repo = FakeChunksRepo()
         cmd = ReplaceDocumentCmd(
             document_id=str(existing.id), owner="user-123", content=b"x", mime_type="image/png"
         )
         with pytest.raises(UnsupportedMediaTypeError):
-            _uc(documents_repo, chunks_repo).execute(cmd)
-        assert chunks_repo.deleted_documents == []
+            _uc(documents_repo).execute(cmd)
         assert documents_repo.updated == []
 
     def test_rejects_upload_over_max_size(self) -> None:
@@ -183,14 +177,12 @@ class TestReplaceDocumentUseCase:
                 super().__init__([existing])
                 self._locked_gets = 0
 
-            def get(
-                self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-            ) -> Document | None:
+            def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None:
                 if lock:
                     self._locked_gets += 1
                     if self._locked_gets == 1:
                         raise ConcurrentUpdateError
-                return super().get(document_id, owner, lock=lock)
+                return super()._get_impl(document_id, lock=lock)
 
         documents_repo = _FlakyDocumentsRepo()
         cmd = ReplaceDocumentCmd(
@@ -206,12 +198,10 @@ class TestReplaceDocumentUseCase:
         existing = make_document(owner="user-123", chunk_count=1)
 
         class _AlwaysConflictingDocumentsRepo(FakeDocumentsRepo):
-            def get(
-                self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-            ) -> Document | None:
+            def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None:
                 if lock:
                     raise ConcurrentUpdateError
-                return super().get(document_id, owner, lock=lock)
+                return super()._get_impl(document_id, lock=lock)
 
         documents_repo = _AlwaysConflictingDocumentsRepo([existing])
         cmd = ReplaceDocumentCmd(
@@ -240,12 +230,10 @@ class TestReplaceDocumentUseCase:
         existing = make_document(owner="user-123", chunk_count=1)
 
         class _DeletedBeforeLockDocumentsRepo(FakeDocumentsRepo):
-            def get(
-                self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-            ) -> Document | None:
+            def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None:
                 if lock:
                     return None
-                return super().get(document_id, owner, lock=lock)
+                return super()._get_impl(document_id, lock=lock)
 
         documents_repo = _DeletedBeforeLockDocumentsRepo([existing])
         cmd = ReplaceDocumentCmd(

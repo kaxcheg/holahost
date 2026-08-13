@@ -30,7 +30,9 @@ def make_document(
     mime_type: str = "application/pdf",
     chunk_count: int = 1,
 ) -> Document:
-    """A valid, already-persisted ``Document`` (uses ``from_repo``, no re-validation)."""
+    """A valid, already-persisted ``Document`` (uses ``from_repo``, no re-validation).
+    ``chunks`` is ``None``, matching what a real read returns — use
+    ``make_document_with_chunks`` where a repo's ``add()`` needs real ``Chunk``s."""
     now = datetime.now(tz=UTC)
     return Document.from_repo(
         id=DocumentId.new(),
@@ -40,6 +42,27 @@ def make_document(
         chunk_count=chunk_count,
         created_at=now,
         updated_at=now,
+    )
+
+
+def make_document_with_chunks(
+    *,
+    owner: str = "user-123",
+    name: str = "Guidebook.pdf",
+    mime_type: str = "application/pdf",
+    chunk_count: int = 1,
+) -> Document:
+    """A valid, freshly-created ``Document`` (via ``Document.create``) with real
+    ``Chunk``s attached — ``DocumentsRepo.add()`` requires ``document.chunks`` to be
+    set (§4.3), which ``make_document``'s ``from_repo``-based document never has."""
+    document_id = DocumentId.new()
+    chunks = [make_chunk(document_id=document_id, index=i) for i in range(chunk_count)]
+    return Document.create(
+        id=document_id,
+        owner=OwnerSubject(owner),
+        name=DocumentName(name),
+        mime_type=MimeType(mime_type),
+        chunks=chunks,
     )
 
 
@@ -65,4 +88,10 @@ def make_text_fragment(text: str = "fragment text", page: int | None = 1) -> Tex
     return TextFragment(text=text, page=PageNumber(page))
 
 
-__all__ = ["make_chunk", "make_document", "make_embedding", "make_text_fragment"]
+__all__ = [
+    "make_chunk",
+    "make_document",
+    "make_document_with_chunks",
+    "make_embedding",
+    "make_text_fragment",
+]

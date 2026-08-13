@@ -1,53 +1,69 @@
-"""Protocols for persisting and reading documents and their chunks."""
+"""Port for persisting and reading documents, together with their owned chunks."""
 
 from __future__ import annotations
 
-from typing import Protocol
+from abc import ABC, abstractmethod
+from collections.abc import Callable
 
-from domain.entities.chunk import Chunk
+from application.ports.uow import UnitOfWork
 from domain.entities.document import Document
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.owner_subject import OwnerSubject
 
 
-class DocumentsRepo(Protocol):
-    """Persists and reads ``Document`` rows — the entity's combined read/write
-    gateway (plain DDD Repository). Every method takes ``owner`` explicitly, even
-    where an argument already carries it (``document.owner``): the contract is
-    that every operation on both repos is owner-scoped, and an explicit parameter
-    on each individual method is the one thing an adapter implementer can't miss
-    while writing that method's body — a factory that binds ``owner`` once
-    elsewhere (considered and rejected, see clarifications.md) would be invisible
-    from inside the method actually doing the filtering."""
+class DocumentsRepo(ABC):
+    """Persists and reads ``Document`` rows, together with the ``Chunk`` rows they
+    own — one repo for the aggregate (``Document`` is the root, ``Chunk`` has no
+    repo of its own, spec §4.3): a chunk is written/replaced only as part of writing
+    its document, never independently.
 
-    def add(self, document: Document, owner: OwnerSubject) -> None:
-        """Insert a new document row.
+    ``owner`` is bound at construction, not passed per call: every concrete method
+    here is *final* in shape — it calls ``_bind_owner()`` before delegating to the
+    matching ``_*_impl`` hook, so a subclass has no way to reach storage without the
+    owner-scoping step running first (§8.0). ``_bind_owner()`` re-runs on every call
+    (not just once) because it scopes the *active transaction*, and a single repo
+    instance may be used across more than one transaction within a use case.
+    """
 
-        ``owner`` must equal ``document.owner`` — passed explicitly anyway, for the
-        same uniform-contract reason as every other method here, and so the adapter
-        has a param to assert against as a cheap sanity check.
+    def __init__(self, uow: UnitOfWork, owner: OwnerSubject) -> None:
+        self._uow = uow
+        self._owner = owner
+
+    @abstractmethod
+    def _bind_owner(self) -> None:
+        """Scope the active transaction to the owner this repo was constructed with,
+        by whatever mechanism the adapter's storage enforces access control with
+        (e.g. Postgres RLS via ``SET LOCAL``)."""
+        ...
+
+    def add(self, document: Document) -> None:
+        """Insert a new document row together with its chunks (``document.chunks``,
+        never ``None`` — ``Document.create`` always sets it).
 
         Raises:
             StorageUnavailableError: the database is unreachable or timed out.
             ConcurrentUpdateError: a concurrent write conflicted with this write.
             IntegrityError: a stored invariant was violated (internal defect).
         """
-        ...
+        self._bind_owner()
+        self._add_impl(document)
 
-    def get(
-        self, document_id: DocumentId, owner: OwnerSubject, *, lock: bool = False
-    ) -> Document | None:
-        """Read a document by id, scoped to its owner.
+    @abstractmethod
+    def _add_impl(self, document: Document) -> None: ...
+
+    def get(self, document_id: DocumentId, *, lock: bool = False) -> Document | None:
+        """Read a document by id, scoped to the owner this repo was constructed with.
 
         A document owned by a different subject is returned as ``None``, identically
-        to a document that does not exist at all (US-R06, A-13).
+        to a document that does not exist at all (US-R06, A-13). The returned
+        document's ``chunks`` is always ``None`` — no current use case needs chunk
+        contents back from a plain read, only ``chunk_count``.
 
         Concurrency: ``lock=True`` → ``SELECT ... FOR UPDATE``, held until the
         enclosing ``UnitOfWork`` commits or rolls back.
 
         Args:
             document_id: The document to read.
-            owner: The caller's subject; only a matching owner is ever returned.
             lock: If ``True``, issue ``SELECT ... FOR UPDATE`` and hold the row lock
                 until the enclosing ``UnitOfWork`` commits or rolls back.
 
@@ -59,16 +75,19 @@ class DocumentsRepo(Protocol):
             ConcurrentUpdateError: a concurrent write conflicted with this read.
             IntegrityError: a stored invariant was violated (internal defect).
         """
-        ...
+        self._bind_owner()
+        return self._get_impl(document_id, lock=lock)
 
-    def update(self, document: Document, owner: OwnerSubject) -> None:
+    @abstractmethod
+    def _get_impl(self, document_id: DocumentId, *, lock: bool) -> Document | None: ...
+
+    def update(self, document: Document) -> None:
         """Persist changes to an existing document row.
 
-        Scope the ``WHERE`` clause by ``owner`` (the explicit param, not
-        ``document.owner`` — same value, but the explicit param is what every other
-        method's ``WHERE`` uses too), not just ``document.id`` — if a bug ever got
-        here with a mismatched owner, the update should affect zero rows rather
-        than silently writing someone else's document (US-R06, A-13).
+        If ``document.chunks`` is ``None`` (a rename-only change — ``Document.rename``
+        never touches ``chunks``), the chunk rows are left untouched. If it is a
+        list (``Document.replace_content`` was called), the document's chunk rows are
+        replaced wholesale with it.
 
         Concurrency: call inside the transaction opened by ``get(..., lock=True)``.
 
@@ -76,11 +95,18 @@ class DocumentsRepo(Protocol):
             StorageUnavailableError: the database is unreachable or timed out.
             ConcurrentUpdateError: a concurrent write conflicted with this write.
             IntegrityError: a stored invariant was violated (internal defect).
+            NotFoundError: the document does not exist, or belongs to another owner —
+                only reachable as a caller defect (the established call pattern
+                always locks-and-rechecks via ``get(..., lock=True)`` first).
         """
-        ...
+        self._bind_owner()
+        self._update_impl(document)
 
-    def delete(self, document_id: DocumentId, owner: OwnerSubject) -> None:
-        """Delete a document row (and, via cascade, its chunks).
+    @abstractmethod
+    def _update_impl(self, document: Document) -> None: ...
+
+    def delete(self, document_id: DocumentId) -> None:
+        """Delete a document row and its chunks.
 
         Concurrency: call inside the transaction opened by ``get(..., lock=True)``.
 
@@ -88,48 +114,16 @@ class DocumentsRepo(Protocol):
             StorageUnavailableError: the database is unreachable or timed out.
             ConcurrentUpdateError: a concurrent write conflicted with this write.
             IntegrityError: a stored invariant was violated (internal defect).
+            NotFoundError: the document does not exist, or belongs to another owner —
+                only reachable as a caller defect (same reasoning as ``update``).
         """
-        ...
+        self._bind_owner()
+        self._delete_impl(document_id)
+
+    @abstractmethod
+    def _delete_impl(self, document_id: DocumentId) -> None: ...
 
 
-class ChunksRepo(Protocol):
-    """Persists and removes ``Chunk`` rows — the write side of the Chunk entity
-    (``VectorSearch`` is its read side)."""
-
-    def add_many(self, chunks: list[Chunk], owner: OwnerSubject) -> None:
-        """Insert new chunk rows.
-
-        ``owner`` is defense in depth, not part of the write itself (``Chunk`` has
-        no owner field): scope the insert to chunks whose ``document_id`` actually
-        belongs to ``owner`` (e.g. a ``WHERE document_id IN (SELECT id FROM
-        documents WHERE owner = ...)`` guard), so a bug that skipped the use case's
-        own ownership check can't silently attach chunks to someone else's document
-        (US-R06, A-13).
-
-        Concurrency: for replace, call inside the transaction opened by
-        ``DocumentsRepo.get(..., lock=True)``; not needed for create.
-
-        Raises:
-            StorageUnavailableError: the database is unreachable or timed out.
-            ConcurrentUpdateError: a concurrent write conflicted with this write.
-            IntegrityError: a stored invariant was violated (internal defect).
-        """
-        ...
-
-    def delete_by_document(self, document_id: DocumentId, owner: OwnerSubject) -> None:
-        """Delete every chunk row belonging to ``document_id``.
-
-        ``owner`` is defense in depth: scope the delete so it only ever removes
-        chunks of a document actually owned by ``owner``, so a bug that skipped the
-        use case's own ownership check can't silently destroy another owner's data
-        (US-R06, A-13) — a delete is the one mistake here that isn't recoverable.
-
-        Concurrency: call inside the transaction opened by
-        ``DocumentsRepo.get(..., lock=True)``.
-
-        Raises:
-            StorageUnavailableError: the database is unreachable or timed out.
-            ConcurrentUpdateError: a concurrent write conflicted with this write.
-            IntegrityError: a stored invariant was violated (internal defect).
-        """
-        ...
+DocumentsRepoFactory = Callable[[OwnerSubject], DocumentsRepo]
+"""Builds an owner-bound ``DocumentsRepo`` — the sole way a use case obtains one
+(constructor injection would fix the owner before it is known, at composition time)."""

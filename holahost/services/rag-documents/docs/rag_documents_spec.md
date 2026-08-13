@@ -440,7 +440,7 @@ ANN-индекс (HNSW/IVFFlat) **не создаётся** — ADR A-7. Пои�
 | `CHUNK_WINDOW_TOKENS` | 120 | должно быть ≤ 128 — максимума входа MiniLM-L12; иначе эмбеддер молча обрежет чанк |
 | `CHUNK_OVERLAP_TOKENS` | 16 | сохраняет контекст на границе окна |
 | `MAX_CHUNKS_PER_DOCUMENT` | 500 | потолок времени ingest и объёма поиска по документу |
-| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | многоязычная (гайдбуки не только на английском), 384 измерения, работает на CPU |
+| `EMBEDDING_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | многоязычная (гайдбуки не только на английском), 384 измерения, работает на CPU; полное имя обязательно — `fastembed`'s реестр моделей отклоняет короткое (проверено эмпирически) |
 | `EMBEDDING_DIM` | 384 | размерность модели |
 | `SEARCH_TOP_K` | 5 | столько фрагментов помещается в промпт вызывателя без вытеснения инструкции |
 | `SIMILARITY_THRESHOLD` | 0.30 (косинус) | стартовое значение, калибруется на реальных гайдбуках; задаётся конфигом, не кодом |
@@ -563,6 +563,12 @@ application-слоя, не домена. Тест простой: станови
 
 ### 4.3 `Chunk`
 
+`Chunk` — подчинённая сущность агрегата `Document` (§4.2): своего репозитория не имеет,
+создаётся и заменяется только вместе с документом одной операцией (§8.0, `DocumentsRepo`).
+Это не новое ограничение — `Chunk` и раньше был неизменяемым и жил только вместе со своим
+документом (см. Lifecycle ниже); теперь то же самое верно и структурно, а не только по
+соглашению.
+
 | Поле | Тип | Примечание |
 |---|---|---|
 | `id` | `ChunkId` | |
@@ -682,6 +688,28 @@ CREATE TABLE chunks (
 
 CREATE INDEX idx_documents_owner_subject ON documents (owner_subject);
 CREATE INDEX idx_chunks_document_id      ON chunks (document_id);
+
+-- Row-Level Security — единственный механизм изоляции по владельцу (§8.0): репо не
+-- фильтрует owner в собственном SQL, привязка идёт через сессионную переменную
+-- транзакции (set_config('app.current_owner', ..., true), выставляется адаптером
+-- перед каждым вызовом). FORCE обязателен наряду с ENABLE — иначе RLS не действует на
+-- роль-владельца таблицы. Суперпользовательское соединение обходит RLS безусловно,
+-- никаким FORCE это не закрывается — за это отвечает то, какой ролью подключается
+-- приложение, а не что-либо в этой миграции.
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documents FORCE ROW LEVEL SECURITY;
+CREATE POLICY owner_isolation ON documents
+    USING (owner_subject = current_setting('app.current_owner', true))
+    WITH CHECK (owner_subject = current_setting('app.current_owner', true));
+
+-- chunks своей колонки owner не хранит (подчинён documents, §4.3) — видимость строки
+-- выводится через подзапрос к уже отфильтрованному documents, а не через собственное
+-- условие.
+ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks FORCE ROW LEVEL SECURITY;
+CREATE POLICY owner_isolation ON chunks
+    USING (document_id IN (SELECT id FROM documents))
+    WITH CHECK (document_id IN (SELECT id FROM documents));
 ```
 
 ### 6.1 Решения, стоящие за схемой
@@ -695,6 +723,7 @@ CREATE INDEX idx_chunks_document_id      ON chunks (document_id);
 | `idx_documents_owner_subject` | нужен не поиску (он идёт по `document_id`), а проверке владения и будущему перечислению документов владельца |
 | Уникальность `(document_id, idx)` | защищает инвариант «порядок чанков без разрывов и дублей» на уровне БД, а не только в коде |
 | FK с `ON DELETE CASCADE` | удаление документа и замена содержимого не оставляют осиротевших чанков даже при ошибке в коде |
+| Row-Level Security вместо фильтрации в коде репо | гарантия на уровне движка БД, не зависящая от того, вспомнил ли конкретный метод репо (существующий или будущий) отфильтровать по owner — рассмотрен и отклонён отдельный `authorize()`-порт (вносит гонку между проверкой и записью) и owner-параметр на каждом методе репо (дублирует то, что уже даёт RLS) |
 
 ### 6.2 Как схема обслуживает операции
 
@@ -878,7 +907,8 @@ GET /health          # без авторизации
 
 ### 8.0 Порты
 
-Типы-Protocol'ы из `application/ports/`; реализации — в `infrastructure/`, сборка — в `scripts/`.
+Типы портов из `application/ports/` — большинство `Protocol`; `DocumentsRepo`/`VectorSearch` —
+`ABC` (см. ниже, почему). Реализации — в `infrastructure/`, сборка — в `scripts/`.
 
 ```python
 # TextFragment и SimilarityScore — application-слоя, не домена (§4.1): обе структуры не
@@ -908,42 +938,57 @@ class EmbeddingModel(Protocol):
     # concurrency: реализация обязана быть потокобезопасной — модель одна на процесс,
     #              вызовы приходят из разных потоков пула (A-9)
 
-class DocumentsRepo(Protocol):
-    # каждый метод берёт owner явно, даже когда его несёт сам аргумент (document.owner) —
-    # контракт обоих репо: фильтрация по owner, и explicit-параметр — единственное, что
-    # реализация не может случайно забыть использовать (альтернатива — .scoped(owner)-фабрика
-    # или публичное поле repo.owner — рассмотрены и отклонены, см. clarifications.md)
-    def add(self, document: Document, owner: OwnerSubject) -> None: ...
-    def get(self, document_id: DocumentId, owner: OwnerSubject,
-            *, lock: bool = False) -> Document | None: ...
-    def update(self, document: Document, owner: OwnerSubject) -> None: ...
-    def delete(self, document_id: DocumentId, owner: OwnerSubject) -> None: ...
-    # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError
+class DocumentsRepo(ABC):
+    # owner привязывается один раз в конструкторе, не на каждый вызов — авторизация
+    # обеспечивается Postgres Row-Level Security (§6), а не фильтрацией внутри репо.
+    # Публичные методы конкретны здесь, в самом ABC, и вызывают _bind_owner() (SET
+    # текущего owner для транзакции) перед делегированием в _*_impl-хук, который
+    # реализует конкретный адаптер — обойти привязку через публичный API невозможно.
+    # (Альтернативы рассмотрены и отклонены: отдельный authorize()-порт — вносит TOCTOU
+    # между проверкой и записью; owner как параметр каждого метода — фильтрация в коде
+    # репо дублирует то, что уже даёт RLS. См. clarifications.md.)
+    def __init__(self, uow: UnitOfWork, owner: OwnerSubject) -> None: ...
+
+    def add(self, document: Document) -> None: ...
+    def get(self, document_id: DocumentId, *, lock: bool = False) -> Document | None: ...
+    def update(self, document: Document) -> None: ...
+    def delete(self, document_id: DocumentId) -> None: ...
+    # add(): document.chunks обязателен (не None) — Document является агрегатом над
+    #        Chunk (§4.3), отдельного порта для чанков нет, документ и его чанки
+    #        пишутся одним вызовом.
+    # update(): document.chunks is None — чанки не меняются (например, только rename);
+    #           list[Chunk] — заменяются целиком.
+    # get(): возвращённый Document.chunks всегда None — обычному чтению содержимое
+    #        чанков не нужно, только chunk_count.
+    # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError,
+    #         NotFoundError (update/delete: 0 строк задето — RLS делает несуществующий
+    #         и чужой документ неразличимыми на уровне БД, ровно как в US-R06/A-13)
     # lock: `lock=True` удерживает строку документа до конца транзакции. Обязателен для замены и
     #       удаления: без него две конкурентные замены смешают наборы чанков — каждая удалит только
     #       то, что видит в своём снимке, и допишет свои. Для чтения и поиска не нужен:
     #       согласованность снимка обеспечивает сама транзакция.
 
-class ChunksRepo(Protocol):
-    def add_many(self, chunks: list[Chunk], owner: OwnerSubject) -> None: ...
-    def delete_by_document(self, document_id: DocumentId, owner: OwnerSubject) -> None: ...
-    # owner здесь — defense in depth (Chunk своего owner не хранит): ограничивает запись/удаление
-    # чанками документа, реально принадлежащего owner, на случай если проверка владения в юзкейсе
-    # была пропущена
-    # raises: StorageUnavailableError, ConcurrentUpdateError, IntegrityError
-    # lock: собственных блокировок не берут — вызываются внутри транзакции, уже удерживающей
-    #       строку документа; вызов вне такой транзакции — ошибка использования
+DocumentsRepoFactory = Callable[[OwnerSubject], DocumentsRepo]
+# Единственный способ получить owner-bound репо: owner известен только на момент
+# запроса, поэтому юзкейс внедряет конструктором не сам репо, а фабрику.
 
 class SimilarityScore:
     """Косинусное сходство двух L2-нормализованных векторов, диапазон [-1, 1]. Значение,
     привязанное к паре запрос↔чанк, а не к самому Chunk — не становится его полем."""
     value: float
 
-# VectorSearch — CQRS-lite read-side Chunk'а (ChunksRepo — write-side, одна БД/схема, не
-# отдельное хранилище): вычисление косинусного сходства выполняет pgvector на стороне БД
-# (A-2), поэтому порт принимает document_id, а не список чанков — юзкейс не тянет чанки
-# из ChunksRepo, чтобы передать их сюда.
-class VectorSearch(Protocol):
+# VectorSearch — CQRS-lite read-side Chunk'а (DocumentsRepo — write-side, одна БД/схема,
+# не отдельное хранилище): вычисление косинусного сходства выполняет pgvector на стороне
+# БД (A-2), поэтому порт принимает document_id, а не список чанков — юзкейс не вычитывает
+# чанки, чтобы передать их сюда. Свой порт, не метод DocumentsRepo, несмотря на то что у
+# Chunk нет отдельного репо (§4.3): возвращает узкую проекцию (SearchHit), никогда не
+# реконструирует саму сущность — это не «репозиторий чанков» в смысле, требующем слияния
+# с репозиторием агрегата.
+class VectorSearch(ABC):
+    # owner привязывается так же, как у DocumentsRepo — тот же механизм RLS (§6),
+    # тот же _bind_owner()-перед-хуком паттерн.
+    def __init__(self, uow: UnitOfWork, owner: OwnerSubject) -> None: ...
+
     def top_k(self, document_id: DocumentId, query: Embedding,
               k: int, threshold: float) -> list[SearchHit]: ...
     # SearchHit = (chunk_id: ChunkId, text: str, page: PageNumber, score: SimilarityScore)
@@ -953,6 +998,9 @@ class VectorSearch(Protocol):
     # lock: не берётся; поиск не блокируется на конкурентной замене документа — конкурентная
     #       замена видна атомарно: до её коммита поиск возвращает прежний набор чанков, после —
     #       новый, смеси не бывает
+
+VectorSearchFactory = Callable[[OwnerSubject], VectorSearch]
+# то же обоснование, что и у DocumentsRepoFactory выше
 
 class UnitOfWork(Protocol):
     def __enter__(self) -> "UnitOfWork": ...
@@ -995,6 +1043,12 @@ class RateLimiter(Protocol):
 `FileParser` и `EmbeddingModel` не участвуют в транзакции — они вызываются до её открытия, чтобы
 секунды CPU не удерживали соединение и блокировки.
 
+Каждый вызов `DocumentsRepo`/`VectorSearch` — включая незаблокированное чтение и поиск — обязан
+идти внутри явного `with uow:`; отдельного «облегчённого» пути без транзакции нет ни у одного
+метода. Это не то же самое, что «согласованность снимка обеспечивает сама транзакция» из
+описания `lock` выше: та фраза — про то, что даёт транзакция, эта — про то, что транзакция
+обязана существовать для любого вызова, а не только там, где нужна блокировка строки.
+
 Классы исключений application-слоя несут только `code` и `details_dict()` — без HTTP-статуса:
 статус — деталь HTTP-протокола и принадлежит обработчику ошибок интерфейсного слоя (тикет R-22, ещё
 не реализован), который сопоставляет **тип** исключения статусу (`@app.exception_handler(SpecificType)`
@@ -1030,10 +1084,11 @@ class RateLimiter(Protocol):
 | 1.6 | `TextChunker.split(fragments) -> list[TextFragment]` | окно и перекрытие по токенайзеру модели |
 | 1.7 | проверка `len(fragments) <= MAX_CHUNKS_PER_DOCUMENT` | иначе `TooManyChunksError` |
 | 1.8 | `EmbeddingModel.embed_texts([f.text for f in fragments]) -> list[Embedding]` | самый дорогой шаг, вне транзакции |
-| 1.9 | `Document.create(owner, name, mime, chunk_count) -> Document` | инварианты сущности |
-| 1.10 | `Chunk.create(document.id, index, fragment, embedding) -> Chunk` для каждого | `index` — позиция во списке фрагментов |
-| 1.11 | `with UnitOfWork(): DocumentsRepo.add(document, owner); ChunksRepo.add_many(chunks, owner)` | одна транзакция; ошибка → откат, документа не существует |
-| 1.12 | `DocumentView.of(document)` | |
+| 1.9 | `DocumentId.new() -> document_id` | id нужен заранее — чанкам он нужен раньше, чем можно создать `Document` (следующий шаг требует уже готовый список чанков) |
+| 1.10 | `Chunk.create(document_id, index, fragment, embedding) -> Chunk` для каждого | `index` — позиция во списке фрагментов |
+| 1.11 | `Document.create(document_id, owner, name, mime, chunks) -> Document` | инварианты сущности — включая «каждый chunk.document_id == document_id», проверяется здесь же |
+| 1.12 | `documents_repo = DocumentsRepoFactory(owner)`; `with UnitOfWork(): documents_repo.add(document)` | одна транзакция, один вызов — `document.chunks` пишутся вместе с самим документом; ошибка → откат, документа не существует |
+| 1.13 | `DocumentView.of(document)` | |
 
 ### 8.3 UC-R2 «Заменить документ»
 
@@ -1041,11 +1096,11 @@ class RateLimiter(Protocol):
 
 | # | Модуль и вызов | Что происходит |
 |---|---|---|
-| 2.1 | `DocumentsRepo.get(document_id, owner)` — без блокировки | `None` → `NotFoundError` (чужой и несуществующий неразличимы). Дешёвая проверка до пайплайна, чтобы не тратить эмбеддинг впустую |
-| 2.2–2.7 | шаги 1.1, 1.3–1.8 | тот же пайплайн до открытия транзакции |
-| 2.8 | `document.rename(new_name)` / `document.replace_content(mime_type, chunk_count)` | обновление изменяемых полей сущности |
-| 2.9 | `with UnitOfWork(): DocumentsRepo.get(document_id, owner, lock=True)` | блокировка берётся **после** пайплайна, поэтому транзакция короткая (A-6). Повторная проверка обязательна: документ мог быть удалён или заменён, пока считались эмбеддинги; `None` → `NotFoundError` |
-| 2.10 | в той же транзакции: `ChunksRepo.delete_by_document(id, owner)`; `ChunksRepo.add_many(new, owner)`; `DocumentsRepo.update(document, owner)` | вторая конкурентная замена ждёт на блокировке и работает уже с новым состоянием; конкурентный поиск до коммита видит прежнюю версию |
+| 2.1 | `documents_repo = DocumentsRepoFactory(owner)`; `documents_repo.get(document_id)` — без блокировки | `None` → `NotFoundError` (чужой и несуществующий неразличимы). Дешёвая проверка до пайплайна, чтобы не тратить эмбеддинг впустую |
+| 2.2–2.7 | шаги 1.1, 1.3–1.8, затем `Chunk.create(document_id, ...)` для каждого (`document_id` уже есть — документ существует) | тот же пайплайн до открытия транзакции |
+| 2.8 | `document.rename(new_name)` / `document.replace_content(mime_type, new_chunks)` | обновление изменяемых полей сущности; `replace_content` заменяет весь набор чанков и проверяет их инварианты так же, как `Document.create` |
+| 2.9 | `with UnitOfWork(): documents_repo.get(document_id, lock=True)` | блокировка берётся **после** пайплайна, поэтому транзакция короткая (A-6). Повторная проверка обязательна: документ мог быть удалён или заменён, пока считались эмбеддинги; `None` → `NotFoundError` |
+| 2.10 | в той же транзакции: `documents_repo.update(document)` | один вызов — `document.chunks` (выставлены на шаге 2.8) заменяют старые чанки целиком внутри того же метода; вторая конкурентная замена ждёт на блокировке и работает уже с новым состоянием; конкурентный поиск до коммита видит прежнюю версию |
 | 2.11 | `DocumentView.of(document)` | `document_id` прежний |
 
 ### 8.4 UC-R3 «Найти фрагменты»
@@ -1054,22 +1109,24 @@ class RateLimiter(Protocol):
 
 | # | Модуль и вызов | Что происходит |
 |---|---|---|
-| 3.1 | `DocumentsRepo.get(document_id, owner)` | `None` → `NotFoundError` |
+| 3.1 | `documents_repo = DocumentsRepoFactory(owner)`; `documents_repo.get(document_id)` | `None` → `NotFoundError` |
 | 3.2 | валидация длины `cmd.query` | иначе `InvalidPayloadError` |
 | 3.3 | `EmbeddingModel.embed_query(cmd.query) -> Embedding` | та же модель, что и на ingest |
-| 3.4 | `VectorSearch.top_k(document_id, vector, SEARCH_TOP_K, SIMILARITY_THRESHOLD) -> list[SearchHit]` | один SQL-запрос, фильтр по документу и порогу внутри него |
+| 3.4 | `vector_search = VectorSearchFactory(owner)`; `vector_search.top_k(document_id, vector, SEARCH_TOP_K, SIMILARITY_THRESHOLD) -> list[SearchHit]` | один SQL-запрос, фильтр по документу и порогу внутри него |
 | 3.5 | `SearchResult(hits)` | пустой список — валидный результат |
 
 ### 8.5 UC-R4 и UC-R5
 
 `GetDocumentUseCase.execute(cmd: GetDocumentCmd) -> DocumentView` — шаг 3.1 и возврат представления.
 `DeleteDocumentUseCase.execute(cmd: DeleteDocumentCmd) -> None` — в одной транзакции
-`DocumentsRepo.get(..., lock=True)`, `None` → `NotFoundError`, затем `DocumentsRepo.delete(...)`.
+`documents_repo.get(..., lock=True)`, `None` → `NotFoundError`, затем `documents_repo.delete(...)`
+(`documents_repo` получен из `DocumentsRepoFactory(owner)`, как в UC-R2/UC-R3).
 `GetDocumentCmd`/`DeleteDocumentCmd = (document_id: str, owner: str)` — выделены как отдельные DTO
 ради единообразия с Cmd-паттерном UC-R1–UC-R3, а не потому что параметров тут больше двух.
 Пайплайна здесь нет, поэтому блокировка берётся сразу и транзакция всё равно короткая. Чанки уходят
-каскадом, отдельного вызова `ChunksRepo` нет. Конкурентная замена ждёт на той же блокировке: она
-либо успеет до удаления, либо получит `NotFoundError` на своей повторной проверке.
+каскадом на уровне БД (`ON DELETE CASCADE`, §6) — отдельного вызова для них нет, `Document` — сам
+себе агрегат (§4.3). Конкурентная замена ждёт на той же блокировке: она либо успеет до удаления,
+либо получит `NotFoundError` на своей повторной проверке.
 
 ### 8.6 Обработка объявленных исключений
 
@@ -1176,7 +1233,7 @@ op_completed { request_id, route, outcome, duration_ms,
 
 - `R-11` Типизированные настройки и загрузка секретов на старте
 - `R-12` Схема БД и первая миграция — расширение `vector`, таблицы, ограничения, индексы
-- `R-13` Репозитории документов и чанков, Unit of Work на SQLAlchemy Core; трансляция ошибок драйвера в три типа
+- `R-13` Репозиторий документов (документ как агрегат над чанками, §4.3) и Unit of Work на SQLAlchemy Core; трансляция ошибок драйвера в три типа; Row-Level Security (§6) как механизм изоляции по владельцу
 - `R-14` Векторный поиск на `pgvector` — один запрос с фильтром, порогом и `LIMIT`
 - `R-15` Парсеры PDF, DOCX, MD, TXT с провенансом страниц
 - `R-16` Чанкер на токенайзере модели — окно и перекрытие, без пересечения фрагментов
@@ -1371,6 +1428,6 @@ Consequences: наблюдаемость появляется без едино�
 
 **A-15. Модель эмбеддингов — многоязычная MiniLM-L12, 384 измерения** ⚠ Пропуск: выбор перенесён из более ранней итерации, отдельным черновиком не оформлялся.
 Context: гайдбуки пишутся не только по-английски, а сервис работает на CPU внутри того же контейнера, что и API.
-Decision: `paraphrase-multilingual-MiniLM-L12-v2` через `fastembed`, вектор 384 измерения, окно 120 токенов при пределе входа 128.
+Decision: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` через `fastembed` (полное имя — `fastembed`'s реестр отклоняет короткое, проверено эмпирически), вектор 384 измерения, окно 120 токенов при пределе входа 128 (предел подтверждён замером `tokenizer.truncation["max_length"]` реальной модели, не только документацией).
 Отвергнуто: англоязычные модели с более высоким качеством (теряют язык оригинала гайдбука — на многоязычном корпусе это дороже, чем разница в качестве); крупные многоязычные модели (не укладываются в бюджет ingest на CPU и утраивают память процесса); эмбеддинги внешнего провайдера (сетевой вызов на каждый чанк и плата за ingest, см. A-3).
 Consequences: язык документа не ограничивает продукт, размерность 384 держит таблицу чанков и память компактными. Взамен качество ретривала ниже, чем у современных крупных моделей, а окно чанка жёстко ограничено 128 токенами — длинные смысловые куски приходится резать.

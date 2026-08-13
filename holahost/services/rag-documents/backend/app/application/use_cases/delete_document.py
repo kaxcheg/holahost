@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from application.dto.documents import DeleteDocumentCmd
 from application.exceptions import NotFoundError
-from application.ports.repos import DocumentsRepo
+from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.use_cases._internal_errors import wrap_value_error
 from application.use_cases._retry import retry_on_concurrent_update
@@ -18,7 +18,7 @@ from domain.value_objects.owner_subject import OwnerSubject
 class DeleteDocumentUseCase:
     """UC-R5: delete a document and its chunks (cascade) in one locked transaction."""
 
-    documents_repo: DocumentsRepo
+    documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
 
     @wrap_value_error
@@ -37,14 +37,15 @@ class DeleteDocumentUseCase:
         """
         doc_id = DocumentId.from_str(cmd.document_id)
         owner_subject = OwnerSubject(cmd.owner)
+        documents_repo = self.documents_repo_factory(owner_subject)
 
         def _delete() -> None:
             with self.uow:
                 # Locked: idempotent delete must not race a concurrent
                 # replace/delete on the same document.
-                document = self.documents_repo.get(doc_id, owner_subject, lock=True)
+                document = documents_repo.get(doc_id, lock=True)
                 if document is None:
                     raise NotFoundError
-                self.documents_repo.delete(doc_id, owner_subject)
+                documents_repo.delete(doc_id)
 
         retry_on_concurrent_update(_delete)

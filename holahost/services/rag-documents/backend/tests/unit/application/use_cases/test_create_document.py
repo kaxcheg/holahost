@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from tests._support.builders import make_embedding
 from tests._support.fakes import (
-    FakeChunksRepo,
     FakeDocumentsRepo,
     FakeEmbeddingModel,
     FakeFileParser,
@@ -40,7 +39,6 @@ def _uc(
     chunks: list[TextFragment] | None = None,
     parser_error: Exception | None = None,
     documents_repo: FakeDocumentsRepo | None = None,
-    chunks_repo: FakeChunksRepo | None = None,
 ) -> CreateDocumentUseCase:
     default_fragment = [TextFragment(text="x" * 250, page=PageNumber(1))]
     return CreateDocumentUseCase(
@@ -49,8 +47,7 @@ def _uc(
         ),
         chunker=FakeTextChunker(chunks),
         embedder=FakeEmbeddingModel(make_embedding()),
-        documents_repo=documents_repo or FakeDocumentsRepo(),
-        chunks_repo=chunks_repo or FakeChunksRepo(),
+        documents_repo_factory=documents_repo or FakeDocumentsRepo(),
         uow=FakeUnitOfWork(),
     )
 
@@ -58,11 +55,11 @@ def _uc(
 class TestCreateDocumentUseCase:
     def test_creates_document_and_chunks_atomically(self) -> None:
         documents_repo = FakeDocumentsRepo()
-        chunks_repo = FakeChunksRepo()
-        view = _uc(documents_repo=documents_repo, chunks_repo=chunks_repo).execute(_CMD)
+        view = _uc(documents_repo=documents_repo).execute(_CMD)
 
         assert len(documents_repo.added) == 1
-        assert len(chunks_repo.added) == 1
+        assert documents_repo.added[0].chunks is not None
+        assert len(documents_repo.added[0].chunks) == 1
         assert view.name == "Guidebook.pdf"
         assert view.chunk_count == 1
         assert view.created_at == view.updated_at
@@ -109,9 +106,7 @@ class TestCreateDocumentUseCase:
 
     def test_nothing_persisted_on_pipeline_failure(self) -> None:
         documents_repo = FakeDocumentsRepo()
-        chunks_repo = FakeChunksRepo()
         cmd = CreateDocumentCmd(owner="u", name="n", content=b"x", mime_type="image/png")
         with pytest.raises(UnsupportedMediaTypeError):
-            _uc(documents_repo=documents_repo, chunks_repo=chunks_repo).execute(cmd)
+            _uc(documents_repo=documents_repo).execute(cmd)
         assert documents_repo.added == []
-        assert chunks_repo.added == []

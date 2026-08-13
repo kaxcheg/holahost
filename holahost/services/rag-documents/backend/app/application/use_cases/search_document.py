@@ -8,8 +8,9 @@ from application.dto.search import SearchCmd, SearchHitView, SearchResult
 from application.exceptions import InvalidPayloadError, NotFoundError
 from application.limits import MAX_QUERY_LENGTH, SEARCH_TOP_K, SIMILARITY_THRESHOLD
 from application.ports.embedding import EmbeddingModel
-from application.ports.repos import DocumentsRepo
-from application.ports.vector import VectorSearch
+from application.ports.repos import DocumentsRepoFactory
+from application.ports.uow import UnitOfWork
+from application.ports.vector import VectorSearchFactory
 from application.use_cases._internal_errors import wrap_value_error
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.owner_subject import OwnerSubject
@@ -19,9 +20,10 @@ from domain.value_objects.owner_subject import OwnerSubject
 class SearchDocumentUseCase:
     """UC-R3: embed the query and return its top-K most similar chunks."""
 
-    documents_repo: DocumentsRepo
+    documents_repo_factory: DocumentsRepoFactory
     embedder: EmbeddingModel
-    vector_search: VectorSearch
+    vector_search_factory: VectorSearchFactory
+    uow: UnitOfWork
 
     @wrap_value_error
     def execute(self, cmd: SearchCmd) -> SearchResult:
@@ -43,23 +45,32 @@ class SearchDocumentUseCase:
         """
         owner = OwnerSubject(cmd.owner)
         document_id = DocumentId.from_str(cmd.document_id)
+        documents_repo = self.documents_repo_factory(owner)
+        vector_search = self.vector_search_factory(owner)
 
         # No lock: search accepts a possibly stale-but-consistent result during a
         # concurrent replace/delete, trading it for not blocking the hot search path.
-        document = self.documents_repo.get(document_id, owner)
-        if document is None:
-            raise NotFoundError
+        # Still runs inside a transaction — every DocumentsRepo call does (§8.0).
+        with self.uow:
+            document = documents_repo.get(document_id)
+            if document is None:
+                raise NotFoundError
 
         if not cmd.query.strip():
             raise InvalidPayloadError(field="query")
         if len(cmd.query) > MAX_QUERY_LENGTH:
             raise InvalidPayloadError(field="query", limit=MAX_QUERY_LENGTH)
 
+        # Embedding runs outside any transaction, same reasoning as the ingest
+        # pipeline (§8.2/§8.3): CPU-bound work must not hold a pooled connection.
         query_embedding = self.embedder.embed_query(cmd.query)
-        # No lock: search accepts a possibly stale-but-consistent result
-        hits = self.vector_search.top_k(
-            document_id, query_embedding, SEARCH_TOP_K, SIMILARITY_THRESHOLD
-        )
+
+        # No lock: search accepts a possibly stale-but-consistent result. A separate,
+        # short transaction — reusing self.uow sequentially is safe (§8.0).
+        with self.uow:
+            hits = vector_search.top_k(
+                document_id, query_embedding, SEARCH_TOP_K, SIMILARITY_THRESHOLD
+            )
 
         return SearchResult(
             hits=[
