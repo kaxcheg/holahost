@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from tests._support.db import build_test_uow
 
 from application.ports.exceptions import StorageUnavailableError
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
 
 class TestTranslateDbErrors:
@@ -14,6 +14,6 @@ class TestTranslateDbErrors:
         just a new-behavior check.
         """
         # Port 1 is a safe bet for "closed, connection refused" in any sandboxed env.
-        uow = SqlAlchemyUnitOfWork("postgresql://user:pass@localhost:1/nonexistent")
+        uow = build_test_uow("postgresql://user:pass@localhost:1/nonexistent")
         with pytest.raises(StorageUnavailableError), uow:
             pass

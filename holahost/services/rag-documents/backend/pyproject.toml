@@ -17,6 +17,7 @@ packages = [
     { include = "application", from = "app" },
     { include = "infrastructure", from = "app" },
     { include = "config", from = "app" },
+    { include = "interface", from = "app" },
 ]
 
 [tool.poetry.dependencies]
@@ -33,6 +34,10 @@ python-docx = "^1.1"
 boto3 = "^1.35"
 pydantic-settings = "^2.7"
 python-json-logger = "^3.2"
+fastapi = "^0.115"
+uvicorn = {extras = ["standard"], version = "^0.34"}
+python-multipart = "^0.0.20"
+holahost-auth = {path = "../../../libs/holahost-auth", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
@@ -41,6 +46,7 @@ mypy = "^1.13"
 import-linter = "^2.1"
 testcontainers = {extras = ["postgres"], version = "^4.9"}
 boto3-stubs = {extras = ["secretsmanager"], version = "^1.35"}
+httpx = "^0.28"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -119,16 +125,13 @@ disallow_untyped_calls = false
 # (CLAUDE.md project convention) — every layer may import it, it imports nothing
 # from domain/application/infrastructure/interface. `scripts/` (composition root,
 # R-24) stays outside the contract entirely.
-root_packages = ["domain", "application", "infrastructure", "config"]
+root_packages = ["domain", "application", "infrastructure", "config", "interface"]
 
 [[tool.importlinter.contracts]]
 name = "Layered architecture"
 type = "layers"
-# `interface` stays parenthesized (import-linter's "optional layer" syntax) because
-# it doesn't exist as a package until R-20. `infrastructure` lands in this ticket,
-# so its parens come off — no contract restructuring needed when R-20 lands either.
 layers = [
-    "(interface)",
+    "interface",
     "infrastructure",
     "application",
     "domain",

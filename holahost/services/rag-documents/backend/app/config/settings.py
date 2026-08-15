@@ -15,11 +15,13 @@ class Settings(BaseSettings):
     `config.sm_loader` BEFORE this class is constructed (R-24 composition root reads
     `env` first to decide whether to run the loader — out of scope here).
 
-    Field set covers the R-11..R-19 subsystems this ticket builds. R-20/R-21/R-24
-    (interface layer, later tickets) will extend this same class with their own fields
-    (`ALLOWED_MIME_TYPES`, `MAX_UPLOAD_SIZE`, auth config, etc.) when built — matching
-    the project's "co-located with the adapter that reads it" convention rather than
-    front-loading fields no adapter yet consumes.
+    Field set originally covered the R-11..R-19 subsystems; the four `jwks_url`/
+    `expected_*` fields were added by R-20/R-24 for `holahost-auth` wiring. Deliberately
+    does *not* carry `ALLOWED_MIME_TYPES`/`MAX_UPLOAD_SIZE`: those stay domain/
+    application-owned constants (`domain.value_objects.mime_type.ALLOWED_MIME_TYPES`,
+    `application.limits.MAX_UPLOAD_SIZE`) — the interface layer never needs its own
+    copy of either, matching the project's "co-located with the adapter that reads it"
+    convention.
     """
 
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
@@ -36,6 +38,10 @@ class Settings(BaseSettings):
     rate_limit_default: int = Field(gt=0)
     rate_limit_ingest: int = Field(gt=0)
     jwt_clock_skew_seconds: int = Field(ge=0)
+    jwks_url: str = Field(min_length=1)
+    expected_algorithm: str = Field(min_length=1)
+    expected_issuer: str = Field(min_length=1)
+    expected_audience: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def _validate_chunking_window(self) -> Self:

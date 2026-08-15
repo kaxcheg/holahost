@@ -20,6 +20,10 @@ def _env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
         "RATE_LIMIT_DEFAULT": "600",
         "RATE_LIMIT_INGEST": "60",
         "JWT_CLOCK_SKEW_SECONDS": "30",
+        "JWKS_URL": "https://auth.dev.holahost.internal/.well-known/jwks.json",
+        "EXPECTED_ALGORITHM": "RS256",
+        "EXPECTED_ISSUER": "holahost-auth-dev",
+        "EXPECTED_AUDIENCE": "rag-documents",
     }
     for key, value in {**base, **overrides}.items():
         monkeypatch.setenv(key, value)
@@ -32,9 +36,23 @@ class TestSettings:
         assert settings.env == "dev"
         assert settings.chunk_window_tokens == 120
 
+    def test_loads_auth_config_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _env(monkeypatch)
+        settings = Settings()
+        assert settings.jwks_url == "https://auth.dev.holahost.internal/.well-known/jwks.json"
+        assert settings.expected_algorithm == "RS256"
+        assert settings.expected_issuer == "holahost-auth-dev"
+        assert settings.expected_audience == "rag-documents"
+
     def test_missing_required_field_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _env(monkeypatch)
         monkeypatch.delenv("DATABASE_URL")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_missing_jwks_url_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _env(monkeypatch)
+        monkeypatch.delenv("JWKS_URL")
         with pytest.raises(ValidationError):
             Settings()
 

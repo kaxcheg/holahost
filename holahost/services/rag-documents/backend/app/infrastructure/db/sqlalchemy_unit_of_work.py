@@ -11,6 +11,36 @@ from sqlalchemy.pool import ConnectionPoolEntry
 from infrastructure.db.errors import translate_db_errors
 
 
+def build_engine(database_url: str, *, pool_size: int = 5) -> Engine:
+    """Build a process-shared `Engine` (and its connection pool) from a raw DSN.
+
+    Used by the composition root (R-24) to build exactly one `Engine` per process,
+    handed to a fresh `SqlAlchemyUnitOfWork(engine)` for every request. Tests that need
+    their own throwaway `Engine` from a raw DSN use
+    `tests._support.db.build_test_uow` instead of a production-side convenience
+    method — this module has no test-only surface.
+    """
+    url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine = create_engine(
+        url,
+        pool_size=pool_size,
+        pool_pre_ping=True,
+        connect_args={"options": "-c timezone=utc"},
+    )
+
+    @event.listens_for(engine, "connect")
+    def _register_vector_type(
+        dbapi_connection: psycopg.Connection[Any], connection_record: ConnectionPoolEntry
+    ) -> None:
+        # Required even with the SQLAlchemy `Vector` column type (schema.py): it
+        # handles Python<->wire-format conversion, but the codec itself still needs
+        # registering on each raw psycopg3 connection as it's created by the pool
+        # (pgvector-python's own documented pattern for sync SQLAlchemy+psycopg3).
+        register_vector(dbapi_connection)
+
+    return engine
+
+
 class SqlAlchemyUnitOfWork:
     """Owns the engine and the single in-flight transaction (application port `UnitOfWork`).
 
@@ -22,25 +52,18 @@ class SqlAlchemyUnitOfWork:
     e.g. UC-R2's separate pre-check and locked-write transactions.
     """
 
-    def __init__(self, database_url: str, *, pool_size: int = 5) -> None:
-        url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-        self._engine: Engine = create_engine(
-            url,
-            pool_size=pool_size,
-            pool_pre_ping=True,
-            connect_args={"options": "-c timezone=utc"},
-        )
+    def __init__(self, engine: Engine) -> None:
+        """Build a lightweight UoW around an already-built `Engine`.
 
-        @event.listens_for(self._engine, "connect")
-        def _register_vector_type(
-            dbapi_connection: psycopg.Connection[Any], connection_record: ConnectionPoolEntry
-        ) -> None:
-            # Required even with the SQLAlchemy `Vector` column type (schema.py): it
-            # handles Python<->wire-format conversion, but the codec itself still needs
-            # registering on each raw psycopg3 connection as it's created by the pool
-            # (pgvector-python's own documented pattern for sync SQLAlchemy+psycopg3).
-            register_vector(dbapi_connection)
-
+        Cheap: no pool construction happens here, just wrapping — safe to build fresh
+        for every request under threadpool concurrency (ADR A-9). The composition root
+        (`interface.http.dependencies.get_engine`) builds one `Engine` per process and
+        passes it to a fresh instance of this class per request. Never call
+        `.dispose()` on an instance wrapping a *shared* engine — that disposes it for
+        every other holder too; only the process-owning `get_engine()` singleton
+        should ever be disposed, at shutdown.
+        """
+        self._engine = engine
         self.active_connection: Connection | None = None
 
     def __enter__(self) -> SqlAlchemyUnitOfWork:

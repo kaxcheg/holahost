@@ -17,10 +17,19 @@ from typing import Protocol
 class RateLimitExceededError(Exception):
     """The caller is over its rate limit for the given bucket.
 
+    ``code`` mirrors the pattern every ``ApplicationError`` subclass follows (§7.6
+    wire taxonomy) even though this type doesn't inherit from ``ApplicationError`` —
+    it's a port-level exception (§8.0), not an application one; see the module
+    docstring for why it stays a port anyway. Declaring ``code`` here means the
+    interface layer's error handler reads it off the exception instead of
+    duplicating the literal string itself.
+
     Args:
         retry_after: Seconds the caller should wait before retrying — for the
             middleware to surface as the ``Retry-After`` response header.
     """
+
+    code = "ERR_RATE_LIMIT"
 
     def __init__(self, retry_after: int) -> None:
         super().__init__(f"rate limit exceeded, retry after {retry_after}s")

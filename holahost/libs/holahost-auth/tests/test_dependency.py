@@ -1,17 +1,33 @@
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from holahost_auth.config import AuthConfig
 from holahost_auth.context import TokenContext
 from holahost_auth.dependency import HolahostAuth
+from holahost_auth.exceptions import AuthenticationError, JwksUnavailableError
 
 
 def build_app(config: AuthConfig) -> FastAPI:
+    """Minimal example of what a consuming service's own interface layer is
+    expected to register — `HolahostAuth` itself raises `AuthenticationError`/
+    `JwksUnavailableError` directly, not `HTTPException`; mapping them to a
+    status code and response shape is the consumer's call, not this
+    library's (see `dependency.py`'s own docstring for why).
+    """
     app = FastAPI()
     auth = HolahostAuth(config)
+
+    @app.exception_handler(AuthenticationError)
+    def _handle_auth_error(request: Request, exc: AuthenticationError) -> JSONResponse:
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+    @app.exception_handler(JwksUnavailableError)
+    def _handle_jwks_unavailable(request: Request, exc: JwksUnavailableError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": "Service Unavailable"})
 
     @app.get("/protected")
     def protected(ctx: Annotated[TokenContext, Depends(auth)]) -> dict[str, str]:

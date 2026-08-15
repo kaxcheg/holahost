@@ -27,9 +27,10 @@ entirely the consuming endpoint's job, never this library's.
 ```python
 from typing import Annotated
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 
-from holahost_auth import AuthConfig, HolahostAuth, TokenContext
+from holahost_auth import AuthConfig, AuthenticationError, HolahostAuth, JwksUnavailableError, TokenContext
 
 app = FastAPI()
 
@@ -42,6 +43,18 @@ auth = HolahostAuth(
         clock_skew_seconds=30,
     )
 )
+
+
+# HolahostAuth raises its own exception types — mapping them to a status code
+# and response shape is this service's own call, not the library's (see "Errors").
+@app.exception_handler(AuthenticationError)
+def _handle_auth_error(request: Request, exc: AuthenticationError) -> JSONResponse:
+    return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+
+@app.exception_handler(JwksUnavailableError)
+def _handle_jwks_unavailable(request: Request, exc: JwksUnavailableError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": "Service Unavailable"})
 
 
 @app.get("/documents/{document_id}")
@@ -73,10 +86,20 @@ All fields are required; there are no library-side defaults.
 
 ## Errors
 
-Every *per-token* validation failure raises a single `AuthenticationError`; `HolahostAuth.__call__`
-turns that into a `401` with no reason in the response body (`reason` is available on the chained
-exception for the caller's own logging). There is no `403` from this library.
+`HolahostAuth.__call__` raises its own typed exceptions directly — it does **not** translate them
+to `fastapi.HTTPException` itself. Mapping exception type to an HTTP status/response shape is the
+consuming service's own interface-layer decision, the same rule every other port/library in the
+platform follows (a port raises typed, protocol-agnostic exceptions; the *consumer's* interface
+layer owns type → HTTP-status dispatch). The consuming service must register its own exception
+handlers for both types below — see `tests/test_dependency.py`'s `build_app()` for a minimal
+example, or `rag-documents`' own `interface/http/errors.py` for a real one.
+
+Every *per-token* validation failure raises a single `AuthenticationError` (`reason` is for the
+caller's own logging, never for a response body — nothing in this library's own behavior discloses
+it). The platform convention is to map this to `401` with no reason in the body. There is no `403`
+from this library.
 
 A JWKS-endpoint outage or malformed response raises `JwksUnavailableError` instead — deliberately
-kept distinct, since it would reject *every* token, not just the one being checked. It maps to
-`503`, not `401`: an infra incident must not look like "invalid credentials" to callers.
+kept distinct, since it would reject *every* token, not just the one being checked. The platform
+convention maps this to `503`, not `401`: an infra incident must not look like "invalid
+credentials" to callers.
