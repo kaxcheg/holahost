@@ -123,6 +123,22 @@ class FakeVectorSearch(VectorSearch):
         return self._hits
 
 
+class FakeRateLimiter:
+    """In-memory ``RateLimiter`` fake — trips on demand, not on real counting."""
+
+    def __init__(self, *, should_raise: bool = False, retry_after: int = 30) -> None:
+        self.should_raise = should_raise
+        self.retry_after = retry_after
+        self.calls: list[tuple[str, str, str]] = []
+
+    def check(self, client_id: str, subject: str, bucket: str) -> None:
+        self.calls.append((client_id, subject, bucket))
+        if self.should_raise:
+            from application.ports.rate import RateLimitExceededError
+
+            raise RateLimitExceededError(retry_after=self.retry_after)
+
+
 class FakeUnitOfWork:
     """A real context manager: records commits/rollbacks, does not swallow exceptions."""
 

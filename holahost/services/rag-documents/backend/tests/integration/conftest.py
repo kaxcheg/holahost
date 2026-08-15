@@ -10,10 +10,11 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from testcontainers.community.postgres import PostgresContainer
+from tests._support.db import build_test_uow
 
 from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
-_BACKEND_ROOT = Path(__file__).resolve().parents[3]
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 
 # A dedicated, unprivileged role for integration tests. testcontainers' default
@@ -78,7 +79,7 @@ def superuser_dsn(_dsns: tuple[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def uow(pg_dsn: str) -> Iterator[SqlAlchemyUnitOfWork]:
-    unit = SqlAlchemyUnitOfWork(pg_dsn)
+    unit = build_test_uow(pg_dsn)
     try:
         yield unit
     finally:
