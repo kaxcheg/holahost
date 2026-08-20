@@ -394,6 +394,10 @@ Inbound-валидация JWT оффлайн ⇒ `PATCH status:blocked`, `DELET
   HTTP-интеграция → `http://<EIP>/{proxy}` + parameter mapping со статическим заголовком
   `x-origin-secret`
 - SSM Parameters: экспорт для сервисных стеков: instance id, ECR registry, id/имена общих ресурсов
+- IAM для CI/CD: GitHub OIDC-провайдер, зарегистрированный в аккаунте (доверие к
+  `token.actions.githubusercontent.com`), и роль на сервис и окружение для его пайплайна
+  (least-privilege: push в свой ECR-репозиторий, `ssm:SendCommand`/`GetParameter` на свой
+  инстанс, apply своих terraform-root'ов)
 
 На инстансе EC2 (bootstrap через cloud-init):
 - Docker + `docker network create backbone`
@@ -600,6 +604,14 @@ gateway на dev нет: порт приложения публикуется н
 
 Для dev дополнительно: как поднять стек одной командой, как пересоздать зависимости с нуля, как
 получить токен (пока `auth` не разработан — от dev-минтера).
+
+#### Применение инфры — вручную
+terraform-root'ы сервиса (`infra/common`,`infra/envs/<env>`) применяются оператором вручную
+(`terraform apply` с валидными AWS-креды) — пайплайн для этого не обязателен. OIDC-роль из пункта
+выше нужна только тогда, когда сервис хочет автоматический деплой через CI/CD
+(`<svc>-deploy-staging`/`<svc>-promote-prod`, Этап 12/13); до её появления `terraform apply`
+руками — штатный способ поднять сервис, а не временный обход.
+
 
 #### CI/CD и конвенции — умолчания
 

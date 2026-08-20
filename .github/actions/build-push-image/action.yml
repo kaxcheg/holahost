@@ -1,0 +1,50 @@
+name: Build and push image
+description: >
+  Builds an image, tags it with both a git-sha tag and a release-version tag, pushes both to ECR,
+  and outputs the pushed digest (build-once/promote-by-digest — the digest is what promote-prod
+  later resolves and redeploys, never rebuilt). AWS credentials must already be configured.
+inputs:
+  dockerfile:
+    description: Path to the Dockerfile, relative to the repo root.
+    required: true
+  context:
+    description: Docker build context, relative to the repo root.
+    required: false
+    default: "."
+  ecr-repo-url:
+    description: Target ECR repository URL (no tag).
+    required: true
+  sha-tag:
+    description: e.g. git-<short-sha>.
+    required: true
+  version-tag:
+    description: e.g. release-v<version>.
+    required: true
+  aws-region:
+    required: true
+outputs:
+  digest:
+    description: Pushed image digest (repo@sha256:...).
+    value: ${{ steps.build.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    - id: build
+      shell: bash
+      run: |
+        # Same .tool-versions read as setup-python-toolchain/the Dockerfile's own poetry
+        # install — independent, not wired through a cross-job output, so this action stays
+        # self-contained regardless of which job runs it. Without this, the Dockerfile's own
+        # `ARG PYTHON_VERSION=3.12` default silently wins, disconnected from .tool-versions.
+        PYTHON_VERSION=$(awk '$1=="python"{print $2}' .tool-versions)
+        docker build -f "${{ inputs.dockerfile }}" \
+          --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
+          -t "${{ inputs.ecr-repo-url }}:${{ inputs.sha-tag }}" \
+          -t "${{ inputs.ecr-repo-url }}:${{ inputs.version-tag }}" \
+          "${{ inputs.context }}"
+        aws ecr get-login-password --region "${{ inputs.aws-region }}" \
+          | docker login --username AWS --password-stdin "${{ inputs.ecr-repo-url }}"
+        docker push "${{ inputs.ecr-repo-url }}:${{ inputs.sha-tag }}"
+        docker push "${{ inputs.ecr-repo-url }}:${{ inputs.version-tag }}"
+        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ inputs.ecr-repo-url }}:${{ inputs.sha-tag }}")
+        echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"

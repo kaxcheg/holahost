@@ -1,0 +1,151 @@
+name: SSM migrate and deploy
+description: >
+  Syncs docker-compose.yml and the environment's .env file to the target instance, then runs
+  `python -m alembic upgrade head` followed by `docker compose up -d`, using the given image.
+  Migrations always run before the container swap (recreate strategy — frame spec). AWS
+  credentials must already be configured.
+
+  The SSM command is sent, then polled to completion (`aws ssm wait command-executed`) — this
+  step's own exit code reflects whether the remote script actually succeeded, not just whether
+  AWS accepted the command into its queue (`send-command` alone returns immediately either way).
+  Remote stdout/stderr are always printed to the job log, on success or failure.
+
+  Both files are embedded directly in the SSM command payload (base64-encoded), not fetched from
+  anywhere external: the repo isn't public (no raw.githubusercontent.com), and the pipeline
+  already has both files checked out plus already authenticates to this exact instance via OIDC —
+  no reason to add git-on-instance or S3 staging just to move a couple KB of text. Confirmed
+  against AWS's own SendCommand docs that this fits well within limits: the hard cap is the whole
+  SSM document at 64 KB (`MaxDocumentSizeExceeded`), and both files together are nowhere near that.
+
+  The DB password never goes in either embedded file (neither is allowed to carry secrets — see
+  `infra/envs/<env>/main.tf`'s value-less `db-password` secret). The remote script fetches it
+  itself, on the instance, via its own instance role — the same permission the `api` container
+  already needs for its own independent fetch (`scripts/bootstrap.py`) — then hands it as
+  `POSTGRES_PASSWORD` to both `docker compose run` (the one-off alembic container, which bypasses
+  `scripts.bootstrap`, so it has no other way to get it — `migrations/env.py` builds its own DSN
+  from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`) and `docker compose up` (for the
+  `postgres` service's own init) — both read it via Compose's own `${POSTGRES_PASSWORD}`
+  interpolation (docker-compose.yml's `postgres.environment`), the one credential that isn't in
+  the synced `.env` on purpose. USER/DB come straight from that `.env` instead, via
+  `docker-compose.yml`'s own `env_file:` key on the `postgres`/`api` services — not threaded
+  through this script at all any more (same file `scripts/bootstrap.py` itself reads from for the
+  `api` container's own `Settings`).
+  Fetched twice by design (here, and again inside `api` at its own startup) so a secret rotation
+  in Secrets Manager takes effect on the next `api` restart alone, no redeploy required — the
+  fetch here only needs to be fresh enough for *this* deploy's migration + `postgres` init.
+inputs:
+  env:
+    description: Environment name (staging/prod) — used to look up the instance-id SSM parameter.
+    required: true
+  service-name:
+    required: true
+  image:
+    description: Image digest/URI to deploy (repo@sha256:...).
+    required: true
+  compose-file:
+    description: Path to docker-compose.yml, relative to the repo root.
+    required: true
+  env-file:
+    description: Path to the environment's .env file, relative to the repo root.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        INSTANCE_ID=$(aws ssm get-parameter --name "/holahost/${{ inputs.env }}/instance-id" --query Parameter.Value --output text)
+        REMOTE_DIR="/opt/services/${{ inputs.service-name }}"
+        # Same relative shape as the source repo (infra/envs/<env>/.env next to the compose file)
+        # so the compose file's own `env_file: [infra/envs/${ENV:?...}/.env]` resolves identically
+        # here and locally — only ENV picks which folder. Below, `--env-file` (Compose's own CLI
+        # flag, unrelated to that YAML `env_file:` key) points at this exact same synced file, so
+        # its `ENV=<env>` line supplies `${ENV}` for that interpolation too — no separate `ENV=`
+        # var needs setting on either docker compose line.
+        ENV_SUBDIR="infra/envs/${{ inputs.env }}"
+        COMPOSE_B64=$(base64 -w0 < "${{ inputs.compose-file }}")
+        ENV_B64=$(base64 -w0 < "${{ inputs.env-file }}")
+        SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-password"
+        # No PYTHON_VERSION anywhere in this script (used to be read here and threaded through
+        # both docker compose lines below) — docker-compose.yml's `api` service has no `build:`
+        # section any more (moved to an explicit `docker build` step in the Makefile, dev-only —
+        # see .build-state/R-25-.../clarifications.md), so Compose never needs it here either.
+
+        # One array element, not several: AWS doesn't document whether `commands` array
+        # entries share shell state (a variable set in one entry being visible in the
+        # next), and search results on it disagreed with each other — unverifiable
+        # without a real instance to test against. A single multi-line script sidesteps
+        # the question entirely: `$PGPW` and `set -e`'s fail-fast both work by ordinary
+        # bash semantics inside one script, no cross-entry assumption needed either way.
+        #
+        # `docker compose run --rm api ...`, not a bare `docker run`: `compose run` auto-joins the
+        # project's own network (no manual `--network rag-documents_default` needed any more) and,
+        # via `postgres`'s own `depends_on: condition: service_healthy`, creates and waits for
+        # `postgres` automatically if it isn't already running, which a bare `docker run` never
+        # did — helps the very-first-deploy case (network/postgres don't exist yet before this
+        # script's first run). Verified live from a clean slate (no network, no containers, no
+        # volumes): created the network, created+started+waited-for postgres to become healthy,
+        # then ran the migration, all as one step. Also confirmed this doesn't collide with an
+        # already-running `api` container's port binding on a redeploy (`compose run` doesn't
+        # publish service ports by default) — see .build-state/R-25-.../clarifications.md.
+        #
+        # `-e POSTGRES_PASSWORD=...` on the `run` command itself, PLUS the same var still set on
+        # the host CLI (below): two different consumers, found for real, not assumed — the host
+        # CLI var feeds `postgres`'s own `environment: {POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}}`
+        # block (Compose's `${VAR}` interpolation, parsed for the *whole* file even though only
+        # `api` is being run), while `api`'s own service definition has *no* mechanism to receive
+        # a host CLI var at all — it only has `env_file:` (reads the synced .env directly, which
+        # deliberately never has the password) — normally fine, because the real, long-running
+        # `api` container fetches PASSWORD itself via `scripts.bootstrap._fetch_password_if_needed`
+        # before `Settings` is built, but this migration invocation overrides the container's CMD,
+        # bypassing `scripts.bootstrap` (and that fetch) entirely, so it has no other way to get
+        # it. `docker compose run`'s own `-e`/`--env` flag injects straight into that one-off
+        # container, same mechanism `docker run -e` uses, confirmed via `docker compose run
+        # --help`. Caught for real: an initial attempt without this `-e` failed with
+        # `KeyError: 'POSTGRES_PASSWORD'` inside the container, live-tested against a local stand-in.
+        REMOTE_SCRIPT=$(cat <<EOF
+        set -e
+        mkdir -p $REMOTE_DIR/$ENV_SUBDIR
+        echo $COMPOSE_B64 | base64 -d > $REMOTE_DIR/docker-compose.yml
+        echo $ENV_B64 | base64 -d > $REMOTE_DIR/$ENV_SUBDIR/.env
+        cd $REMOTE_DIR
+        PGPW=\$(aws secretsmanager get-secret-value --secret-id $SECRET_ID --query SecretString --output text)
+        IMAGE=${{ inputs.image }} POSTGRES_PASSWORD=\$PGPW docker compose --env-file $ENV_SUBDIR/.env run --rm -e POSTGRES_PASSWORD=\$PGPW api python -m alembic upgrade head
+        IMAGE=${{ inputs.image }} POSTGRES_PASSWORD=\$PGPW docker compose --env-file $ENV_SUBDIR/.env up -d
+        EOF
+        )
+
+        # jq builds the request JSON (quoting/newlines/backslashes all handled by `--arg`,
+        # not by hand) — the one manual escape above (`\$`) is the only thing left to get
+        # right by inspection, versus escaping every line of the script by hand into an
+        # inline --parameters string.
+        jq -n --arg instance "$INSTANCE_ID" --arg script "$REMOTE_SCRIPT" \
+          '{InstanceIds: [$instance], DocumentName: "AWS-RunShellScript", Parameters: {commands: [$script]}}' \
+          > /tmp/ssm-command.json
+
+        # send-command is fire-and-forget: it returns as soon as AWS accepts the command into
+        # its queue, not once the remote script (migration + docker compose up) actually
+        # finishes. Without polling, a failed migration on the instance would leave the *old*
+        # container running, and the pipeline's later smoke-check step would then curl that
+        # still-healthy old container and report the whole deploy green despite the failure —
+        # `set -e` in the remote script does make it stop on the first real error, but nothing
+        # here was checking whether it ever got the chance to. `aws ssm wait command-executed`
+        # is AWS's own documented waiter for exactly this: blocks until the invocation reaches a
+        # terminal state, non-zero exit unless that state is Success. Not live-testable without
+        # a real instance (same caveat as every other staging/prod-only path in this session).
+        COMMAND_ID=$(aws ssm send-command --cli-input-json file:///tmp/ssm-command.json --query 'Command.CommandId' --output text)
+        echo "SSM command sent: $COMMAND_ID"
+
+        set +e
+        aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
+        WAIT_STATUS=$?
+        set -e
+
+        echo "--- remote script stdout ---"
+        aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text || true
+        echo "--- remote script stderr ---"
+        aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query StandardErrorContent --output text || true
+
+        if [ "$WAIT_STATUS" -ne 0 ]; then
+          echo "SSM command did not complete successfully (wait command-executed exited $WAIT_STATUS) — failing the deploy." >&2
+          exit 1
+        fi

@@ -1,0 +1,60 @@
+name: rag-documents-promote-prod
+
+on:
+  push:
+    tags: ["rag-documents/v*"]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          # Same ACCOUNT_ID caveat as deploy-staging.yml — pending platform AWS account/OIDC setup.
+          role-to-assume: arn:aws:iam::ACCOUNT_ID:role/github-actions-rag-documents-prod
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: holahost/services/rag-documents/infra/common
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: holahost/services/rag-documents/infra/envs/prod
+
+      - name: Resolve digest by tag (no rebuild — build-once/promote-by-digest)
+        id: resolve
+        run: |
+          REPO=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)
+          # Tag trigger: GITHUB_REF_NAME = "rag-documents/vYYYYMMDD.N" (frame spec's per-component
+          # version tag). Strip the "rag-documents/" prefix, prepend "release-" to match the tag
+          # deploy-staging pushed — same derivation on both sides, no basename/sed juggling.
+          VERSION_TAG="release-${GITHUB_REF_NAME#*/}"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REPO"
+          docker pull "$REPO:$VERSION_TAG"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$REPO:$VERSION_TAG")
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/ssm-migrate-deploy
+        with:
+          env: prod
+          service-name: rag-documents
+          image: ${{ steps.resolve.outputs.digest }}
+          compose-file: holahost/services/rag-documents/docker-compose.yml
+          env-file: holahost/services/rag-documents/infra/envs/prod/.env
+
+      - uses: ./.github/actions/smoke-check
+        with:
+          url: https://hola.host/api/rag-documents/health

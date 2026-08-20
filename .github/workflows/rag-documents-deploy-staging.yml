@@ -1,0 +1,67 @@
+name: rag-documents-deploy-staging
+
+on:
+  push:
+    branches: ["release/v*"]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          # ACCOUNT_ID/the IAM role itself don't exist yet — both depend on the platform-level
+          # AWS account + OIDC provider being provisioned, which is out of this session's scope
+          # (.build-state/.../clarifications.md scope-boundary note). Fill in once that lands.
+          role-to-assume: arn:aws:iam::ACCOUNT_ID:role/github-actions-rag-documents-staging
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: holahost/services/rag-documents/infra/common
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: holahost/services/rag-documents/infra/envs/staging
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          echo "repo_url=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=git-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=release-$(basename "${GITHUB_REF}")" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/build-push-image
+        id: build
+        with:
+          dockerfile: holahost/services/rag-documents/Dockerfile
+          ecr-repo-url: ${{ steps.tags.outputs.repo_url }}
+          sha-tag: ${{ steps.tags.outputs.sha_tag }}
+          version-tag: ${{ steps.tags.outputs.version_tag }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: ./.github/actions/ssm-migrate-deploy
+        with:
+          env: staging
+          service-name: rag-documents
+          image: ${{ steps.build.outputs.digest }}
+          compose-file: holahost/services/rag-documents/docker-compose.yml
+          env-file: holahost/services/rag-documents/infra/envs/staging/.env
+
+      # Cold volume downloads the embedding model on first boot (R-30's own backlog wording,
+      # "smoke с ожиданием прогрева модели") — retried with a window, not one-shot.
+      - uses: ./.github/actions/smoke-check
+        with:
+          url: https://staging.hola.host/api/rag-documents/health

@@ -6,33 +6,44 @@ from __future__ import annotations
 
 import os
 import time
-from typing import cast
 
 from fastapi import FastAPI
 
 from config.logging import configure_logging, log_event
-from config.sm_loader import SecretsClient, load_secret_into_env, make_secrets_client
 from interface.http.app import create_app
 from interface.http.dependencies import get_embedding_model, get_engine, get_settings
 
 
-def _load_secrets_if_needed() -> None:
+def _fetch_password_if_needed() -> None:
+    """Set `POSTGRES_PASSWORD` from Secrets Manager, before `Settings` is built (§3.8).
+
+    Dev: no-op — `.env` (`env_file`) already sets `POSTGRES_PASSWORD` directly. Staging/
+    prod: fetched here, fresh, on every process start, so a secret rotation takes effect
+    on the next restart alone, no redeploy required.
+
+    Only the password: `Settings` itself now assembles the actual connection URL from
+    `postgres_user`/`postgres_password`/`postgres_db`/`postgres_host`/`postgres_port`
+    (a `@computed_field`, `PostgresDsn`-built) — not this module's job any more. USER/DB
+    come from `infra/envs/<env>/.env` (`env_file`) the same way PASSWORD does for dev,
+    same file `docker-compose.yml`'s own `postgres` service init already reads.
+    """
     env = os.environ.get("ENV", "dev")
     if env == "dev":
-        return  # dev reads DATABASE_URL etc. straight from .env.dev (§3.8)
-    # Explicit region, no ambient discovery (sm_loader's own convention) — AWS_REGION
-    # is read directly, not through Settings: it's needed before Settings can even be
-    # constructed (this runs first in bootstrap()).
-    real_client = make_secrets_client(region=os.environ["AWS_REGION"])
-    # cast, not a type: ignore — see SecretsClient's docstring (sm_loader.py) for why
-    # boto3-stubs' Unpack[TypedDict]-kwargs signature doesn't structurally satisfy this
-    # Protocol under mypy despite being call-compatible at the one site that matters.
-    client = cast(SecretsClient, real_client)
-    load_secret_into_env(env, "db-password", "DATABASE_URL", client)
+        return
+    import boto3  # lazy: dev never reaches this branch, so it never pays for the import
+
+    # Explicit region, no ambient discovery — AWS_REGION is read directly, not through
+    # Settings: it's needed before Settings can even be constructed. Secret id is
+    # service-scoped (`holahost/{env}/rag-documents/db-password`, unlike
+    # `~/repos/lead-capture`'s flat `holahost/{env}/{name}`, which predates a second
+    # service existing).
+    client = boto3.session.Session().client("secretsmanager", region_name=os.environ["AWS_REGION"])
+    secret = client.get_secret_value(SecretId=f"holahost/{env}/rag-documents/db-password")
+    os.environ["POSTGRES_PASSWORD"] = secret["SecretString"]
 
 
 def bootstrap() -> FastAPI:
-    _load_secrets_if_needed()
+    _fetch_password_if_needed()
     configure_logging()
 
     start = time.monotonic()
