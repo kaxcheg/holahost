@@ -17,9 +17,17 @@ venv/
 .coverage
 htmlcov/
 
-# Environment files
+# Environment files. Two naming conventions coexist: the older <svc-root>/.env.<env>.example
+# (env name in the filename) and the newer infra/envs/<env>/.env.example + infra/envs/<env>/.env
+# (env name is the directory instead — real dev/.env stays a per-developer local copy and must
+# stay ignored; real staging/.env and prod/.env are non-secret and safe to commit, so are
+# explicitly un-ignored by path, not by a basename glob that would also catch dev/.env).
 *.env
 .env.*
+!.env.*.example
+!**/.env.example
+!**/infra/envs/staging/.env
+!**/infra/envs/prod/.env
 
 # OS / editor
 .DS_Store

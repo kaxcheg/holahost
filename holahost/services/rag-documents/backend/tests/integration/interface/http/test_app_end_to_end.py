@@ -2,81 +2,15 @@
 real Postgres, real JWT validation. Proves the composition root actually wires
 (fakes in test_router.py can't catch a real wiring bug).
 
-`client` is session-scoped, not per-test: `interface.http.dependencies`' `@lru_cache`
-singletons (`get_settings`/`get_engine`/`get_embedding_model`/...) live for the whole
-process once built — matching how `bootstrap()` is meant to run exactly once per real
-process. A per-test fixture rebuilding the app would just resolve those same cached
-singletons a second time anyway (a monkeypatched env change on a later test would be
-silently ignored), so the honest scope is session: one real app, one real environment,
-for every test in this file. Auth tokens are cheap to mint per test instead.
+`client`/`auth_headers` fixtures live in `conftest.py` (shared with `test_grounding.py`, R-29).
 """
 
 from __future__ import annotations
 
-import tempfile
-from collections.abc import Callable, Iterator
-from pathlib import Path
+from collections.abc import Callable
 
 import pytest
 from fastapi.testclient import TestClient
-
-# Not tempfile.TemporaryDirectory(): that auto-deletes on context exit, forcing a full
-# model re-download every run. A stable subdirectory under the real system temp dir
-# (tempfile.gettempdir(), not a literal "/tmp/..." string — S108) persists the
-# ~100+ MB model across test runs, matching FastembedEmbeddingModel's own real
-# production caching behavior (§3.1: loaded once per process into a volume).
-_EMBEDDING_CACHE_DIR = str(Path(tempfile.gettempdir()) / "rag-documents-test-fastembed-cache")
-
-
-@pytest.fixture(scope="session")
-def client(
-    pg_dsn: str, jwks_url: str, monkeypatch_session: pytest.MonkeyPatch
-) -> Iterator[TestClient]:
-    monkeypatch_session.setenv("ENV", "dev")
-    monkeypatch_session.setenv("DATABASE_URL", pg_dsn)
-    monkeypatch_session.setenv(
-        "EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    )
-    monkeypatch_session.setenv("EMBEDDING_CACHE_DIR", _EMBEDDING_CACHE_DIR)
-    monkeypatch_session.setenv("CHUNK_WINDOW_TOKENS", "120")
-    monkeypatch_session.setenv("CHUNK_OVERLAP_TOKENS", "16")
-    monkeypatch_session.setenv("SEARCH_TOP_K", "5")
-    monkeypatch_session.setenv("SIMILARITY_THRESHOLD", "0.30")
-    monkeypatch_session.setenv("MAX_QUERY_LENGTH", "4000")
-    monkeypatch_session.setenv("RATE_LIMIT_DEFAULT", "600")
-    monkeypatch_session.setenv("RATE_LIMIT_INGEST", "60")
-    monkeypatch_session.setenv("JWT_CLOCK_SKEW_SECONDS", "30")
-    monkeypatch_session.setenv("JWKS_URL", jwks_url)
-    monkeypatch_session.setenv("EXPECTED_ALGORITHM", "RS256")
-    monkeypatch_session.setenv("EXPECTED_ISSUER", "auth")
-    monkeypatch_session.setenv("EXPECTED_AUDIENCE", "rag-documents")
-
-    # Import (not call) bootstrap — the module-level `app = bootstrap()` statement in
-    # scripts/bootstrap.py already runs bootstrap() exactly once, on this very import,
-    # which is why env vars must already be correct before it happens. Calling
-    # bootstrap() again here would build a redundant second FastAPI app (the
-    # @lru_cache singletons make it cheap, but it's pointless duplication and logs a
-    # second, misleadingly-instant "startup_completed" event).
-    from scripts.bootstrap import app as built_app
-
-    with TestClient(built_app) as test_client:
-        yield test_client
-
-
-@pytest.fixture(scope="session")
-def monkeypatch_session() -> Iterator[pytest.MonkeyPatch]:
-    """`monkeypatch` itself is function-scoped only; `client` needs a session-scoped
-    equivalent to set env vars once for the one real app built for this whole file."""
-    mp = pytest.MonkeyPatch()
-    yield mp
-    mp.undo()
-
-
-@pytest.fixture
-def auth_headers(make_token: Callable[..., str]) -> dict[str, str]:
-    token = make_token(sub="user-123", client_id="cli-1")
-    return {"Authorization": f"Bearer {token}", "X-Request-ID": "e2e-test-request-id"}
-
 
 pytestmark = pytest.mark.integration
 

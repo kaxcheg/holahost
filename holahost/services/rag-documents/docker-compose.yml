@@ -1,0 +1,114 @@
+name: rag-documents
+
+# The one compose manifest for this service — own compose project, no platform nginx/gateway in
+# front of it here (that's added by the platform's compose on staging/prod; nothing in this file
+# provides it). Used two ways:
+#   - Locally (frame spec "dev (local)"): `make dev-up` builds the image explicitly (a plain
+#     `docker build`, same as CI's `build-push-image` action) and tags it `rag-documents:dev`,
+#     *before* this file is ever touched — then publishes the app port straight to the host — no
+#     gateway, X-Request-ID is the caller's job.
+#   - Deployed as-is to staging/prod: the SAME file is embedded and written to
+#     /opt/services/rag-documents/docker-compose.yml by the deploy pipeline's SSM command
+#     (ssm-migrate-deploy action), then run there with IMAGE=<ecr-repo>@sha256:<digest>.
+#
+# No `build:` section on `api` (removed — see .build-state/R-25-.../clarifications.md): this file
+# only ever *runs* an image, it never builds one, in either context above. That was always true
+# for staging/prod (the build context wouldn't even exist on the instance) and is now made
+# structurally true for dev too, by moving the build to an explicit Makefile step instead of
+# `docker compose up --build`. Consequence: `PYTHON_VERSION` (only ever needed to pick the base
+# image at build time) no longer appears anywhere in this file — Compose used to require *some*
+# value for it on every single invocation regardless of whether a build would ever actually
+# happen (verified live, `${VAR}` interpolation is eager for the whole file), which is exactly
+# what forced the awkward `PYTHON_VERSION=unused` placeholder on every staging/prod command. Gone
+# now, for the same reason it was never load-bearing there in the first place.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    # `env_file` for USER/DB, not `environment: {POSTGRES_USER: ${POSTGRES_USER:?...}, ...}` (the
+    # prior design for all three): the official Postgres image reads these as plain container env
+    # vars — it doesn't care whether Compose set them via `environment:` (needs each one resolved
+    # through Compose's own host-shell `${VAR}` interpolation) or `env_file:` (injects the file's
+    # pairs directly, same mechanism `api` below already uses, and the same one `docker run
+    # --env-file` uses for the standalone migration container — see Makefile). Reading the file
+    # straight into the container instead of threading each value through host-shell
+    # interpolation first removes two vars from the "must be host-exported for Compose to even
+    # parse this file" list — only `${ENV}` (this env_file's own *path*, still Compose-side)
+    # remains, for USER/DB specifically.
+    #
+    # PASSWORD stays `environment:` (host-interpolated), deliberately NOT folded into env_file
+    # too: unlike USER/DB, it isn't always in the file — staging/prod's committed .env never has
+    # it (Secrets-Manager-only), so `env_file:` would inject nothing for it there, and Postgres's
+    # own entrypoint would then refuse to start ("superuser password is not specified"). The
+    # deploy script already supplies it as an inline env var on the `docker compose up -d`
+    # invocation itself (see ssm-migrate-deploy/action.yml), which only `environment:`'s
+    # host-shell interpolation picks up — `env_file:` only ever reads the file on disk, never the
+    # invoking process's own environment. Dev is unaffected either way (both mechanisms would
+    # supply the same value, from the same file) — found for real while verifying this change:
+    # tested with `env_file:` alone for all three first, dev looked fine, only checking staging's
+    # actual .env content surfaced that PASSWORD would silently go missing there.
+    env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?requires env var POSTGRES_PASSWORD — the postgres superuser password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # $$ (not $), and reading the container's own POSTGRES_USER/POSTGRES_DB rather than
+      # hardcoding the literal again a third time: Compose's own `${VAR}` interpolation would
+      # otherwise try to resolve $POSTGRES_USER/$POSTGRES_DB *itself* at parse time (same vars
+      # dropped from host-export above) — `$$` escapes that, leaving a literal `$VAR` for the
+      # shell CMD-SHELL runs *inside the container* at healthcheck time, where env_file above
+      # already guarantees both are set.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    # No `build:` here (see header comment) — `image:` is the only way this service ever
+    # resolves. Dev: `make dev-up` runs `docker build ... -t rag-documents:dev` first, so this
+    # `image:` pull finds it already in the local cache (`pull_policy` defaults to `missing` —
+    # check local cache, then registry — never reaching a registry that doesn't have a
+    # `rag-documents:dev` tag). Staging/prod: the deploy pipeline sets
+    # IMAGE=<ecr-repo>@sha256:<digest>, a real, already-pushed image, same pull.
+    #
+    # No fallback on either this or env_file below: if IMAGE/ENV were ever accidentally
+    # unset on a staging/prod deploy, a `rag-documents:dev`/`infra/envs/dev/.env` default
+    # wouldn't silently succeed wrong (that .env file doesn't exist on the instance at all —
+    # see the header comment) — it'd still fail, just confusingly (a pull error or a
+    # missing-file error instead of a clear "IMAGE/ENV wasn't set"). Mandatory makes the actual
+    # cause the first thing an operator sees. Makefile exports both for dev.
+    #
+    # env_file's own path uses `${ENV}` — the same name `Settings.env` reads *inside* the
+    # container (config/settings.py) — deliberately, not a collision: this `${ENV}` is Compose's
+    # own host-shell interpolation (resolved from whoever invokes `docker compose`, before any
+    # container starts, purely to pick *which* .env file to load) while `Settings.env` reads
+    # `ENV` from *inside* that already-selected file, injected into the container by env_file
+    # below — two different mechanisms, two different environments (host vs. container), that
+    # happen to agree on the same value by construction (each infra/envs/<x>/.env's own `ENV=<x>`
+    # line matches the folder it lives in) — one name for one concept, not two names for it.
+    image: ${IMAGE:?requires env var IMAGE — which image to run}
+    env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
+    networks: [backbone, default]
+    volumes:
+      # Target must equal EMBEDDING_CACHE_DIR (infra/envs/<env>/.env, loaded into the container
+      # above via env_file) — that's where the app actually reads/writes the cache; a mismatch
+      # here would silently uncouple the named volume from what the app persists to. Interpolated
+      # from the same variable rather than a second hardcoded /opt/model-cache literal, same
+      # reasoning as PYTHON_VERSION above. No fallback — Makefile/the deploy script export the
+      # real value from that same .env file (see Makefile), so an unset var here means something
+      # upstream is missing, not a value to quietly default around.
+      - model-cache:${EMBEDDING_CACHE_DIR:?requires env var EMBEDDING_CACHE_DIR — the model-cache volume's mount path}
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  backbone:
+    external: true
+
+volumes:
+  pgdata:
+  model-cache:

@@ -1,0 +1,21 @@
+name: Smoke check
+description: Retries GET <url> until it returns 2xx, or fails after retries * interval-seconds.
+inputs:
+  url:
+    required: true
+  retries:
+    required: false
+    default: "30"
+  interval-seconds:
+    required: false
+    default: "20"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        for i in $(seq 1 ${{ inputs.retries }}); do
+          if curl -sf "${{ inputs.url }}"; then exit 0; fi
+          sleep ${{ inputs.interval-seconds }}
+        done
+        echo "Smoke check failed after $((${{ inputs.retries }} * ${{ inputs.interval-seconds }})) seconds" && exit 1

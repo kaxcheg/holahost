@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -27,8 +26,32 @@ _APP_ROLE_PASSWORD = "rag-documents-app-test-only"  # test-only, not a real secr
 
 
 def _run_migrations(dsn: str) -> None:
-    os.environ["DATABASE_URL"] = dsn  # env.py reads DATABASE_URL
-    command.upgrade(Config(str(_ALEMBIC_INI)), "head")
+    """migrations/env.py's `_dsn()` builds its own DSN from POSTGRES_USER/PASSWORD/DB/HOST/PORT,
+    not a pre-assembled DATABASE_URL — same split
+    tests/integration/interface/http/conftest.py's `client` fixture does, for the same reason
+    (Settings.database_url is built the same way).
+
+    `pytest.MonkeyPatch.context()`, not the session-scoped `monkeypatch`/`monkeypatch_session`
+    fixture idiom used elsewhere: those only undo at the very end of the whole `pytest` session,
+    which is too late here — a bare `pytest` run (no `-m` filter) collects `tests/integration/`
+    before `tests/unit/` alphabetically, so a session-scoped patch would still be leaking
+    POSTGRES_HOST/PORT (testcontainers' random host port) into `tests/unit/config/
+    test_settings.py`'s assertions when they ran later in the *same* process — found for real,
+    not guessed (`test_database_url_is_a_secret`/`..._percent_encodes_special_characters` failed
+    against the leaked port instead of the fixed `postgres:5432` default). These vars are only
+    ever needed for the single `command.upgrade(...)` call below, not for the rest of the
+    session, so a narrowly-scoped context that exits (and restores the prior environment)
+    immediately after is both correct and simpler than tracking a wider-scoped fixture.
+    """
+    parts = urlsplit(dsn)
+    assert parts.username and parts.password and parts.hostname and parts.port
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("POSTGRES_USER", parts.username)
+        mp.setenv("POSTGRES_PASSWORD", parts.password)
+        mp.setenv("POSTGRES_DB", parts.path.lstrip("/"))
+        mp.setenv("POSTGRES_HOST", parts.hostname)
+        mp.setenv("POSTGRES_PORT", str(parts.port))
+        command.upgrade(Config(str(_ALEMBIC_INI)), "head")
 
 
 def _create_app_role(superuser_dsn: str) -> None:

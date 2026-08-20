@@ -1,0 +1,23 @@
+name: Setup Python toolchain
+description: >
+  Sets up Python + Poetry pinned to the versions in the repo-root .tool-versions (single source
+  for local dev, Docker, and CI). Assumes actions/checkout has already run.
+outputs:
+  python-version:
+    description: The pinned Python version read from .tool-versions (e.g. for docker build --build-arg).
+    value: ${{ steps.pin.outputs.python-version }}
+runs:
+  using: composite
+  steps:
+    - name: Read pinned versions
+      id: pin
+      shell: bash
+      run: echo "python-version=$(awk '$1=="python"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ steps.pin.outputs.python-version }}
+
+    - name: Install poetry (pinned)
+      shell: bash
+      run: pip install "poetry==$(awk '$1=="poetry"{print $2}' .tool-versions)"
