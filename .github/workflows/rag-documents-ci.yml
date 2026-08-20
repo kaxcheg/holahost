@@ -39,6 +39,29 @@ jobs:
       - uses: ./.github/actions/setup-python-toolchain
         if: steps.filter.outputs.changed == 'true'
 
+      # The repo-root .pre-commit-config.yaml's 4 local Python hooks (ruff/ruff-format/mypy/
+      # import-linter) have `pass_filenames: false` — each one unconditionally loops over *every*
+      # package under holahost/ with its own pyproject.toml (currently rag-documents/backend and
+      # holahost-auth) and runs `poetry run <tool>` inside it, regardless of which files this PR
+      # actually touched. On a developer's machine both venvs already have their deps installed
+      # from ordinary local work; a fresh CI runner has neither — `poetry run` finds an empty venv
+      # it just silently created and reports "Command not found: ruff/mypy/lint-imports" for both
+      # packages. Found for real: this is the first live run of this exact workflow file (prior
+      # rounds only got as far as YAML-syntax checks — see .build-state/.../clarifications.md),
+      # and it failed on exactly this. Installing both packages' deps before the pre-commit step
+      # (not after, and not just rag-documents' own, matching what the hooks themselves loop
+      # over) fixes it; the `poetry install` that used to live inside "Unit tests" below is now
+      # redundant there and removed.
+      - name: Install dependencies (rag-documents backend)
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/services/rag-documents/backend
+        run: poetry install
+
+      - name: Install dependencies (holahost-auth)
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/libs/holahost-auth
+        run: poetry install
+
       - name: Pre-commit (this service's + holahost-auth's changed files)
         if: steps.filter.outputs.changed == 'true'
         run: |
@@ -50,9 +73,7 @@ jobs:
       - name: Unit tests
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/services/rag-documents/backend
-        run: |
-          poetry install
-          poetry run pytest -m "not integration"
+        run: poetry run pytest -m "not integration"
 
       - name: Integration tests (testcontainers — needs Docker)
         if: steps.filter.outputs.changed == 'true'
