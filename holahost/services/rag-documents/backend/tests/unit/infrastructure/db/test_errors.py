@@ -13,7 +13,10 @@ class TestTranslateDbErrors:
         connect() is itself a DBAPIError subclass), so this is a regression guard, not
         just a new-behavior check.
         """
-        # Port 1 is a safe bet for "closed, connection refused" in any sandboxed env.
-        uow = build_test_uow("postgresql://user:pass@localhost:1/nonexistent")
+        # Port 1 is a safe bet for "closed, connection refused" in any sandboxed env. The DSN
+        # spells its driver dialect out, same as every real one here (`config.settings`
+        # builds them that way): a bare `postgresql://` resolves to SQLAlchemy's *default*
+        # postgres dialect, psycopg2, which this project does not depend on.
+        uow = build_test_uow("postgresql+psycopg://user:pass@localhost:1/nonexistent")
         with pytest.raises(StorageUnavailableError), uow:
             pass

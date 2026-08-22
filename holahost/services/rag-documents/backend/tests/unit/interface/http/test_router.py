@@ -16,6 +16,7 @@ from tests._support.fakes import (
     FakeVectorSearch,
 )
 
+from interface.http.api_base import API_BASE_URL
 from interface.http.dependencies import (
     get_auth,
     get_chunker,
@@ -42,7 +43,7 @@ def _build_app(*, rate_limiter: FakeRateLimiter | None = None) -> FastAPI:
     app = FastAPI()
     app.add_middleware(RequestIdMiddleware)
     register_error_handlers(app)
-    app.include_router(documents_router)
+    app.include_router(documents_router, prefix=API_BASE_URL)
 
     fake_repo = FakeDocumentsRepo()
     fake_vector_search = FakeVectorSearch()

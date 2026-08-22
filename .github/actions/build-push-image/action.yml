@@ -1,8 +1,20 @@
 name: Build and push image
 description: >
-  Builds an image, tags it with both a git-sha tag and a release-version tag, pushes both to ECR,
-  and outputs the pushed digest (build-once/promote-by-digest — the digest is what promote-prod
-  later resolves and redeploys, never rebuilt). AWS credentials must already be configured.
+  Builds an image, tags it with the commit's git-sha tag, pushes it to ECR, and outputs the pushed
+  digest (build-once/promote-by-digest — the digest is what promote-prod later resolves and
+  redeploys, never rebuilt). AWS credentials must already be configured.
+
+  Only the sha tag is pushed here. The human-readable `release-v<version>` tag is NOT applied at
+  build time: the ECR repository is IMMUTABLE_WITH_EXCLUSION (infra/common/main.tf, only `latest*`
+  excluded), while a release branch receives many commits — every stabilization push would try to
+  re-push the identical `release-<branch>` tag onto a new image and fail here at `docker push`.
+  That tag is applied once, by promote-prod, onto the exact digest that shipped.
+
+  The push is idempotent: if the sha tag already exists in the repository, the existing digest is
+  reused and nothing is built or pushed. Same commit means the same image by definition, so this
+  is what build-once already implies — and without it, re-running a workflow that failed *after*
+  the build (a flaky migration, a smoke-check timeout) would fail again at `docker push`, on an
+  immutable tag that the previous attempt already wrote.
 inputs:
   dockerfile:
     description: Path to the Dockerfile, relative to the repo root.
@@ -17,9 +29,6 @@ inputs:
   sha-tag:
     description: e.g. git-<short-sha>.
     required: true
-  version-tag:
-    description: e.g. release-v<version>.
-    required: true
   aws-region:
     required: true
 outputs:
@@ -32,6 +41,23 @@ runs:
     - id: build
       shell: bash
       run: |
+        set -euo pipefail
+        REPO_URL="${{ inputs.ecr-repo-url }}"
+        # describe-images takes the repository *name*, not the registry URL the docker CLI wants.
+        REPO_NAME="${REPO_URL##*/}"
+        SHA_TAG="${{ inputs.sha-tag }}"
+
+        EXISTING=$(aws ecr describe-images \
+          --repository-name "$REPO_NAME" \
+          --image-ids imageTag="$SHA_TAG" \
+          --query 'imageDetails[0].imageDigest' \
+          --output text 2>/dev/null || true)
+        if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+          echo "$SHA_TAG already in $REPO_NAME ($EXISTING) — reusing, not rebuilding."
+          echo "digest=${REPO_URL}@${EXISTING}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
         # Same .tool-versions read as setup-python-toolchain/the Dockerfile's own poetry
         # install — independent, not wired through a cross-job output, so this action stays
         # self-contained regardless of which job runs it. Without this, the Dockerfile's own
@@ -39,12 +65,10 @@ runs:
         PYTHON_VERSION=$(awk '$1=="python"{print $2}' .tool-versions)
         docker build -f "${{ inputs.dockerfile }}" \
           --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
-          -t "${{ inputs.ecr-repo-url }}:${{ inputs.sha-tag }}" \
-          -t "${{ inputs.ecr-repo-url }}:${{ inputs.version-tag }}" \
+          -t "${REPO_URL}:${SHA_TAG}" \
           "${{ inputs.context }}"
         aws ecr get-login-password --region "${{ inputs.aws-region }}" \
-          | docker login --username AWS --password-stdin "${{ inputs.ecr-repo-url }}"
-        docker push "${{ inputs.ecr-repo-url }}:${{ inputs.sha-tag }}"
-        docker push "${{ inputs.ecr-repo-url }}:${{ inputs.version-tag }}"
-        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ inputs.ecr-repo-url }}:${{ inputs.sha-tag }}")
+          | docker login --username AWS --password-stdin "$REPO_URL"
+        docker push "${REPO_URL}:${SHA_TAG}"
+        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${REPO_URL}:${SHA_TAG}")
         echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"

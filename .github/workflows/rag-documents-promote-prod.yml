@@ -34,18 +34,35 @@ jobs:
         with:
           working-directory: holahost/services/rag-documents/infra/envs/prod
 
-      - name: Resolve digest by tag (no rebuild — build-once/promote-by-digest)
+      # Resolve by the COMMIT's sha tag, not by a `release-*` tag: the git tag this workflow runs
+      # on points at exactly one commit, and deploy-staging pushed that commit's image as
+      # `git-<short-sha>` — so the sha tag is a direct, unambiguous handle on the image staging
+      # actually validated. (The old derivation went through `release-<branch>`, a tag shared by
+      # every commit of the release branch, which is both ambiguous about *which* build shipped
+      # and impossible to push more than once on an immutable repo — see deploy-staging.yml.)
+      #
+      # `describe-images`, not `docker pull` + `docker inspect`: the digest is registry metadata,
+      # so there is no reason to pull the whole (torch-sized) image onto the runner to read it —
+      # nothing here ever runs the image, the instance pulls it itself by digest.
+      - name: Resolve digest by commit (no rebuild — build-once/promote-by-digest)
         id: resolve
         run: |
+          set -euo pipefail
           REPO=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)
-          # Tag trigger: GITHUB_REF_NAME = "rag-documents/vYYYYMMDD.N" (frame spec's per-component
-          # version tag). Strip the "rag-documents/" prefix, prepend "release-" to match the tag
-          # deploy-staging pushed — same derivation on both sides, no basename/sed juggling.
-          VERSION_TAG="release-${GITHUB_REF_NAME#*/}"
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REPO"
-          docker pull "$REPO:$VERSION_TAG"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$REPO:$VERSION_TAG")
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          SHA_TAG="git-${GITHUB_SHA::7}"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "${REPO##*/}" \
+            --image-ids imageTag="$SHA_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "No image tagged $SHA_TAG in ${REPO##*/} — this commit was never deployed to staging." >&2
+            echo "Tag a commit that deploy-staging has already built, then re-run." >&2
+            exit 1
+          fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "digest=$REPO@$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/ssm-migrate-deploy
         with:
@@ -58,3 +75,32 @@ jobs:
       - uses: ./.github/actions/smoke-check
         with:
           url: https://hola.host/api/rag-documents/health
+
+      # Only now, after the deploy is live and answering, does the version tag get applied — so
+      # `release-vYYYYMMDD.N` in ECR means "this exact image shipped to prod", not "this was built
+      # at some point". Applied by retagging the existing manifest (put-image), never by a second
+      # build: the digest is unchanged, so the immutable repository accepts one new name for an
+      # image it already holds. Idempotent on a re-run — an identical tag+manifest comes back as
+      # ImageAlreadyExistsException, which is success for our purposes, not a failure.
+      - name: Tag the shipped digest with the release version
+        run: |
+          set -euo pipefail
+          REPO="${{ steps.resolve.outputs.repo }}"
+          REPO_NAME="${REPO##*/}"
+          # GITHUB_REF_NAME = "rag-documents/vYYYYMMDD.N" (frame spec's per-component version tag).
+          VERSION_TAG="release-${GITHUB_REF_NAME#*/}"
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name "$REPO_NAME" \
+            --image-ids imageDigest="${{ steps.resolve.outputs.image_digest }}" \
+            --accepted-media-types \
+              "application/vnd.docker.distribution.manifest.v2+json" \
+              "application/vnd.oci.image.manifest.v1+json" \
+            --query 'images[0].imageManifest' --output text)
+          if aws ecr put-image \
+               --repository-name "$REPO_NAME" \
+               --image-tag "$VERSION_TAG" \
+               --image-manifest "$MANIFEST" >/dev/null 2>&1; then
+            echo "Tagged ${{ steps.resolve.outputs.image_digest }} as $VERSION_TAG."
+          else
+            echo "$VERSION_TAG already present — left as is."
+          fi

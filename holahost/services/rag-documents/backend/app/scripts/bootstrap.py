@@ -8,6 +8,7 @@ import os
 import time
 
 from fastapi import FastAPI
+from sqlalchemy import Engine, text
 
 from config.logging import configure_logging, log_event
 from interface.http.app import create_app
@@ -18,8 +19,15 @@ def _fetch_password_if_needed() -> None:
     """Set `POSTGRES_PASSWORD` from Secrets Manager, before `Settings` is built (§3.8).
 
     Dev: no-op — `.env` (`env_file`) already sets `POSTGRES_PASSWORD` directly. Staging/
-    prod: fetched here, fresh, on every process start, so a secret rotation takes effect
-    on the next restart alone, no redeploy required.
+    prod: fetched here, fresh, on every process start.
+
+    A restart alone is NOT enough to complete a rotation, and this fetch must not be read as
+    implying otherwise: it only changes which password the *client* offers. The password the
+    Postgres role actually accepts is set by `scripts/provision_app_role.py`, which the deploy
+    runs as the bootstrap superuser — the `postgres` image applies `POSTGRES_PASSWORD` at initdb
+    and never again, and `pgdata` outlives every restart. Rotating the secret and restarting
+    without redeploying therefore fails authentication on every connection. The runbook's
+    rotation step is "put-secret-value, then redeploy" for exactly this reason.
 
     Only the password: `Settings` itself now assembles the actual connection URL from
     `postgres_user`/`postgres_password`/`postgres_db`/`postgres_host`/`postgres_port`
@@ -42,13 +50,44 @@ def _fetch_password_if_needed() -> None:
     os.environ["POSTGRES_PASSWORD"] = secret["SecretString"]
 
 
+def _assert_rls_is_enforced(engine: Engine) -> None:
+    """Refuse to serve traffic on a connection that bypasses row-level security (§8.0).
+
+    Owner isolation here has exactly one enforcement point — the RLS policies in
+    `migrations/versions/20260809_1200_*.py`. No repository filters by owner in its own SQL
+    (`SqlAlchemyDocumentsRepo`/`PgvectorSearch` both say so), so if the connecting role is a
+    superuser or carries BYPASSRLS, every `get`, `search`, `replace` and `delete` silently
+    serves and mutates other owners' rows, with nothing failing anywhere to reveal it.
+
+    That failure mode is invisible by construction, which is why it is checked here rather than
+    trusted: the integration suite proves isolation under a deliberately unprivileged role
+    (`tests/integration/conftest.py`), so a deployment that connects as something else is not
+    covered by any test that passes. One query at startup converts a silent, total loss of
+    isolation into a process that refuses to start.
+    """
+    with engine.connect() as conn:
+        bypasses = conn.execute(
+            text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+        ).scalar_one()
+    if bypasses:
+        raise RuntimeError(
+            "refusing to start: the configured POSTGRES_USER bypasses row-level security "
+            "(superuser or BYPASSRLS), which disables owner isolation entirely. Deploy runs "
+            "scripts/provision_app_role.py to create this role without either attribute — "
+            "check that it ran, and that POSTGRES_USER is not the postgres container's own "
+            "initdb superuser."
+        )
+
+
 def bootstrap() -> FastAPI:
     _fetch_password_if_needed()
     configure_logging()
 
     start = time.monotonic()
     get_settings()  # fail fast on missing/invalid config before touching anything else
-    get_engine()  # build the one process-wide connection pool
+    # get_engine() builds the one process-wide connection pool; the guard then spends one
+    # query on it proving this deployment's role cannot bypass RLS (see the docstring).
+    _assert_rls_is_enforced(get_engine())
     get_embedding_model()  # eager load — §3.1: model must be ready before serving traffic
     load_ms = (time.monotonic() - start) * 1000
 

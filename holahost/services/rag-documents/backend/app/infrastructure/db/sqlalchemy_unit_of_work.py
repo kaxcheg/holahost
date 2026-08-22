@@ -12,17 +12,20 @@ from infrastructure.db.errors import translate_db_errors
 
 
 def build_engine(database_url: str, *, pool_size: int = 5) -> Engine:
-    """Build a process-shared `Engine` (and its connection pool) from a raw DSN.
+    """Build a process-shared `Engine` (and its connection pool) from a DSN.
 
     Used by the composition root (R-24) to build exactly one `Engine` per process,
     handed to a fresh `SqlAlchemyUnitOfWork(engine)` for every request. Tests that need
     their own throwaway `Engine` from a raw DSN use
     `tests._support.db.build_test_uow` instead of a production-side convenience
     method — this module has no test-only surface.
+
+    The DSN arrives already carrying its driver dialect (`config.settings._postgres_dsn`,
+    and testcontainers' own `get_connection_url(driver="psycopg")` in the integration
+    fixtures), so there is nothing to rewrite here.
     """
-    url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
     engine = create_engine(
-        url,
+        database_url,
         pool_size=pool_size,
         pool_pre_ping=True,
         connect_args={"options": "-c timezone=utc"},

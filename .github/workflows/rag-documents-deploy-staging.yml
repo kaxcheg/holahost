@@ -36,12 +36,17 @@ jobs:
         with:
           working-directory: holahost/services/rag-documents/infra/envs/staging
 
-      - name: Compute image tags
+      # Only a sha tag. A `release-<branch>` tag derived from GITHUB_REF used to be computed here
+      # too, and it could not survive its own trigger: this workflow runs on EVERY push to
+      # `release/v*`, a GitFlow release branch takes stabilization commits after the first one,
+      # and the ECR repo is immutable for everything but `latest*` — so the second push onto the
+      # same branch would re-push an identical, already-taken tag and fail the build. The version
+      # tag is applied once instead, by promote-prod, onto the digest that actually ships.
+      - name: Compute image tag
         id: tags
         run: |
           echo "repo_url=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)" >> "$GITHUB_OUTPUT"
           echo "sha_tag=git-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          echo "version_tag=release-$(basename "${GITHUB_REF}")" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/build-push-image
         id: build
@@ -49,7 +54,6 @@ jobs:
           dockerfile: holahost/services/rag-documents/Dockerfile
           ecr-repo-url: ${{ steps.tags.outputs.repo_url }}
           sha-tag: ${{ steps.tags.outputs.sha_tag }}
-          version-tag: ${{ steps.tags.outputs.version_tag }}
           aws-region: ${{ env.AWS_REGION }}
 
       - uses: ./.github/actions/ssm-migrate-deploy
