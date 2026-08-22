@@ -17,22 +17,34 @@ description: >
   against AWS's own SendCommand docs that this fits well within limits: the hard cap is the whole
   SSM document at 64 KB (`MaxDocumentSizeExceeded`), and both files together are nowhere near that.
 
-  The DB password never goes in either embedded file (neither is allowed to carry secrets — see
-  `infra/envs/<env>/main.tf`'s value-less `db-password` secret). The remote script fetches it
-  itself, on the instance, via its own instance role — the same permission the `api` container
-  already needs for its own independent fetch (`scripts/bootstrap.py`) — then hands it as
-  `POSTGRES_PASSWORD` to both `docker compose run` (the one-off alembic container, which bypasses
-  `scripts.bootstrap`, so it has no other way to get it — `migrations/env.py` builds its own DSN
-  from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`) and `docker compose up` (for the
-  `postgres` service's own init) — both read it via Compose's own `${POSTGRES_PASSWORD}`
-  interpolation (docker-compose.yml's `postgres.environment`), the one credential that isn't in
-  the synced `.env` on purpose. USER/DB come straight from that `.env` instead, via
-  `docker-compose.yml`'s own `env_file:` key on the `postgres`/`api` services — not threaded
-  through this script at all any more (same file `scripts/bootstrap.py` itself reads from for the
-  `api` container's own `Settings`).
-  Fetched twice by design (here, and again inside `api` at its own startup) so a secret rotation
-  in Secrets Manager takes effect on the next `api` restart alone, no redeploy required — the
-  fetch here only needs to be fresh enough for *this* deploy's migration + `postgres` init.
+  No password goes in either embedded file (neither is allowed to carry secrets — see
+  `infra/envs/<env>/main.tf`'s value-less secrets). The remote script fetches both itself, on the
+  instance, via its own instance role — the same permission the `api` container already needs for
+  its own independent fetch (`scripts/bootstrap.py`):
+
+    - `db-superuser-password` — the `postgres` container's bootstrap superuser. Feeds
+      `postgres`'s own initdb via Compose's `${POSTGRES_SUPERUSER_PASSWORD}` interpolation, and
+      the two one-off `api` containers below, both of which are elevated operations that bypass
+      `scripts.bootstrap` and read that pair directly (`migrations/env.py`,
+      `scripts/provision_app_role.py`).
+    - `db-password` — the app role's own password. Needed only by the provisioning step, which is
+      what actually sets it on the role.
+
+  They must be different values: the app role is unprivileged precisely so that it cannot bypass
+  row-level security, and sharing one password with the superuser would hand that bypass to
+  anything holding the app's credentials. See docker-compose.yml's `postgres` service.
+
+  USER/DB come straight from the synced `.env`, via `docker-compose.yml`'s own `env_file:` key on
+  the `postgres`/`api` services — not threaded through this script (same file
+  `scripts/bootstrap.py` itself reads from for the `api` container's own `Settings`).
+
+  Three remote steps, in order: migrate as the superuser, provision the app role, then swap the
+  containers. The middle step is not optional bookkeeping — it is what applies a rotated
+  `db-password` to the Postgres role. Nothing else in the stack ever changes that role's password
+  (the `postgres` image applies it at initdb only, and the `pgdata` volume outlives every
+  restart), so rotating the secret takes effect on the next *deploy*; an `api` restart alone would
+  only change which password the client offers, and every connection would then fail to
+  authenticate.
 inputs:
   env:
     description: Environment name (staging/prod) — used to look up the instance-id SSM parameter.
@@ -65,6 +77,7 @@ runs:
         COMPOSE_B64=$(base64 -w0 < "${{ inputs.compose-file }}")
         ENV_B64=$(base64 -w0 < "${{ inputs.env-file }}")
         SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-password"
+        SUPERUSER_SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-superuser-password"
         # No PYTHON_VERSION anywhere in this script (used to be read here and threaded through
         # both docker compose lines below) — docker-compose.yml's `api` service has no `build:`
         # section any more (moved to an explicit `docker build` step in the Makefile, dev-only —
@@ -88,20 +101,28 @@ runs:
         # already-running `api` container's port binding on a redeploy (`compose run` doesn't
         # publish service ports by default) — see .build-state/R-25-.../clarifications.md.
         #
-        # `-e POSTGRES_PASSWORD=...` on the `run` command itself, PLUS the same var still set on
-        # the host CLI (below): two different consumers, found for real, not assumed — the host
-        # CLI var feeds `postgres`'s own `environment: {POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}}`
-        # block (Compose's `${VAR}` interpolation, parsed for the *whole* file even though only
-        # `api` is being run), while `api`'s own service definition has *no* mechanism to receive
-        # a host CLI var at all — it only has `env_file:` (reads the synced .env directly, which
-        # deliberately never has the password) — normally fine, because the real, long-running
-        # `api` container fetches PASSWORD itself via `scripts.bootstrap._fetch_password_if_needed`
-        # before `Settings` is built, but this migration invocation overrides the container's CMD,
-        # bypassing `scripts.bootstrap` (and that fetch) entirely, so it has no other way to get
-        # it. `docker compose run`'s own `-e`/`--env` flag injects straight into that one-off
-        # container, same mechanism `docker run -e` uses, confirmed via `docker compose run
-        # --help`. Caught for real: an initial attempt without this `-e` failed with
-        # `KeyError: 'POSTGRES_PASSWORD'` inside the container, live-tested against a local stand-in.
+        # `-e POSTGRES_SUPERUSER_PASSWORD=...` on each `run` command itself, PLUS the same var
+        # exported for the whole script: two different consumers, found for real, not assumed —
+        # the exported var feeds `postgres`'s own `environment: {POSTGRES_PASSWORD:
+        # ${POSTGRES_SUPERUSER_PASSWORD}}` block (Compose's `${VAR}` interpolation, parsed for the
+        # *whole* file even though only `api` is being run), while `api`'s own service definition
+        # has *no* mechanism to receive a host CLI var at all — it only has `env_file:` (reads the
+        # synced .env directly, which deliberately never has any password) — normally fine,
+        # because the real, long-running `api` container fetches its own password via
+        # `scripts.bootstrap._fetch_password_if_needed` before `Settings` is built, but both
+        # invocations below override the container's CMD, bypassing `scripts.bootstrap` (and that
+        # fetch) entirely, so they have no other way to get it. `docker compose run`'s own
+        # `-e`/`--env` flag injects straight into that one-off container, same mechanism `docker
+        # run -e` uses, confirmed via `docker compose run --help`. Caught for real: an initial
+        # attempt without this `-e` failed with `KeyError` inside the container, live-tested
+        # against a local stand-in.
+        #
+        # Every secret is quoted at its point of use (`-e "VAR=\$PW"`) and otherwise passed as an
+        # `export VAR=\$PW` assignment — both forms are immune to word splitting and globbing. An
+        # unquoted `-e VAR=\$PW` in ordinary argument position is not: a password containing a
+        # space becomes two arguments (`no such service: ...`), and one containing `*` or `?`
+        # globs against the remote working directory, silently handing the container something
+        # other than the secret.
         REMOTE_SCRIPT=$(cat <<EOF
         set -e
         mkdir -p $REMOTE_DIR/$ENV_SUBDIR
@@ -109,8 +130,12 @@ runs:
         echo $ENV_B64 | base64 -d > $REMOTE_DIR/$ENV_SUBDIR/.env
         cd $REMOTE_DIR
         PGPW=\$(aws secretsmanager get-secret-value --secret-id $SECRET_ID --query SecretString --output text)
-        IMAGE=${{ inputs.image }} POSTGRES_PASSWORD=\$PGPW docker compose --env-file $ENV_SUBDIR/.env run --rm -e POSTGRES_PASSWORD=\$PGPW api python -m alembic upgrade head
-        IMAGE=${{ inputs.image }} POSTGRES_PASSWORD=\$PGPW docker compose --env-file $ENV_SUBDIR/.env up -d
+        SUPERPW=\$(aws secretsmanager get-secret-value --secret-id $SUPERUSER_SECRET_ID --query SecretString --output text)
+        export IMAGE=${{ inputs.image }}
+        export POSTGRES_SUPERUSER_PASSWORD=\$SUPERPW
+        docker compose --env-file $ENV_SUBDIR/.env run --rm -e "POSTGRES_SUPERUSER_PASSWORD=\$SUPERPW" api python -m alembic upgrade head
+        docker compose --env-file $ENV_SUBDIR/.env run --rm -e "POSTGRES_SUPERUSER_PASSWORD=\$SUPERPW" -e "POSTGRES_PASSWORD=\$PGPW" api python -m scripts.provision_app_role
+        docker compose --env-file $ENV_SUBDIR/.env up -d
         EOF
         )
 

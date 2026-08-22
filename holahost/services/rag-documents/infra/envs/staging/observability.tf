@@ -140,9 +140,10 @@ resource "aws_cloudwatch_log_metric_filter" "search_count" {
   pattern        = "{ $.event = \"op_completed\" && $.outcome = \"success\" && $.route = \"POST /documents/{id}/search\" }"
 
   metric_transformation {
-    name      = "SearchCount"
-    namespace = "RagDocuments/${var.env}"
-    value     = "1"
+    name          = "SearchCount"
+    namespace     = "RagDocuments/${var.env}"
+    value         = "1"
+    default_value = 0
   }
 }
 
@@ -225,6 +226,16 @@ resource "aws_cloudwatch_log_metric_filter" "ingest_success_count" {
     name      = "IngestSuccessCount"
     namespace = "RagDocuments/${var.env}"
     value     = "1"
+    # default_value, on all four filters feeding the two success-rate alarms: a metric filter
+    # publishes a datapoint only when its pattern MATCHES, so without this a series with no
+    # matches in a period is not "0", it is absent — and `(success/(success+failure))*100` over
+    # an absent operand yields no value at all, leaving the alarm in INSUFFICIENT_DATA which
+    # `treat_missing_data = "notBreaching"` then reads as healthy. That silences the alarm in
+    # BOTH the states it exists to distinguish: a total outage (every request failing -> no
+    # `success` datapoints) and, in reverse, ordinary healthy traffic (no `failure` datapoints).
+    # `default_value = 0` emits an explicit 0 for every non-matching log event, so both operands
+    # always have datapoints whenever the app logs anything at all, and the ratio evaluates.
+    default_value = 0
   }
 }
 
@@ -234,9 +245,10 @@ resource "aws_cloudwatch_log_metric_filter" "ingest_failure_count" {
   pattern        = "{ $.event = \"op_completed\" && ($.route = \"POST /api/rag-documents/documents\" || $.route = \"PUT /api/rag-documents/documents/*\") }"
 
   metric_transformation {
-    name      = "IngestFailureCount"
-    namespace = "RagDocuments/${var.env}"
-    value     = "1"
+    name          = "IngestFailureCount"
+    namespace     = "RagDocuments/${var.env}"
+    value         = "1"
+    default_value = 0
   }
 }
 
@@ -282,9 +294,10 @@ resource "aws_cloudwatch_log_metric_filter" "search_failure_count" {
   pattern        = "{ $.event = \"op_completed\" && $.route = %^POST /api/rag-documents/documents/[^/]+/search$% }"
 
   metric_transformation {
-    name      = "SearchFailureCount"
-    namespace = "RagDocuments/${var.env}"
-    value     = "1"
+    name          = "SearchFailureCount"
+    namespace     = "RagDocuments/${var.env}"
+    value         = "1"
+    default_value = 0
   }
 }
 

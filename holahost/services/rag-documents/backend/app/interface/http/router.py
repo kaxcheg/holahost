@@ -41,7 +41,10 @@ from interface.http.dependencies import (
 from interface.http.mime_sniffer import sniff_mime_type
 from interface.http.schemas import DocumentResponse, SearchRequest, SearchResponse
 
-router = APIRouter(prefix="/api/rag-documents/documents", tags=["documents"])
+# Relative to the service's own base path, which `interface/http/app.py` applies once for
+# every router (see `api_base.py`) — a router does not get to choose the segment it is
+# published under.
+router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 def _log_success(

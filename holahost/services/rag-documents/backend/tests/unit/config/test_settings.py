@@ -71,7 +71,7 @@ class TestSettings:
         assert "user:pass" not in repr(settings.database_url)
         assert (
             settings.database_url.get_secret_value()
-            == "postgresql://user:pass@postgres:5432/rag_documents"
+            == "postgresql+psycopg://user:pass@postgres:5432/rag_documents"
         )
 
     def test_database_url_uses_custom_host_and_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +81,7 @@ class TestSettings:
         settings = Settings()
         assert (
             settings.database_url.get_secret_value()
-            == "postgresql://user:pass@localhost:55432/rag_documents"
+            == "postgresql+psycopg://user:pass@localhost:55432/rag_documents"
         )
 
     def test_database_url_percent_encodes_special_characters(
@@ -93,5 +93,5 @@ class TestSettings:
         settings = Settings()
         assert (
             settings.database_url.get_secret_value()
-            == "postgresql://user:p%40ss%3Aword@postgres:5432/rag_documents"
+            == "postgresql+psycopg://user:p%40ss%3Aword@postgres:5432/rag_documents"
         )

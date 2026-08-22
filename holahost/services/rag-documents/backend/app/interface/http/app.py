@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from interface.http.api_base import API_BASE_URL
 from interface.http.errors import register_error_handlers
 from interface.http.health import router as health_router
 from interface.http.middleware import RequestIdMiddleware
@@ -17,6 +18,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="rag-documents")
     app.add_middleware(RequestIdMiddleware)
     register_error_handlers(app)
-    app.include_router(health_router)
-    app.include_router(documents_router)
+    # Every router is published under the service's own base path, applied here and nowhere
+    # else (see api_base.py) — so a router added later cannot end up outside it by omission.
+    app.include_router(health_router, prefix=API_BASE_URL)
+    app.include_router(documents_router, prefix=API_BASE_URL)
     return app

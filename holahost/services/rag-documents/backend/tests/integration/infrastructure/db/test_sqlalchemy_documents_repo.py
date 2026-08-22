@@ -223,7 +223,7 @@ def test_superuser_connection_bypasses_rls(uow: SqlAlchemyUnitOfWork, superuser_
     with uow:
         owner_repo.add(document)
 
-    engine = create_engine(superuser_dsn.replace("postgresql://", "postgresql+psycopg://", 1))
+    engine = create_engine(superuser_dsn)
     with engine.connect() as conn:
         # No SET LOCAL app.current_owner at all — a superuser doesn't need one.
         row = (

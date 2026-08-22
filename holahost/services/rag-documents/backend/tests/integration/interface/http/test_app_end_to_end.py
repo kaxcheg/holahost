@@ -55,7 +55,7 @@ def test_create_search_get_delete_round_trip(
 
 
 def test_health_is_public_and_ok(client: TestClient) -> None:
-    response = client.get("/health")
+    response = client.get("/api/rag-documents/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

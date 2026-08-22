@@ -19,6 +19,20 @@ DEV_PYTHON_VERSION := $(shell awk '$$1=="python"{print $$2}' $(REPO_ROOT)/.tool-
 # at all, they rely entirely on a command-line `IMAGE=<digest>` override instead (see their own
 # comment) — a generic `IMAGE` name here would suggest it's the one shared source, which it isn't.
 DEV_IMAGE := rag-documents:dev
+# One prefix instead of repeating four parts on six recipes. `-f docker-compose.dev.yml` is the
+# dev-only overlay that publishes the app port to the host (see that file) — it is never synced to
+# an instance, which is what keeps 0.0.0.0:8080 off staging/prod. `--env-file` supplies Compose's
+# own `${VAR}` interpolation (ENV, EMBEDDING_CACHE_DIR, POSTGRES_SUPERUSER_PASSWORD) from the same
+# file the containers read.
+#
+# IMAGE is the only value passed on the command line, because it is the only one that isn't in
+# that file. The superuser password used to be a literal here too, and had to be repeated on every
+# recipe — once as this prefix (for Compose's interpolation) and again as `-e` (for the one-off
+# `api` containers, which read `env_file:`, not the invoking shell). Moving it into
+# infra/envs/dev/.env, where the app role's password already lived, feeds both from one place.
+# staging/prod still thread both passwords through by hand: their .env carries neither, on purpose.
+DEV_COMPOSE := IMAGE=$(DEV_IMAGE) \
+               docker compose -f docker-compose.yml -f docker-compose.dev.yml --env-file $(DEV_ENV_FILE)
 # No `-include`/`export` here any more: every `docker compose` recipe below passes `--env-file
 # $(DEV_ENV_FILE)` directly (same mechanism `ssm-migrate-deploy` already uses for staging/prod,
 # and the one `docker run --env-file` uses for the standalone migration container) plus
@@ -56,27 +70,52 @@ lint-imports: ## clean-architecture import contract
 # resolves through. `docker compose up -d` afterward finds the freshly-built `$(DEV_IMAGE)` tag
 # already in the local image cache — `pull_policy`'s default (`missing`: check local cache, then
 # registry) never needs to reach a registry that doesn't have a `rag-documents:dev` tag at all.
-dev-up: ## build + start the local stack (creates the backbone network if missing)
+#
+# `migrate-dev` BEFORE `up -d`, the same order `ssm-migrate-deploy` uses on staging/prod
+# (migrations, then role provisioning, then the container swap — frame spec: migrations always
+# precede code). It used to be the other way round here, which was a leftover from before the
+# provisioning step existed, and it does not merely look inconsistent: on a fresh volume `up -d`
+# starts `api` before the app role has been created, so the container fails to authenticate and
+# sits in a restart loop until someone runs `migrate-dev` by hand — while `dev-up` itself exits 0,
+# reporting success over a stack that cannot serve a request. (Before `scripts/bootstrap.py`
+# gained its RLS guard this was merely latent: `get_engine()` builds a pool without connecting,
+# so the process started and only failed per-request.)
+#
+# No `up -d postgres` needed first: `migrate-dev`'s `docker compose run api` creates the network
+# and volumes, starts `postgres` and waits for it to become healthy on its own, through the `api`
+# service's `depends_on: condition: service_healthy` — verified from a completely clean slate.
+dev-up: ## build, migrate, then start the local stack (creates the backbone network if missing)
 	docker network create backbone 2>/dev/null || true
 	docker build --build-arg PYTHON_VERSION=$(DEV_PYTHON_VERSION) -f Dockerfile -t $(DEV_IMAGE) $(REPO_ROOT)
-	IMAGE=$(DEV_IMAGE) docker compose --env-file $(DEV_ENV_FILE) up -d
+	$(MAKE) migrate-dev
+	$(DEV_COMPOSE) up -d
 dev-down: ## stop the dev stack
-	IMAGE=$(DEV_IMAGE) docker compose --env-file $(DEV_ENV_FILE) down
+	$(DEV_COMPOSE) down
 dev-down-v: ## stop + wipe volumes (fresh DB + model cache)
-	IMAGE=$(DEV_IMAGE) docker compose --env-file $(DEV_ENV_FILE) down -v
+	$(DEV_COMPOSE) down -v
 dev-logs: ## follow stack logs
-	IMAGE=$(DEV_IMAGE) docker compose --env-file $(DEV_ENV_FILE) logs -f
+	$(DEV_COMPOSE) logs -f
 
 # python -m, not bare `alembic`: the console script's shebang breaks once relocated into the
 # runtime image (see .build-state/R-25-.../clarifications.md) — same fix as the Dockerfile's CMD.
-# No explicit -e/env override needed for DATABASE_URL: this overrides the container's CMD
-# (bypasses scripts.bootstrap), but migrations/env.py's own `_dsn()` builds the DSN itself from
-# POSTGRES_USER/PASSWORD/DB — which `docker compose run api` already gets from the `api`
-# service's own `env_file:` (infra/envs/dev/.env), same as any other `compose run`/`up` of that
-# service. HOST/PORT aren't in .env — `_dsn()` defaults both to postgres/5432, matching
+# Both steps override the container's CMD (bypassing scripts.bootstrap), and both are ELEVATED:
+# migrations/env.py and scripts/provision_app_role.py each build their DSN from
+# POSTGRES_SUPERUSER/POSTGRES_SUPERUSER_PASSWORD, not the app's own credentials (see their
+# docstrings — CREATE EXTENSION and CREATE POLICY are superuser/owner-only, and the app role must
+# hold neither privilege). In dev that pair comes from infra/envs/dev/.env like everything else,
+# via the `api` service's own `env_file:` — no `-e` needed here, unlike migrate-staging/prod below,
+# whose .env deliberately carries no password at all. HOST/PORT default to postgres/5432, matching
 # docker-compose.yml's `postgres` service.
-migrate-dev: ## alembic upgrade head against the compose Postgres
-	IMAGE=$(DEV_IMAGE) docker compose --env-file $(DEV_ENV_FILE) run --rm api python -m alembic upgrade head
+#
+# Two steps, always in this order: `upgrade head` creates the tables as the superuser that owns
+# them, then provisioning grants the app role plain DML on whatever now exists — so a migration
+# that adds a table is covered by the same run that creates it. Provisioning is also what applies
+# a rotated `db-password`: nothing else in the stack ever changes the role's password (the
+# postgres image sets it at initdb only, and pgdata outlives restarts), so a rotation takes effect
+# on the next deploy, not on a bare `api` restart.
+migrate-dev: ## alembic upgrade head + provision the app role, against the compose Postgres
+	$(DEV_COMPOSE) run --rm api python -m alembic upgrade head
+	$(DEV_COMPOSE) run --rm api python -m scripts.provision_app_role
 # The pipelines invoke this exact command inline via SSM Run Command, not this target — it exists
 # for an operator to reproduce/troubleshoot the same migration manually on the instance itself
 # (where there's a deployed container, not a poetry-managed checkout, and where AWS creds for the
@@ -88,13 +127,24 @@ migrate-dev: ## alembic upgrade head against the compose Postgres
 # .build-state/R-25-.../clarifications.md. `--env-file` supplies POSTGRES_USER/POSTGRES_DB/
 # EMBEDDING_CACHE_DIR/ENV straight from the instance's synced .env for Compose's own interpolation
 # (`postgres`'s block reads USER/DB via its own `env_file:` key instead, a separate mechanism —
-# see docker-compose.yml). POSTGRES_PASSWORD (Secrets-Manager-only, never in .env) needs setting
-# *twice*: once on the host CLI (feeds `postgres`'s `environment: {POSTGRES_PASSWORD: ...}` block,
-# which Compose still parses even though only `api` is being run) and once via `docker compose
-# run`'s own `-e` flag (`api`'s service definition has no other way to receive it — it only has
-# `env_file:`, and this migration invocation overrides the container's CMD, bypassing
-# `scripts.bootstrap`'s own Secrets Manager fetch entirely) — found for real: without the second
-# one, the container fails with `KeyError: 'POSTGRES_PASSWORD'` inside `migrations/env.py`.
+# see docker-compose.yml). Two secrets, not one, and neither is ever in a .env file:
+# `db-superuser-password` is the `postgres` container's own bootstrap identity, `db-password` is
+# the app role's — see docker-compose.yml for why they must not be the same value.
+# POSTGRES_SUPERUSER_PASSWORD needs setting *twice* on each line: once on the host CLI (feeds
+# `postgres`'s `environment: {POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}}` block, which
+# Compose still parses even though only `api` is being run) and once via `docker compose run`'s
+# own `-e` flag (`api`'s service definition has no other way to receive it — it only has
+# `env_file:`, and both invocations override the container's CMD, bypassing `scripts.bootstrap`'s
+# own Secrets Manager fetch entirely) — found for real: without the second one, the container
+# fails with `KeyError` inside `migrations/env.py`. POSTGRES_PASSWORD (the app role's) is needed
+# only by the second line, which is the one that sets that role's password.
+#
+# Every value is quoted at its point of use (`-e "VAR=$$PW"`): unquoted, a Secrets-Manager
+# password containing a space would split into two `docker compose` arguments ("no such service"),
+# and one containing `*` or `?` would glob against the working directory and hand the container a
+# different string than the secret holds. The `VAR=$$PW` assignment *prefix* at the start of the
+# line is exempt from both by shell rules, which is exactly what made the inconsistency easy to
+# miss when only the prefix form was there.
 # `\`: a Makefile recipe runs each line in its own shell by default, so the `PGPW` set here
 # wouldn't otherwise survive to the next line. No PYTHON_VERSION here (or anywhere below) — docker-
 # compose.yml has no `build:` section, so Compose never needs it, on the instance or anywhere else.
@@ -110,10 +160,16 @@ migrate-dev: ## alembic upgrade head against the compose Postgres
 # for it against a real staging/prod database.
 migrate-staging: ## run by the deploy-staging pipeline via SSM; manual use: make migrate-staging IMAGE=<repo>@<digest>
 	PGPW=$$(aws secretsmanager get-secret-value --secret-id holahost/staging/rag-documents/db-password --query SecretString --output text); \
-	cd /opt/services/rag-documents && POSTGRES_PASSWORD=$$PGPW docker compose --env-file infra/envs/staging/.env run --rm -e POSTGRES_PASSWORD=$$PGPW api python -m alembic upgrade head
+	SUPERPW=$$(aws secretsmanager get-secret-value --secret-id holahost/staging/rag-documents/db-superuser-password --query SecretString --output text); \
+	cd /opt/services/rag-documents && \
+	POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW docker compose --env-file infra/envs/staging/.env run --rm -e "POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW" api python -m alembic upgrade head && \
+	POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW docker compose --env-file infra/envs/staging/.env run --rm -e "POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW" -e "POSTGRES_PASSWORD=$$PGPW" api python -m scripts.provision_app_role
 migrate-prod: ## run by the promote-prod pipeline via SSM; manual use: make migrate-prod IMAGE=<repo>@<digest>
 	PGPW=$$(aws secretsmanager get-secret-value --secret-id holahost/prod/rag-documents/db-password --query SecretString --output text); \
-	cd /opt/services/rag-documents && POSTGRES_PASSWORD=$$PGPW docker compose --env-file infra/envs/prod/.env run --rm -e POSTGRES_PASSWORD=$$PGPW api python -m alembic upgrade head
+	SUPERPW=$$(aws secretsmanager get-secret-value --secret-id holahost/prod/rag-documents/db-superuser-password --query SecretString --output text); \
+	cd /opt/services/rag-documents && \
+	POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW docker compose --env-file infra/envs/prod/.env run --rm -e "POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW" api python -m alembic upgrade head && \
+	POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW docker compose --env-file infra/envs/prod/.env run --rm -e "POSTGRES_SUPERUSER_PASSWORD=$$SUPERPW" -e "POSTGRES_PASSWORD=$$PGPW" api python -m scripts.provision_app_role
 
 # Bare `pre-commit`, NOT `poetry run pre-commit` from inside backend/: the repo-root
 # .pre-commit-config.yaml's hooks auto-discover and `cd`+`poetry run` into EVERY package

@@ -24,31 +24,62 @@ name: rag-documents
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    # `env_file` for USER/DB, not `environment: {POSTGRES_USER: ${POSTGRES_USER:?...}, ...}` (the
-    # prior design for all three): the official Postgres image reads these as plain container env
-    # vars — it doesn't care whether Compose set them via `environment:` (needs each one resolved
-    # through Compose's own host-shell `${VAR}` interpolation) or `env_file:` (injects the file's
-    # pairs directly, same mechanism `api` below already uses, and the same one `docker run
-    # --env-file` uses for the standalone migration container — see Makefile). Reading the file
-    # straight into the container instead of threading each value through host-shell
-    # interpolation first removes two vars from the "must be host-exported for Compose to even
-    # parse this file" list — only `${ENV}` (this env_file's own *path*, still Compose-side)
-    # remains, for USER/DB specifically.
+    # `env_file` for DB (and, historically, USER), not `environment: {POSTGRES_DB: ${...}}`: the
+    # official Postgres image reads these as plain container env vars — it doesn't care whether
+    # Compose set them via `environment:` (needs each one resolved through Compose's own
+    # host-shell `${VAR}` interpolation) or `env_file:` (injects the file's pairs directly, same
+    # mechanism `api` below already uses, and the same one `docker run --env-file` uses for the
+    # standalone migration container — see Makefile). Reading the file straight into the container
+    # instead of threading each value through host-shell interpolation first keeps it off the
+    # "must be host-exported for Compose to even parse this file" list.
     #
-    # PASSWORD stays `environment:` (host-interpolated), deliberately NOT folded into env_file
-    # too: unlike USER/DB, it isn't always in the file — staging/prod's committed .env never has
-    # it (Secrets-Manager-only), so `env_file:` would inject nothing for it there, and Postgres's
-    # own entrypoint would then refuse to start ("superuser password is not specified"). The
-    # deploy script already supplies it as an inline env var on the `docker compose up -d`
-    # invocation itself (see ssm-migrate-deploy/action.yml), which only `environment:`'s
-    # host-shell interpolation picks up — `env_file:` only ever reads the file on disk, never the
-    # invoking process's own environment. Dev is unaffected either way (both mechanisms would
-    # supply the same value, from the same file) — found for real while verifying this change:
-    # tested with `env_file:` alone for all three first, dev looked fine, only checking staging's
-    # actual .env content surfaced that PASSWORD would silently go missing there.
+    # USER and PASSWORD are overridden below, and the override is the whole point. To the official
+    # image, `POSTGRES_USER` names the role initdb creates as a SUPERUSER — that is what the
+    # variable means to it, not "the account the application uses". Pointing it at the .env's
+    # `POSTGRES_USER` (the app's own identity) therefore made the application a superuser, and a
+    # superuser bypasses row-level security unconditionally, `FORCE ROW LEVEL SECURITY` included.
+    # Since RLS is this service's *only* enforcement of owner isolation (§8.0 — no repository
+    # filters by owner in its own SQL), that silently disabled owner isolation in every deployed
+    # environment, while the integration suite, which deliberately connects as an unprivileged
+    # role, kept proving it worked. `environment:` wins over `env_file:` in Compose, so the two
+    # identities are kept apart here, at the one place both are visible:
+    #   - `postgres`, below — bootstrap superuser. Runs migrations (CREATE EXTENSION, CREATE
+    #     POLICY, table ownership) and owns the tables. Never used by the running app.
+    #   - `${POSTGRES_USER}` from infra/envs/<env>/.env — the app role, created *without*
+    #     SUPERUSER/BYPASSRLS by scripts/provision_app_role.py, holding plain DML grants only.
+    # `scripts/bootstrap.py::_assert_rls_is_enforced` refuses to serve traffic if the app ever
+    # connects as a role that can bypass RLS again.
+    #
+    # PASSWORD stays host-interpolated, deliberately NOT folded into env_file: unlike DB, it isn't
+    # in the file at all — staging/prod's committed .env never has any password (Secrets-Manager-
+    # only), so `env_file:` would inject nothing for it there, and Postgres's own entrypoint would
+    # then refuse to start ("superuser password is not specified"). The deploy script supplies it
+    # as an inline env var on the `docker compose` invocation itself (see
+    # ssm-migrate-deploy/action.yml), which only `environment:`'s host-shell interpolation picks
+    # up — `env_file:` only ever reads the file on disk, never the invoking process's own
+    # environment.
     env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?requires env var POSTGRES_PASSWORD — the postgres superuser password}
+      # The SAME variable `SuperuserSettings.postgres_superuser` reads (backend/app/config/
+      # settings.py), with the same default — not a second literal that happens to agree. There
+      # are two sides to this one identity: the role initdb CREATES, here, and the role the
+      # deploy's elevated steps CONNECT as (migrations, then scripts/provision_app_role.py). A
+      # hardcoded name here would leave the setting influencing only the second, so overriding it
+      # would produce a client authenticating as a role the server never created.
+      #
+      # Override it in `infra/envs/<env>/.env` and nowhere else. That file is the only source
+      # that reaches BOTH sides: `--env-file` feeds Compose's `${...}` interpolation here, and
+      # the `env_file:` key above injects it into the one-off `api` containers where
+      # `SuperuserSettings` reads it. Exporting it in the invoking shell instead reaches only
+      # this line — verified — leaving the deploy's elevated steps still connecting as the
+      # default while initdb created something else.
+      #
+      # Fixed at initdb regardless of which value is used: the name is written into the `pgdata`
+      # volume when the database is first created, and changing it afterwards renames nothing —
+      # an existing environment needs its volume recreated (`make dev-down-v` in dev), not a new
+      # value. Treat it as chosen once per environment, not as a knob.
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?requires env var POSTGRES_SUPERUSER_PASSWORD — the postgres bootstrap superuser password, NOT the app role's}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -56,8 +87,10 @@ services:
       # hardcoding the literal again a third time: Compose's own `${VAR}` interpolation would
       # otherwise try to resolve $POSTGRES_USER/$POSTGRES_DB *itself* at parse time (same vars
       # dropped from host-export above) — `$$` escapes that, leaving a literal `$VAR` for the
-      # shell CMD-SHELL runs *inside the container* at healthcheck time, where env_file above
-      # already guarantees both are set.
+      # shell CMD-SHELL runs *inside the container* at healthcheck time, where `environment:`
+      # (USER) and `env_file:` (DB) above already guarantee both are set. USER here is the
+      # bootstrap superuser, which is the right identity for a liveness probe: it exists from
+      # initdb onward, before the app role is provisioned by the first deploy.
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
@@ -98,8 +131,15 @@ services:
       # real value from that same .env file (see Makefile), so an unset var here means something
       # upstream is missing, not a value to quietly default around.
       - model-cache:${EMBEDDING_CACHE_DIR:?requires env var EMBEDDING_CACHE_DIR — the model-cache volume's mount path}
-    ports:
-      - "${HOST_PORT:-8080}:8080"
+    # No `ports:` here — deliberately. Publishing the app port is a DEV-ONLY concern and lives in
+    # docker-compose.dev.yml (an override the Makefile's dev targets add with a second `-f`).
+    # On staging/prod the only intended way in is the platform gateway, reached over the external
+    # `backbone` network above; a published 0.0.0.0:8080 on the instance is a second, unguarded
+    # door past it — and past what the gateway adds, notably the `X-Request-ID` that
+    # `interface/http/dependencies.py::require_request_id` treats as proof the caller came through
+    # the intended path. This file is deployed verbatim to the instance (see the header), so a
+    # `ports:` key here, however defaulted, is published there too: neither staging's nor prod's
+    # committed .env sets HOST_PORT, so the `:-8080` fallback is exactly what they would get.
     depends_on:
       postgres:
         condition: service_healthy

@@ -12,6 +12,7 @@ from testcontainers.community.postgres import PostgresContainer
 from tests._support.db import build_test_uow
 
 from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
+from scripts.provision_app_role import provision
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
@@ -20,18 +21,33 @@ _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 # connection is a Postgres superuser, and a superuser bypasses row-level security
 # unconditionally — no policy, no FORCE ROW LEVEL SECURITY, can change that (§8.0).
 # Tests must run as a non-superuser role or RLS enforcement is never actually
-# exercised, only assumed.
+# exercised, only assumed. The role is created by the very same code the deploy runs
+# (`scripts/provision_app_role.py`), so what these tests exercise is the real
+# provisioning, not a test-local imitation of it that could drift from it.
 _APP_ROLE = "rag_documents_app"
 _APP_ROLE_PASSWORD = "rag-documents-app-test-only"  # test-only, not a real secret
 
 
-def _run_migrations(dsn: str) -> None:
-    """migrations/env.py's `_dsn()` builds its own DSN from POSTGRES_USER/PASSWORD/DB/HOST/PORT,
-    not a pre-assembled DATABASE_URL — same split
-    tests/integration/interface/http/conftest.py's `client` fixture does, for the same reason
-    (Settings.database_url is built the same way).
+def _superuser_env(mp: pytest.MonkeyPatch, dsn: str) -> None:
+    """Point the standalone entry points below at this testcontainers instance.
 
-    `pytest.MonkeyPatch.context()`, not the session-scoped `monkeypatch`/`monkeypatch_session`
+    `POSTGRES_SUPERUSER`/`POSTGRES_SUPERUSER_PASSWORD`, not `POSTGRES_USER`/`POSTGRES_PASSWORD`:
+    both `migrations/env.py` and `scripts/provision_app_role.py` are elevated operations and read
+    the superuser pair (see their own docstrings) — the plain pair means the app's own,
+    unprivileged identity everywhere in this service, and testcontainers' default connection is
+    the superuser.
+    """
+    parts = urlsplit(dsn)
+    assert parts.username and parts.password and parts.hostname and parts.port
+    mp.setenv("POSTGRES_SUPERUSER", parts.username)
+    mp.setenv("POSTGRES_SUPERUSER_PASSWORD", parts.password)
+    mp.setenv("POSTGRES_DB", parts.path.lstrip("/"))
+    mp.setenv("POSTGRES_HOST", parts.hostname)
+    mp.setenv("POSTGRES_PORT", str(parts.port))
+
+
+def _run_migrations(dsn: str) -> None:
+    """`pytest.MonkeyPatch.context()`, not the session-scoped `monkeypatch`/`monkeypatch_session`
     fixture idiom used elsewhere: those only undo at the very end of the whole `pytest` session,
     which is too late here — a bare `pytest` run (no `-m` filter) collects `tests/integration/`
     before `tests/unit/` alphabetically, so a session-scoped patch would still be leaking
@@ -43,31 +59,29 @@ def _run_migrations(dsn: str) -> None:
     session, so a narrowly-scoped context that exits (and restores the prior environment)
     immediately after is both correct and simpler than tracking a wider-scoped fixture.
     """
-    parts = urlsplit(dsn)
-    assert parts.username and parts.password and parts.hostname and parts.port
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("POSTGRES_USER", parts.username)
-        mp.setenv("POSTGRES_PASSWORD", parts.password)
-        mp.setenv("POSTGRES_DB", parts.path.lstrip("/"))
-        mp.setenv("POSTGRES_HOST", parts.hostname)
-        mp.setenv("POSTGRES_PORT", str(parts.port))
+        _superuser_env(mp, dsn)
         command.upgrade(Config(str(_ALEMBIC_INI)), "head")
 
 
-def _create_app_role(superuser_dsn: str) -> None:
-    engine = create_engine(superuser_dsn.replace("postgresql://", "postgresql+psycopg://", 1))
+def _provision_app_role(superuser_dsn: str) -> None:
+    """Create the unprivileged app role by running the deploy's own provisioning script.
+
+    Same scoping reasoning as `_run_migrations` above for the `MonkeyPatch.context()`.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        _superuser_env(mp, superuser_dsn)
+        mp.setenv("POSTGRES_USER", _APP_ROLE)
+        mp.setenv("POSTGRES_PASSWORD", _APP_ROLE_PASSWORD)
+        provision()
+
+    # TRUNCATE is for the _truncate_after test-isolation fixture below, not something the
+    # application itself does — it bypasses RLS entirely (whole-table, not row-filtered), which
+    # is exactly what test cleanup wants and exactly why `provision()` does not grant it. Granted
+    # here, separately, so the privileges the deploy actually hands the app role stay honest.
+    engine = create_engine(superuser_dsn)
     with engine.connect() as conn:
-        conn.execute(text(f"CREATE ROLE {_APP_ROLE} LOGIN PASSWORD '{_APP_ROLE_PASSWORD}'"))
-        conn.execute(text("GRANT USAGE ON SCHEMA public TO " + _APP_ROLE))
-        conn.execute(
-            # TRUNCATE is for the _truncate_after test-isolation fixture below, not
-            # something the application itself does — it bypasses RLS entirely
-            # (whole-table, not row-filtered), which is exactly what test cleanup wants.
-            text(
-                f"GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE "
-                f"ON documents, chunks TO {_APP_ROLE}"
-            )
-        )
+        conn.execute(text(f"GRANT TRUNCATE ON documents, chunks TO {_APP_ROLE}"))
         conn.commit()
     engine.dispose()
 
@@ -81,9 +95,11 @@ def _as_app_role(superuser_dsn: str) -> str:
 @pytest.fixture(scope="session")
 def _dsns() -> Iterator[tuple[str, str]]:
     with PostgresContainer("pgvector/pgvector:pg16") as pg:
-        superuser_dsn = pg.get_connection_url(driver=None)  # plain 'postgresql://...'
+        # driver="psycopg" so the fixture hands out the same shape `config.settings` builds —
+        # 'postgresql+psycopg://...', dialect included — and nothing downstream has to rewrite it.
+        superuser_dsn = pg.get_connection_url(driver="psycopg")
         _run_migrations(superuser_dsn)
-        _create_app_role(superuser_dsn)
+        _provision_app_role(superuser_dsn)
         yield superuser_dsn, _as_app_role(superuser_dsn)
 
 

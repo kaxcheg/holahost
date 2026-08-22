@@ -7,7 +7,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_tables_and_extension_exist(pg_dsn: str) -> None:
-    engine = create_engine(pg_dsn.replace("postgresql://", "postgresql+psycopg://", 1))
+    engine = create_engine(pg_dsn)
     with engine.connect() as conn:
         installed = conn.execute(
             text("SELECT extname FROM pg_extension WHERE extname = 'vector'")
@@ -19,7 +19,7 @@ def test_tables_and_extension_exist(pg_dsn: str) -> None:
 
 
 def test_row_level_security_enabled_and_forced(pg_dsn: str) -> None:
-    engine = create_engine(pg_dsn.replace("postgresql://", "postgresql+psycopg://", 1))
+    engine = create_engine(pg_dsn)
     with engine.connect() as conn:
         for table in ("documents", "chunks"):
             row = conn.execute(

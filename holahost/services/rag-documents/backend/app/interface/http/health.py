@@ -1,5 +1,11 @@
-"""GET /health (US-R10, §7.5). No auth dependency at all — this is the one route
-holahost-auth's own docs and §8.1 explicitly exclude.
+"""GET <API_BASE_URL>/health (US-R10, §7.5). No auth dependency at all — this is the one
+route holahost-auth's own docs and §8.1 explicitly exclude.
+
+Under the service's base path like every other route (`interface/http/app.py` applies it), not
+at a bare `/health`: the platform gateway routes `/api/<svc>/*` here *without* rewriting the
+path, so a route published at bare `/health` is reachable only from inside the compose network
+— never through the gateway, and therefore never by either deploy pipeline's smoke check, which
+curls `https://<domain>/api/<svc>/health` exactly as the frame spec prescribes.
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ from application.ports.embedding import EmbeddingModel
 from interface.http.dependencies import get_embedding_model, get_engine
 from interface.http.schemas import HealthResponse
 
-router = APIRouter()
+router = APIRouter(tags=["health"])
 
 
 @router.get("/health", response_model=HealthResponse)
