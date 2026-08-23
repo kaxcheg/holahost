@@ -83,6 +83,19 @@ class ReplaceDocumentUseCase:
         except DomainValidationError as e:
             raise UnsupportedMediaTypeError(allowed=tuple(sorted(ALLOWED_MIME_TYPES))) from e
 
+        # Validated here, with the other cheap input checks, and not further down where it
+        # used to sit: an unacceptable name is a property of the request, knowable before
+        # any work happens. Left until after parse/chunk/embed it rejected the request only
+        # once the whole pipeline had been paid for — the most expensive path in the
+        # service, spent to produce a 422 that the first microsecond could have produced.
+        # `create_document` has always checked it in this position; this is the same order.
+        new_name: DocumentName | None = None
+        if cmd.name is not None:
+            try:
+                new_name = DocumentName(cmd.name)
+            except DomainValidationError as e:
+                raise InvalidPayloadError(field=e.field or "name") from e
+
         if len(cmd.content) > MAX_UPLOAD_SIZE:
             raise UploadTooLargeError(limit=MAX_UPLOAD_SIZE, actual=len(cmd.content))
 
@@ -99,13 +112,6 @@ class ReplaceDocumentUseCase:
             raise TooManyChunksError(limit=MAX_CHUNKS_PER_DOCUMENT, actual=len(chunks))
 
         embeddings = self.embedder.embed_texts([c.text for c in chunks])
-
-        new_name: DocumentName | None = None
-        if cmd.name is not None:
-            try:
-                new_name = DocumentName(cmd.name)
-            except DomainValidationError as e:
-                raise InvalidPayloadError(field=e.field or "name") from e
 
         new_chunks = [
             Chunk.create(document_id, ChunkIndex(i), fragment.text, embedding, fragment.page)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -17,7 +19,7 @@ from application.dto.documents import (
 )
 from application.dto.search import SearchCmd
 from application.ports.embedding import EmbeddingModel
-from application.ports.ingestion import FileParser, TextChunker
+from application.ports.ingestion import FileParser, TextChunker, TextFragment
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.ports.vector import VectorSearchFactory
@@ -27,11 +29,15 @@ from application.use_cases.get_document import GetDocumentUseCase
 from application.use_cases.replace_document import ReplaceDocumentUseCase
 from application.use_cases.search_document import SearchDocumentUseCase
 from config.logging import log_event
+from config.settings import Settings
+from domain.value_objects.embedding import Embedding
+from domain.value_objects.mime_type import MimeType
 from interface.http.dependencies import (
     get_chunker,
     get_documents_repo_factory,
     get_embedding_model,
     get_parser,
+    get_settings,
     get_uow,
     get_vector_search_factory,
 )
@@ -44,6 +50,86 @@ from interface.http.schemas import DocumentResponse, SearchRequest, SearchRespon
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
+class _StageTimer:
+    """Per-stage wall clock for one ingest, for `op_completed.stage_ms` (§8.7).
+
+    Both ingest use cases run the same four stages and each has its own failure mode —
+    a slow parse (a big scanned PDF), a slow embed (model contention), a slow persist
+    (lock wait). One `duration_ms` for the whole request cannot tell them apart, which
+    is also why the calibration questions left open in the spec (service rate-limit
+    ceilings, whether search deserves its own bucket) have nothing to answer them with.
+
+    Measured here, in the interface layer, rather than inside the use cases: the stages
+    are ports the use case calls, so timing them is observation of the composition, not
+    business logic the application layer should carry.
+    """
+
+    def __init__(self) -> None:
+        self._stages: dict[str, float] = {}
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        start = time.monotonic()
+        try:
+            yield
+        finally:
+            self._stages[name] = round((time.monotonic() - start) * 1000, 3)
+
+    def as_dict(self) -> dict[str, float] | None:
+        return dict(self._stages) if self._stages else None
+
+    def record_remainder(self, total_seconds: float) -> None:
+        """Book whatever the timed stages did not account for as `persist`.
+
+        The database work happens inside the use case's own transactions, which the
+        composition root has no port to wrap — so it is measured by subtraction. Named
+        `persist` because that is what dominates it; it also carries the ownership
+        pre-check read and the use case's own arithmetic, both negligible beside a lock
+        wait or a bulk insert. Recorded last so the four numbers sum to `duration_ms`.
+        """
+        accounted = sum(self._stages.values())
+        self._stages["persist"] = round(max(total_seconds * 1000 - accounted, 0.0), 3)
+
+
+class _TimedParser:
+    """Times `FileParser.parse` without the use case knowing it is being watched."""
+
+    def __init__(self, inner: FileParser, timer: _StageTimer) -> None:
+        self._inner = inner
+        self._timer = timer
+
+    def parse(self, content: bytes, mime_type: MimeType) -> list[TextFragment]:
+        with self._timer.stage("parse"):
+            return self._inner.parse(content, mime_type)
+
+
+class _TimedChunker:
+    """Times `TextChunker.split`."""
+
+    def __init__(self, inner: TextChunker, timer: _StageTimer) -> None:
+        self._inner = inner
+        self._timer = timer
+
+    def split(self, fragments: list[TextFragment]) -> list[TextFragment]:
+        with self._timer.stage("chunk"):
+            return self._inner.split(fragments)
+
+
+class _TimedEmbedder:
+    """Times `EmbeddingModel.embed_texts`; `embed_query` is not an ingest stage."""
+
+    def __init__(self, inner: EmbeddingModel, timer: _StageTimer) -> None:
+        self._inner = inner
+        self._timer = timer
+
+    def embed_texts(self, texts: list[str]) -> list[Embedding]:
+        with self._timer.stage("embed"):
+            return self._inner.embed_texts(texts)
+
+    def embed_query(self, text: str) -> Embedding:
+        return self._inner.embed_query(text)
+
+
 def _log_success(
     request: Request,
     token: TokenContext,
@@ -52,6 +138,8 @@ def _log_success(
     document_id: str | None = None,
     chunk_count: int | None = None,
     hits: int | None = None,
+    stage_ms: dict[str, float] | None = None,
+    top_score: float | None = None,
 ) -> None:
     # Literal keyword arguments throughout — not a `**dict` splat: log_event's
     # `level: int = ...` keyword-only param ahead of `**fields: object` makes mypy
@@ -69,6 +157,8 @@ def _log_success(
         document_id=document_id,
         chunk_count=chunk_count,
         hits=hits,
+        stage_ms=stage_ms,
+        top_score=top_score,
     )
 
 
@@ -86,16 +176,26 @@ def create_document(
 ) -> DocumentResponse:
     content = file.file.read()  # sync read — endpoints stay sync `def` per ADR A-9
     mime_type = sniff_mime_type(content, file.filename)
-    use_case = CreateDocumentUseCase(parser, chunker, embedder, documents_repo_factory, uow)
+    timer = _StageTimer()
+    use_case = CreateDocumentUseCase(
+        _TimedParser(parser, timer),
+        _TimedChunker(chunker, timer),
+        _TimedEmbedder(embedder, timer),
+        documents_repo_factory,
+        uow,
+    )
+    started = time.monotonic()
     view = use_case.execute(
         CreateDocumentCmd(owner=token.subject, name=name, content=content, mime_type=mime_type)
     )
+    timer.record_remainder(time.monotonic() - started)
     _log_success(
         request,
         token,
         "POST /documents",
         document_id=view.document_id,
         chunk_count=view.chunk_count,
+        stage_ms=timer.as_dict(),
     )
     return DocumentResponse.from_view(view)
 
@@ -115,7 +215,15 @@ def replace_document(
 ) -> DocumentResponse:
     content = file.file.read()
     mime_type = sniff_mime_type(content, file.filename)
-    use_case = ReplaceDocumentUseCase(parser, chunker, embedder, documents_repo_factory, uow)
+    timer = _StageTimer()
+    use_case = ReplaceDocumentUseCase(
+        _TimedParser(parser, timer),
+        _TimedChunker(chunker, timer),
+        _TimedEmbedder(embedder, timer),
+        documents_repo_factory,
+        uow,
+    )
+    started = time.monotonic()
     view = use_case.execute(
         ReplaceDocumentCmd(
             document_id=str(document_id),
@@ -125,12 +233,14 @@ def replace_document(
             name=name,
         )
     )
+    timer.record_remainder(time.monotonic() - started)
     _log_success(
         request,
         token,
         "PUT /documents/{id}",
         document_id=view.document_id,
         chunk_count=view.chunk_count,
+        stage_ms=timer.as_dict(),
     )
     return DocumentResponse.from_view(view)
 
@@ -145,8 +255,20 @@ def search_document(
     vector_search_factory: Annotated[VectorSearchFactory, Depends(get_vector_search_factory)],
     embedder: Annotated[EmbeddingModel, Depends(get_embedding_model)],
     uow: Annotated[UnitOfWork, Depends(get_uow)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> SearchResponse:
-    use_case = SearchDocumentUseCase(documents_repo_factory, embedder, vector_search_factory, uow)
+    # §3.7's three search knobs reach the use case from here and nowhere else: the
+    # application layer must not import `Settings`, and reading them off module constants
+    # instead — as this did — left the settings themselves with no readers at all.
+    use_case = SearchDocumentUseCase(
+        documents_repo_factory,
+        embedder,
+        vector_search_factory,
+        uow,
+        top_k=settings.search_top_k,
+        similarity_threshold=settings.similarity_threshold,
+        max_query_length=settings.max_query_length,
+    )
     result = use_case.execute(
         SearchCmd(document_id=str(document_id), owner=token.subject, query=body.query)
     )
@@ -156,6 +278,12 @@ def search_document(
         "POST /documents/{id}/search",
         document_id=str(document_id),
         hits=len(result.hits),
+        # The best match's score, not an average: the question a search log has to answer
+        # is "did the top hit actually clear the bar" — that is what `SIMILARITY_THRESHOLD`
+        # gets calibrated against, and it is the number a user's "found nothing useful"
+        # complaint has to be checked against. `None` on an empty result, which is itself
+        # the signal that nothing cleared the threshold.
+        top_score=result.hits[0].score if result.hits else None,
     )
     return SearchResponse.from_result(result)
 

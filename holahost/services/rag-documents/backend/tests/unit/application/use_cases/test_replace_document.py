@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from tests._support.builders import make_document, make_embedding
+from tests._support.builders import make_document, make_embedding, make_text_fragment
 from tests._support.fakes import (
     FakeDocumentsRepo,
     FakeEmbeddingModel,
@@ -244,3 +244,42 @@ class TestReplaceDocumentUseCase:
         )
         with pytest.raises(NotFoundError):
             _uc(documents_repo).execute(cmd)
+
+
+class TestInvalidNameIsRejectedBeforeAnyWork:
+    """An unacceptable name is a property of the request, knowable before the pipeline.
+
+    It used to be checked after parse/chunk/embed, so the most expensive path in the
+    service was paid for in full to produce a 422 the first microsecond could have
+    produced. Asserting the *ports were never called* is what pins the order — asserting
+    only the exception passes either way.
+    """
+
+    def test_pipeline_ports_are_never_touched(self) -> None:
+        existing = make_document(owner="user-123")
+        parser = FakeFileParser(fragments=[make_text_fragment(text="x" * 250)])
+        chunker = FakeTextChunker()
+        embedder = FakeEmbeddingModel(make_embedding())
+        use_case = ReplaceDocumentUseCase(
+            documents_repo_factory=FakeDocumentsRepo([existing]),
+            parser=parser,
+            chunker=chunker,
+            embedder=embedder,
+            uow=FakeUnitOfWork(),
+        )
+
+        with pytest.raises(InvalidPayloadError) as exc:
+            use_case.execute(
+                ReplaceDocumentCmd(
+                    document_id=str(existing.id),
+                    owner="user-123",
+                    name="   ",  # blank after strip — rejected by DocumentName
+                    content=b"x" * 100,
+                    mime_type="text/plain",
+                )
+            )
+
+        assert exc.value.field == "name"
+        assert parser.calls == 0
+        assert chunker.calls == 0
+        assert embedder.calls == 0

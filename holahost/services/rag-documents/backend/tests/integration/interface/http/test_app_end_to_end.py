@@ -7,7 +7,10 @@ real Postgres, real JWT validation. Proves the composition root actually wires
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -95,3 +98,78 @@ def test_missing_token_returns_401_against_the_real_app(client: TestClient) -> N
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Unauthorized"}
+
+
+@contextmanager
+def _attach(records: list[dict[str, Any]]) -> Iterator[None]:
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if getattr(record, "event", None) == "op_completed":
+                records.append(dict(record.__dict__))
+
+    logger = logging.getLogger("holahost")
+    handler = _Collector()
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+
+
+def test_ingest_and_search_report_their_own_cost(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """§8.7's `stage_ms` and `top_score`, against the real pipeline.
+
+    Both fields were in the log allowlist and emitted by nothing. Without `stage_ms` a
+    slow ingest is one opaque `duration_ms` — a scanned PDF that takes its time in parse
+    looks exactly like model contention in embed. Without `top_score` there is no way to
+    tell "the threshold is too high" from "this document has no answer", which is what
+    `SIMILARITY_THRESHOLD` has to be calibrated against.
+    """
+    guidebook_text = (
+        b"Check-in is at 15:00. Check-out is at 11:00. "
+        b"The wifi password is posted on the fridge. "
+        b"Parking is available in the garage behind the building. "
+        b"For any issues, contact the host through the platform messaging system."
+    )
+    # Read off the logger directly, not stdout. The `holahost` logger sets
+    # `propagate = False`, so `caplog` never sees these; and its stream handler holds the
+    # real `sys.stdout` from when logging was configured at import, which puts the output
+    # out of reach of pytest's own capture fixtures. Attaching a handler is deterministic
+    # and needs none of that machinery.
+    # `Any`, not `object`: these are log-record attributes whose types the allowlist in
+    # `config/logging.py` already fixes; re-declaring them here would only duplicate it.
+    events: list[dict[str, Any]] = []
+    with _attach(events):
+        create_resp = client.post(
+            "/api/rag-documents/documents",
+            files={"file": ("guide.txt", guidebook_text, "text/plain")},
+            data={"name": "Guidebook"},
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 201, create_resp.text
+        document_id = create_resp.json()["document_id"]
+
+        search_resp = client.post(
+            f"/api/rag-documents/documents/{document_id}/search",
+            json={"query": "what time is check-in"},
+            headers=auth_headers,
+        )
+        assert search_resp.status_code == 200, search_resp.text
+
+    ingest = next(e for e in events if e["route"] == "POST /documents")
+    search = next(e for e in events if e["route"] == "POST /documents/{id}/search")
+
+    assert set(ingest["stage_ms"]) == {"parse", "chunk", "embed", "persist"}
+    assert all(ms >= 0 for ms in ingest["stage_ms"].values())
+    # The four are a decomposition of the request, not four unrelated numbers: `persist`
+    # is booked as the remainder, so they sum to the use case's own duration and cannot
+    # exceed the request's.
+    assert sum(ingest["stage_ms"].values()) <= ingest["duration_ms"] + 1.0
+
+    assert search["top_score"] is not None, "the sample query matches this text"
+    assert 0.0 <= search["top_score"] <= 1.0
+    assert search["stage_ms"] is None, "search is not an ingest; it has no stages to report"
+
+    client.delete(f"/api/rag-documents/documents/{document_id}", headers=auth_headers)

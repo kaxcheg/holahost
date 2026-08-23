@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from application.dto.search import SearchCmd, SearchHitView, SearchResult
 from application.exceptions import InvalidPayloadError, NotFoundError
-from application.limits import MAX_QUERY_LENGTH, SEARCH_TOP_K, SIMILARITY_THRESHOLD
 from application.ports.embedding import EmbeddingModel
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
@@ -18,25 +17,37 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 @dataclass
 class SearchDocumentUseCase:
-    """UC-R3: embed the query and return its top-K most similar chunks."""
+    """UC-R3: embed the query and return its top-K most similar chunks.
+
+    The three search parameters are injected, not read from module constants: §3.7 makes
+    them environment configuration (`SEARCH_TOP_K`, `SIMILARITY_THRESHOLD`,
+    `MAX_QUERY_LENGTH`), and the threshold in particular is explicitly provisional —
+    "calibrated on real guidebooks later". Constants made those settings unreadable:
+    every one of them had zero readers while this use case used a literal, so turning the
+    knob in `.env` changed nothing at all. Wired from `Settings` in the composition root,
+    which is also the only layer allowed to know `Settings` exists.
+    """
 
     documents_repo_factory: DocumentsRepoFactory
     embedder: EmbeddingModel
     vector_search_factory: VectorSearchFactory
     uow: UnitOfWork
+    top_k: int
+    similarity_threshold: float
+    max_query_length: int
 
     @wrap_value_error
     def execute(self, cmd: SearchCmd) -> SearchResult:
         """Search `cmd.document_id` for chunks relevant to `cmd.query`.
 
-        An empty result is a valid outcome (no chunk cleared `SIMILARITY_THRESHOLD`),
+        An empty result is a valid outcome (no chunk cleared `similarity_threshold`),
         not an error.
 
         :raises ApplicationError: wraps a bare ``ValueError`` (e.g. a malformed
             ``document_id`` that should have already been rejected by interface-layer
             shape validation) — an internal defect, never client-fixable.
         :raises NotFoundError: the document does not exist, or belongs to another owner.
-        :raises InvalidPayloadError: `cmd.query` is empty or exceeds `MAX_QUERY_LENGTH`.
+        :raises InvalidPayloadError: `cmd.query` is empty or exceeds `max_query_length`.
         :raises EmbeddingFailedError: conscious pass-through.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: conscious pass-through — a plain read, not
@@ -58,8 +69,8 @@ class SearchDocumentUseCase:
 
         if not cmd.query.strip():
             raise InvalidPayloadError(field="query")
-        if len(cmd.query) > MAX_QUERY_LENGTH:
-            raise InvalidPayloadError(field="query", limit=MAX_QUERY_LENGTH)
+        if len(cmd.query) > self.max_query_length:
+            raise InvalidPayloadError(field="query", limit=self.max_query_length)
 
         # Embedding runs outside any transaction, same reasoning as the ingest
         # pipeline (§8.2/§8.3): CPU-bound work must not hold a pooled connection.
@@ -69,7 +80,7 @@ class SearchDocumentUseCase:
         # short transaction — reusing self.uow sequentially is safe (§8.0).
         with self.uow:
             hits = vector_search.top_k(
-                document_id, query_embedding, SEARCH_TOP_K, SIMILARITY_THRESHOLD
+                document_id, query_embedding, self.top_k, self.similarity_threshold
             )
 
         return SearchResult(
