@@ -53,7 +53,12 @@ COPY holahost/services/rag-documents/backend/app/ /app/
 COPY holahost/services/rag-documents/backend/migrations/ /app/migrations/
 COPY holahost/services/rag-documents/backend/alembic.ini /app/alembic.ini
 
+# The path comes from `interface.http.api_base`, the same module `create_app()` mounts every
+# router under — not a third hand-written copy of the literal. A bare `/health` was written here
+# once and silently became a 404 the moment routers moved under the service's base path, leaving
+# the container permanently `unhealthy` (urlopen raises HTTPError on 404, so the probe exits
+# non-zero on every attempt) while the service itself was answering fine.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8080/health', timeout=3)" || exit 1
+  CMD python -c "from interface.http.api_base import API_BASE_URL; import urllib.request as u; u.urlopen(f'http://localhost:8080{API_BASE_URL}/health', timeout=3)" || exit 1
 
 CMD ["python", "-m", "uvicorn", "scripts.bootstrap:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -49,7 +49,11 @@ jobs:
         run: |
           set -euo pipefail
           REPO=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)
-          SHA_TAG="git-${GITHUB_SHA::7}"
+          # Тот же полный sha, что пишет deploy-staging. GITHUB_SHA здесь — коммит, на
+          # который поставлен git-тег `<svc>/v*`; рамочная спека требует ставить его на
+          # коммит ветки `release/v*`, прошедший staging, именно чтобы образ для него
+          # существовал (squash-мерж в `main` даёт новый sha, для которого сборки нет).
+          SHA_TAG="git-${GITHUB_SHA}"
           DIGEST=$(aws ecr describe-images \
             --repository-name "${REPO##*/}" \
             --image-ids imageTag="$SHA_TAG" \

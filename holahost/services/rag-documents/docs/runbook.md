@@ -216,7 +216,11 @@ differences per frame spec:
 staging. First deploy is pipeline-driven (tag push), not manual.
 **2. Check:** `curl https://hola.host/api/rag-documents/health`; log group
 `/holahost/prod/rag-documents`; alarms `rag-documents-prod-5xx` / `rag-documents-prod-ingest-p95`.
-**3. Update:** tag `rag-documents/vYYYYMMDD.N` on the `main` merge commit → `promote-prod` pipeline.
+**3. Update:** tag `rag-documents/vYYYYMMDD.N` on the `release/v*` commit that passed staging →
+`promote-prod` pipeline. Not on the `main` merge commit: a squash-merged `release/v*` lands on
+`main` as a new commit object with a sha that never existed on the release branch, so no
+`git-<sha>` image was ever built for it and the resolve described above would find nothing. Merge
+the release branch into `main` as usual afterwards.
 **4. Rollback:** same as staging — redeploy previous digest via SSM; DB restore, not `downgrade`,
 for irreversible migrations.
 

@@ -46,7 +46,10 @@ jobs:
         id: tags
         run: |
           echo "repo_url=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=git-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          # Полный sha, не первые 7 символов: короткий префикс в растущем репозитории даёт
+          # ненулевой шанс коллизии при нулевой выгоде, а тег — единственная привязка образа
+          # к коммиту, по которой его потом находит промоут.
+          echo "sha_tag=git-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/build-push-image
         id: build

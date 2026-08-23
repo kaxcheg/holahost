@@ -630,8 +630,18 @@ terraform-root'ы сервиса (`infra/common`,`infra/envs/<env>`) приме�
 `feature|bugfix|refactor|chore|docs|test/[<service>/]<slug>` от `develop` и в `develop`;
 `release/v*` и `hotfix/v*` — в `main` с back-merge. Ветка, разрабатывающая микросервис, несёт его
 имя сегментом. Коммиты — Conventional Commits, тип из `feat|fix|chore|refactor|docs|test|build|ci`.
-Версия — **per-component**: тег `<component>/vYYYYMMDD.N` на merge-коммите в `main`, он же триггер
-prod-пайплайна. Конвенции имён (Python, БД, миграции) — в `CONTRIBUTING.md` в корне репо.
+Версия — **per-component**: тег `<component>/vYYYYMMDD.N` на том коммите ветки `release/v*`,
+который прошёл staging, он же триггер prod-пайплайна. Ветка после этого мержится в `main` как
+обычно.
+
+Тег ставится именно на коммит релизной ветки, а не на merge-коммит в `main`, и это следствие
+squash-мержа: squash порождает новый объект коммита с новым sha, которого не было ни на одной
+`release/*`. Промоут же адресует образ по `git-<sha>` затегированного коммита — единственная
+привязка «этот образ прошёл staging», потому что `deploy-staging` собирает только коммиты
+`release/v*`. Тег на merge-коммите указывал бы на sha, для которого образа не существует, и
+промоут не находил бы ничего.
+
+Конвенции имён (Python, БД, миграции) — в `CONTRIBUTING.md` в корне репо.
 
 **Статический анализ.** `ruff` (lint + format, `target-version = "py312"`, `line-length = 100`,
 правила `E,F,W,I,UP,B,SIM,RUF,S`), `mypy --strict` с плагином Pydantic, контракт `import-linter`
