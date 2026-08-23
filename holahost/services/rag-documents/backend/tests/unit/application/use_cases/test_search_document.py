@@ -15,7 +15,6 @@ from tests._support.fakes import (
 
 from application.dto.search import SearchCmd
 from application.exceptions import InvalidPayloadError, NotFoundError
-from application.limits import MAX_QUERY_LENGTH, SEARCH_TOP_K, SIMILARITY_THRESHOLD
 from application.ports.vector import SearchHit, SimilarityScore
 from application.use_cases.search_document import SearchDocumentUseCase
 from domain.value_objects.chunk_id import ChunkId
@@ -23,15 +22,29 @@ from domain.value_objects.document_id import DocumentId
 from domain.value_objects.embedding import Embedding
 from domain.value_objects.page_number import PageNumber
 
+# The values every infra/envs/<env>/.env carries, so these tests read the way production
+# runs. They are arguments now, not constants — see `SearchDocumentUseCase`'s docstring.
+SEARCH_TOP_K = 5
+SIMILARITY_THRESHOLD = 0.30
+MAX_QUERY_LENGTH = 4000
+
 
 def _uc(
-    documents_repo: FakeDocumentsRepo, vector_search: FakeVectorSearch | None = None
+    documents_repo: FakeDocumentsRepo,
+    vector_search: FakeVectorSearch | None = None,
+    *,
+    top_k: int = SEARCH_TOP_K,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    max_query_length: int = MAX_QUERY_LENGTH,
 ) -> SearchDocumentUseCase:
     return SearchDocumentUseCase(
         documents_repo_factory=documents_repo,
         embedder=FakeEmbeddingModel(make_embedding()),
         vector_search_factory=vector_search or FakeVectorSearch(),
         uow=FakeUnitOfWork(),
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        max_query_length=max_query_length,
     )
 
 
@@ -99,6 +112,28 @@ class TestSearchDocumentUseCase:
                 return []
 
         cmd = SearchCmd(document_id=str(existing.id), owner="user-123", query="q")
-        _uc(FakeDocumentsRepo([existing]), _CapturingVectorSearch()).execute(cmd)
+        # Values deliberately unlike the defaults: passing the defaults would pass just as
+        # well against a hard-coded literal, which is exactly the bug this now guards.
+        _uc(
+            FakeDocumentsRepo([existing]),
+            _CapturingVectorSearch(),
+            top_k=11,
+            similarity_threshold=0.99,
+        ).execute(cmd)
 
-        assert captured == {"k": SEARCH_TOP_K, "threshold": SIMILARITY_THRESHOLD}
+        assert captured == {"k": 11, "threshold": 0.99}
+
+
+class TestSearchParametersAreInjected:
+    """Regression: all three were module constants, so their `Settings` fields had zero
+    readers and the values in `.env` were decorative."""
+
+    def test_configured_max_query_length_is_the_one_enforced(self) -> None:
+        existing = make_document(owner="user-123")
+
+        with pytest.raises(InvalidPayloadError) as exc:
+            _uc(FakeDocumentsRepo([existing]), max_query_length=10).execute(
+                SearchCmd(document_id=str(existing.id), owner="user-123", query="x" * 11)
+            )
+
+        assert exc.value.limit == 10

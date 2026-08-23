@@ -16,7 +16,8 @@ Implements the platform's numbered offline JWT-validation procedure (see `holaho
 "Аутентификация и авторизация"): scheme check, parse, `alg` pinning (never read from the token
 itself), signature verification by `kid` against a cached JWKS (with a single re-fetch if `kid` is
 unknown), standard claims (`exp`/`iat`/`iss`/`aud`, with configurable clock skew), and
-`sub == client_id` discrimination between service, user, and delegated (token-exchange) tokens.
+`sub == client_id` discrimination between service, user, and delegated (token-exchange) tokens
+(exposed as `TokenContext.is_service_token`, which is what a rate limiter keys its ceilings on).
 
 **What it does not do:** authorization. On success it returns a `TokenContext`; deciding whether
 that subject/roles combination has the right to do what the endpoint is about to do (403) is
@@ -27,50 +28,57 @@ entirely the consuming endpoint's job, never this library's.
 ```python
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI
+from starlette.middleware import Middleware
 
-from holahost_auth import AuthConfig, AuthenticationError, HolahostAuth, JwksUnavailableError, TokenContext
+from holahost_auth import AuthConfig, HolahostAuthMiddleware, TokenContext, current_token
 
-app = FastAPI()
-
-auth = HolahostAuth(
-    AuthConfig(
-        jwks_url="https://auth.holahost.internal/.well-known/jwks.json",
-        expected_algorithm="RS256",
-        expected_issuer="auth",
-        expected_audience="rag-documents",
-        clock_skew_seconds=30,
-    )
+app = FastAPI(
+    middleware=[
+        Middleware(
+            HolahostAuthMiddleware,
+            config=AuthConfig(
+                jwks_url="https://auth.holahost.internal/.well-known/jwks.json",
+                expected_algorithm="RS256",
+                expected_issuer="auth",
+                expected_audience="rag-documents",
+                clock_skew_seconds=30,
+            ),
+            public_paths=("/api/rag-documents/health",),
+        )
+    ]
 )
 
 
-# HolahostAuth raises its own exception types — mapping them to a status code
-# and response shape is this service's own call, not the library's (see "Errors").
-@app.exception_handler(AuthenticationError)
-def _handle_auth_error(request: Request, exc: AuthenticationError) -> JSONResponse:
-    return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-
-
-@app.exception_handler(JwksUnavailableError)
-def _handle_jwks_unavailable(request: Request, exc: JwksUnavailableError) -> JSONResponse:
-    return JSONResponse(status_code=503, content={"detail": "Service Unavailable"})
-
-
-@app.get("/documents/{document_id}")
-def get_document(document_id: str, ctx: Annotated[TokenContext, Depends(auth)]) -> dict:
+@app.get("/api/rag-documents/documents/{document_id}")
+def get_document(document_id: str, ctx: Annotated[TokenContext, Depends(current_token)]) -> dict:
     ...  # ctx.subject / ctx.client_id / ctx.roles / ctx.act are available here
 
 
-@app.get("/health")
+@app.get("/api/rag-documents/health")
 def health() -> dict:
-    return {"status": "ok"}  # not behind `auth` — no token required
+    return {"status": "ok"}  # listed in public_paths — no token required
 ```
 
-Instantiate `HolahostAuth` once per service, at the composition root — its JWKS client is safe to
-reuse for the process's lifetime. Apply `Depends(auth)` to every router except health checks;
-there is no path-exclusion mechanism inside the library itself, by design — a route simply isn't
-declared under the auth-guarded router.
+Two pieces, one validation path:
+
+- **`HolahostAuthMiddleware`** validates the token *before routing* and stores the result at
+  `scope["state"]["token"]`. Add it once, at the composition root; the JWKS client it builds is
+  safe to reuse for the process's lifetime.
+- **`current_token`** is a plain FastAPI dependency that reads what the middleware stored. It never
+  validates. On a route the middleware did not cover it raises `RuntimeError` — a wiring defect,
+  which must not be reported to the caller as `401`.
+
+### Why validation is middleware and not a dependency
+
+A framework resolves the request body while building an endpoint's arguments, which happens
+*before* it resolves that endpoint's dependencies. Authentication expressed as `Depends(auth)`
+therefore runs *after* a multipart upload has already been read in full: an anonymous 50 MiB POST
+is received end to end and only then answered `401`. Validating ahead of routing is what makes
+"reject before reading" possible at all.
+
+Exclusions are explicit (`public_paths`) rather than structural, because middleware wraps the whole
+app: there is no "router this isn't declared under" to opt out by.
 
 ## `AuthConfig` fields
 
@@ -86,13 +94,14 @@ All fields are required; there are no library-side defaults.
 
 ## Errors
 
-`HolahostAuth.__call__` raises its own typed exceptions directly — it does **not** translate them
-to `fastapi.HTTPException` itself. Mapping exception type to an HTTP status/response shape is the
-consuming service's own interface-layer decision, the same rule every other port/library in the
-platform follows (a port raises typed, protocol-agnostic exceptions; the *consumer's* interface
-layer owns type → HTTP-status dispatch). The consuming service must register its own exception
-handlers for both types below — see `tests/test_dependency.py`'s `build_app()` for a minimal
-example, or `rag-documents`' own `interface/http/errors.py` for a real one.
+The middleware answers both failures itself and registers nothing on the app. It has to: an
+exception raised in middleware never reaches `@app.exception_handler` — those are bound to
+Starlette's `ExceptionMiddleware`, which sits *inside* the user-middleware stack — so it would
+surface as a `500`. A consuming service therefore registers no handler for either type below.
+
+Neither response body carries a reason. Pass `on_rejected` (a `holahost_http.RejectionLogger`) to
+receive the cause and the request scope, and write the service's own log line for the refusal —
+without it the rejection still happens, but nothing downstream runs to record it.
 
 Every *per-token* validation failure raises a single `AuthenticationError` (`reason` is for the
 caller's own logging, never for a response body — nothing in this library's own behavior discloses

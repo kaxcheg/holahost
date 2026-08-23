@@ -140,6 +140,42 @@ services:
     # the intended path. This file is deployed verbatim to the instance (see the header), so a
     # `ports:` key here, however defaulted, is published there too: neither staging's nor prod's
     # committed .env sets HOST_PORT, so the `:-8080` fallback is exactly what they would get.
+    # Without this the service logs to the container's stdout and stop there. Nothing
+    # ships them anywhere: no CloudWatch agent runs on the instance, and the log group
+    # this service's terraform creates (`/holahost/<env>/rag-documents`) receives not one
+    # datapoint. Everything downstream is built on that group — ten metric filters, four
+    # alarms and the dashboard — so all of it reads as healthy while the service is
+    # silent, and `treat_missing_data = "notBreaching"` makes a total outage look exactly
+    # like a quiet period. The driver is what closes that loop.
+    #
+    # AWS_REGION and ENV come from the same `--env-file` Compose already reads for `${ENV}`
+    # above: staging's and prod's committed .env both carry AWS_REGION, dev's does not.
+    #
+    # No `:?` guard on AWS_REGION, unlike every other mandatory variable in this file, and
+    # it is not an oversight: `${VAR}` interpolation is eager for the WHOLE file, so a
+    # guard here fires on `make dev-up` too — where dev has no region, does not want one,
+    # and overrides this driver away entirely. (Same trap that forced `PYTHON_VERSION=
+    # unused` before the `build:` section was removed — see the header.) On staging/prod
+    # an empty region is not silent either: the daemon refuses to start a container it
+    # cannot attach a log driver to.
+    #
+    # `awslogs-create-group` is deliberately absent — the group is a terraform resource
+    # with a retention policy, and letting the driver create it on demand would produce an
+    # unmanaged group retained forever if the region or env were ever wrong. Failing to
+    # start beats logging into a resource nobody owns.
+    #
+    # Dev overrides this back to `json-file` (docker-compose.dev.yml): there is no AWS
+    # there, and the driver would refuse to start the container at all.
+    #
+    # Requires `logs:CreateLogStream` and `logs:PutLogEvents` on the instance role. That
+    # role is platform-level and outside this service's terraform (which owns the group
+    # itself, the filters and the alarms, but no compute) — see docs/runbook.md.
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: /holahost/${ENV}/rag-documents
+        awslogs-stream-prefix: api
     depends_on:
       postgres:
         condition: service_healthy

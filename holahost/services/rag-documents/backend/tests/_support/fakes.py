@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import TracebackType
 
+from holahost_http import RateLimitExceededError
+
 from application.ports.ingestion import TextFragment
 from application.ports.repos import DocumentsRepo
 from application.ports.vector import SearchHit, VectorSearch
@@ -24,8 +26,10 @@ class FakeFileParser:
     ) -> None:
         self._fragments = fragments if fragments is not None else []
         self._error = error
+        self.calls = 0
 
     def parse(self, content: bytes, mime_type: MimeType) -> list[TextFragment]:
+        self.calls += 1
         if self._error is not None:
             raise self._error
         return self._fragments
@@ -36,8 +40,10 @@ class FakeTextChunker:
 
     def __init__(self, chunks: list[TextFragment] | None = None) -> None:
         self._chunks = chunks
+        self.calls = 0
 
     def split(self, fragments: list[TextFragment]) -> list[TextFragment]:
+        self.calls += 1
         return self._chunks if self._chunks is not None else fragments
 
 
@@ -46,11 +52,16 @@ class FakeEmbeddingModel:
 
     def __init__(self, embedding: Embedding) -> None:
         self._embedding = embedding
+        # Call counters, so a test can assert an expensive port was never reached — the
+        # only way to pin *ordering* rather than just the resulting exception.
+        self.calls = 0
 
     def embed_texts(self, texts: list[str]) -> list[Embedding]:
+        self.calls += 1
         return [self._embedding for _ in texts]
 
     def embed_query(self, text: str) -> Embedding:
+        self.calls += 1
         return self._embedding
 
 
@@ -124,18 +135,16 @@ class FakeVectorSearch(VectorSearch):
 
 
 class FakeRateLimiter:
-    """In-memory ``RateLimiter`` fake — trips on demand, not on real counting."""
+    """``holahost_http.RateLimiter`` fake — trips on demand, not on real counting."""
 
     def __init__(self, *, should_raise: bool = False, retry_after: int = 30) -> None:
         self.should_raise = should_raise
         self.retry_after = retry_after
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, bool]] = []
 
-    def check(self, client_id: str, subject: str, bucket: str) -> None:
-        self.calls.append((client_id, subject, bucket))
+    def check(self, *, client_id: str, subject: str, bucket: str, is_service: bool) -> None:
+        self.calls.append((client_id, subject, bucket, is_service))
         if self.should_raise:
-            from application.ports.rate import RateLimitExceededError
-
             raise RateLimitExceededError(retry_after=self.retry_after)
 
 

@@ -216,9 +216,34 @@ differences per frame spec:
 staging. First deploy is pipeline-driven (tag push), not manual.
 **2. Check:** `curl https://hola.host/api/rag-documents/health`; log group
 `/holahost/prod/rag-documents`; alarms `rag-documents-prod-5xx` / `rag-documents-prod-ingest-p95`.
-**3. Update:** tag `rag-documents/vYYYYMMDD.N` on the `main` merge commit → `promote-prod` pipeline.
+**3. Update:** tag `rag-documents/vYYYYMMDD.N` on the `release/v*` commit that passed staging →
+`promote-prod` pipeline. Not on the `main` merge commit: a squash-merged `release/v*` lands on
+`main` as a new commit object with a sha that never existed on the release branch, so no
+`git-<sha>` image was ever built for it and the resolve described above would find nothing. Merge
+the release branch into `main` as usual afterwards.
 **4. Rollback:** same as staging — redeploy previous digest via SSM; DB restore, not `downgrade`,
 for irreversible migrations.
+
+---
+
+## Prerequisite outside this service's terraform
+
+The `api` container logs through Docker's `awslogs` driver straight into
+`/holahost/<env>/rag-documents` (docker-compose.yml). That needs **`logs:CreateLogStream`
+and `logs:PutLogEvents` on the instance role**, and this service's terraform cannot grant
+it: `infra/envs/<env>` owns the log group, the metric filters and the alarms, `infra/common`
+owns ECR — no compute, no instance profile, no IAM role. Those are platform-level, same as
+the `github-actions-rag-documents-*` roles both pipelines assume.
+
+Until the permission exists the container **will not start** on staging or prod: Docker
+refuses to run a container whose log driver cannot attach. That is the intended failure —
+loud at deploy time, rather than a service that runs while its whole observability stack
+(ten metric filters, four alarms, the dashboard) sits on a log group receiving nothing and
+reads as healthy, since `treat_missing_data = "notBreaching"` cannot tell silence from calm.
+
+Symptom if it is missing: `docker compose up -d` fails on the instance with a
+`ResourceNotFoundException` or `AccessDeniedException` from the driver, visible in the SSM
+command output the deploy step already surfaces.
 
 ---
 

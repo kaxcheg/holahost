@@ -1,47 +1,40 @@
-"""FastAPI-native entry point: a configurable, Depends()-compatible callable."""
+"""FastAPI-native entry point: typed access to the already-validated token."""
 
-from fastapi import Header
+from __future__ import annotations
 
-from holahost_auth.config import AuthConfig
+from typing import cast
+
+from fastapi import Request
+
 from holahost_auth.context import TokenContext
-from holahost_auth.jwks import build_jwks_client
-from holahost_auth.validator import authenticate
+from holahost_auth.middleware import TOKEN_SCOPE_KEY
 
 
-class HolahostAuth:
-    """Configured, reusable FastAPI dependency for offline JWT validation.
+def current_token(request: Request) -> TokenContext:
+    """FastAPI dependency returning the caller's validated ``TokenContext``.
 
-    Instantiate once per service at the composition root — the JWKS client it
-    holds is safe to reuse for the process's lifetime — and use as
-    ``Depends(auth)`` on every router except health checks.
+    Reads what ``HolahostAuthMiddleware`` put in the request scope; it does not
+    validate anything itself. Validation happens once, before routing, because it has
+    to: a dependency runs after the framework has already read the request body, so
+    authenticating there means every anonymous upload is received in full first.
 
-    :param config: This service's fixed validation configuration.
+    That leaves this as the typed handle on the result — annotate a route parameter
+    ``Annotated[TokenContext, Depends(current_token)]`` and get the context, with none
+    of the "did auth actually run for this route?" ambiguity a second validation path
+    would reintroduce.
+
+    :raises RuntimeError: the route is not covered by ``HolahostAuthMiddleware`` (or
+        is listed among its ``public_paths``). A wiring mistake, not a caller error —
+        it must not be answered with 401, which would report a service defect as bad
+        credentials.
     """
-
-    def __init__(self, config: AuthConfig) -> None:
-        self._config = config
-        self._jwks_client = build_jwks_client(config.jwks_url)
-
-    def __call__(self, authorization: str | None = Header(default=None)) -> TokenContext:
-        """FastAPI dependency callable.
-
-        Raises ``authenticate()``'s own exception types directly — does not
-        translate them to ``fastapi.HTTPException`` itself. Which HTTP status
-        (and response shape) a given exception type maps to is the *consuming
-        service's* interface-layer decision, not this library's: every other
-        exception boundary in the platform follows the same rule (a port/
-        library raises typed, protocol-agnostic exceptions; the interface
-        layer owns type -> HTTP-status dispatch). The consuming service is
-        expected to register its own exception handlers for both types (see
-        this repo's own ``tests/test_dependency.py`` for a minimal example).
-
-        :raises holahost_auth.exceptions.AuthenticationError: on any
-            per-request validation failure; `reason` is for logging, never
-            for the HTTP response body (US-R07).
-        :raises holahost_auth.exceptions.JwksUnavailableError: the JWKS
-            endpoint is unreachable or returned an unusable response — an
-            infrastructure failure, not a statement about this particular
-            token; the platform convention is to map this to 503, not 401,
-            so it isn't reported to callers as "invalid credentials."
-        """
-        return authenticate(authorization, config=self._config, jwks_client=self._jwks_client)
+    token = request.scope.get("state", {}).get(TOKEN_SCOPE_KEY)
+    if token is None:
+        raise RuntimeError(
+            f"no validated token for {request.method} {request.url.path} — the route "
+            f"depends on current_token but HolahostAuthMiddleware did not authenticate "
+            f"it (missing from the middleware stack, or listed in public_paths)"
+        )
+    # cast rather than isinstance: the middleware above is the only writer of this key,
+    # and an assert would be stripped under `-O` exactly where it was meant to hold.
+    return cast(TokenContext, token)

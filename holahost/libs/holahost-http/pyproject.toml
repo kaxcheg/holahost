@@ -1,0 +1,56 @@
+[project]
+name = "holahost-http"
+version = "0.1.0"
+description = "Shared HTTP edge for Holahost services: error envelope and pre-routing middleware."
+requires-python = ">=3.12,<4.0"
+readme = "README.md"
+
+[tool.poetry]
+packages = [{ include = "holahost_http" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+# starlette, not fastapi: everything here is plain ASGI. Middleware that has to run
+# before routing (and before the body is read) cannot be expressed with FastAPI's
+# Depends() in the first place — that is the reason this package exists.
+starlette = ">=0.40,<1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+httpx = "^0.28"
+fastapi = "^0.115"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's whole assertion idiom is bare `assert`; S101 targets production code
+# where asserts get stripped under `-O`, not test files.
+"tests/*" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.importlinter]
+root_package = "holahost_http"
+
+[[tool.importlinter.contracts]]
+name = "Middleware depends on the envelope, never on each other"
+type = "independence"
+modules = [
+    "holahost_http.body_limit",
+    "holahost_http.rate_limit",
+    "holahost_http.request_id",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"

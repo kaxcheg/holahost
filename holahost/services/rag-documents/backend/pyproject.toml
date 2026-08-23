@@ -38,6 +38,7 @@ fastapi = "^0.115"
 uvicorn = {extras = ["standard"], version = "^0.34"}
 python-multipart = "^0.0.20"
 holahost-auth = {path = "../../../libs/holahost-auth", develop = true}
+holahost-http = {path = "../../../libs/holahost-http", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

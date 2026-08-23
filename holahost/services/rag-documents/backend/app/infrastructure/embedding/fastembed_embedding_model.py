@@ -45,6 +45,13 @@ class FastembedEmbeddingModel:
                 "ignore", message=".*now uses mean pooling.*", category=UserWarning
             )
             self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+        # Measured once, not assumed: what this tokenizer adds around any input. Encoding
+        # the empty string yields exactly the special tokens and nothing else (verified:
+        # 2 for this model — `<s>`/`</s>`). Reading it off the tokenizer keeps the two
+        # methods below correct for a model that frames its input differently.
+        self._special_token_overhead = len(
+            self._model.model.tokenizer.encode("").ids  # type: ignore[attr-defined]
+        )
 
     def embed_texts(self, texts: list[str]) -> list[Embedding]:
         try:
@@ -60,27 +67,44 @@ class FastembedEmbeddingModel:
             raise EmbeddingFailedError from e
 
     def count_tokens(self, text: str) -> int:
-        """Count tokens with this exact model's own tokenizer (composition-time use).
+        """Count the tokens `text` itself contributes, with this model's own tokenizer.
 
-        Caveat verified at runtime: the tokenizer's own truncation kicks in *inside*
-        `.encode()`, so this silently caps out at `max_input_tokens()` for `text`
-        longer than that — it does not report the true count past the ceiling. Safe
-        as a chunker `length_function` only as long as the configured chunk window
-        stays below `max_input_tokens()` (checked once at composition time, not here
-        per-call — see that method).
+        `add_special_tokens=False` is load-bearing, not a detail. This is the chunker's
+        `length_function`, so it is asked to measure *fragments* — and the tokenizer's
+        framing tokens are added once per encoded sequence, not once per fragment. Left
+        on, every fragment measured anywhere in the recursive split reports two tokens it
+        does not contain (verified: `count_tokens("") == 2`), so the splitter believes
+        each candidate is larger than it is and cuts early. The overcount compounds across
+        splits and separators, and chunks come out a fraction of `CHUNK_WINDOW_TOKENS`.
+
+        Caveat verified at runtime: the tokenizer's own truncation still applies inside
+        `.encode()`, so the count saturates at the tokenizer's raw ceiling for text longer
+        than that — it does not report the true length past it. Harmless for the splitter,
+        which only needs "is this bigger than the window", and the window is guaranteed
+        smaller than the ceiling at composition time (see `max_input_tokens`).
         """
         # fastembed's public type stubs omit `.model.tokenizer`; verified at runtime
         # (~/repos/lead-capture precedent) — attr-defined ignore, not a guess.
-        return len(self._model.model.tokenizer.encode(text).ids)  # type: ignore[attr-defined]
+        return len(
+            self._model.model.tokenizer.encode(  # type: ignore[attr-defined]
+                text, add_special_tokens=False
+            ).ids
+        )
 
     def max_input_tokens(self) -> int:
-        """Max tokens this model's tokenizer accepts before silently truncating the
-        rest — verified at runtime: a deliberately over-length input truncates to
-        exactly this many tokens with no error, `embed()`/`query_embed()` never raise
-        for over-length input, they just drop the tail. Exposes the model's real
-        limit so the composition root can fail fast at startup if
-        `RecursiveTextChunker`'s configured window ever exceeds what this model
-        actually supports, instead of silently embedding truncated chunks later.
+        """How many tokens of *content* this model accepts before it truncates the rest.
+
+        The tokenizer's own ceiling minus its framing tokens, and the subtraction is the
+        point: truncation applies to the finished sequence, framing included (verified —
+        over-length input comes back at exactly the ceiling either way, so with framing on
+        it holds two fewer tokens of the caller's text). Reporting the raw ceiling would
+        put a chunk measured by `count_tokens` at exactly the limit two tokens over it at
+        embed time, and the tail would be dropped — silently, since `embed()` never raises
+        for over-length input.
+
+        Exposed so the composition root can fail fast at startup when the configured chunk
+        window exceeds what the model really takes, instead of embedding truncated chunks
+        for the rest of the deployment.
 
         :raises RuntimeError: this model's tokenizer has no truncation configured —
             unexpected for any of fastembed's supported models (all have a fixed
@@ -90,4 +114,4 @@ class FastembedEmbeddingModel:
         truncation = self._model.model.tokenizer.truncation  # type: ignore[attr-defined]
         if truncation is None:
             raise RuntimeError("model's tokenizer has no truncation limit configured")
-        return int(truncation["max_length"])
+        return int(truncation["max_length"]) - self._special_token_overhead

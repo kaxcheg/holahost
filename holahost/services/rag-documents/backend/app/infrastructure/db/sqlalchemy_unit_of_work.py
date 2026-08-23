@@ -28,7 +28,21 @@ def build_engine(database_url: str, *, pool_size: int = 5) -> Engine:
         database_url,
         pool_size=pool_size,
         pool_pre_ping=True,
-        connect_args={"options": "-c timezone=utc"},
+        # §3.7 caps a statement at 5 s; without it a runaway query holds a pooled
+        # connection until the client gives up, and the API Gateway's own 30 s ceiling
+        # is what ends the request — long after the connection could have been freed.
+        # `lock_timeout` is the tighter of the two on purpose: waiting on a row lock is
+        # not work, it is queueing behind someone else's transaction, and `replace`/
+        # `delete` take that lock (§8.6). Failing fast there turns a pile-up into a
+        # handful of retryable errors instead of a pool exhausted by waiters.
+        #
+        # Both reach the server as `ConcurrentUpdateError` (`db/errors.py` maps
+        # psycopg's `QueryCanceled`), which §8.6 already declares retryable — that
+        # branch existed and was unreachable until now.
+        #
+        # Migrations are unaffected: `migrations/env.py` builds its own engine, and a
+        # DDL statement that legitimately runs longer than this must not be cut off.
+        connect_args={"options": "-c timezone=utc -c statement_timeout=5000 -c lock_timeout=2000"},
     )
 
     @event.listens_for(engine, "connect")

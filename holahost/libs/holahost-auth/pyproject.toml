@@ -12,6 +12,10 @@ packages = [{ include = "holahost_auth" }]
 python = ">=3.12,<4.0"
 pyjwt = { extras = ["crypto"], version = "^2.13" }
 fastapi = "^0.115"
+# For the shared error/rejection contract only (RejectionLogger). The dependency
+# runs http -> auth and never back: holahost-http knows nothing about tokens, and
+# describes the caller it rate-limits by a structural protocol instead.
+holahost-http = { path = "../holahost-http", develop = true }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
@@ -49,6 +53,14 @@ modules = [
     "holahost_auth.context",
     "holahost_auth.exceptions",
 ]
+
+[[tool.importlinter.contracts]]
+# The FastAPI dependency reads what the middleware stored; the middleware must never
+# reach back for it. One validation path, and this is what keeps it that way.
+name = "Validation flows middleware -> dependency, never back"
+type = "forbidden"
+source_modules = ["holahost_auth.middleware"]
+forbidden_modules = ["holahost_auth.dependency"]
 
 [build-system]
 requires = ["poetry-core>=2.0"]

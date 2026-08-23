@@ -2,13 +2,24 @@
 # ssm-migrate-deploy action embeds docker-compose.yml alone). Applied by the Makefile's dev
 # targets as a second `-f`, which is the only place it is ever referenced.
 #
-# It exists for one key: publishing the app port to the host. Dev has no platform gateway in
+# It exists for two keys.
+#
+# First, publishing the app port to the host. Dev has no platform gateway in
 # front of the stack (docker-compose.yml's header: "no gateway, X-Request-ID is the caller's
 # job"), so the port has to be reachable directly for `curl localhost:8080/...` to work at all —
 # while on staging/prod that same key would be an unguarded way past the gateway. Keeping it here
 # rather than in the shared file makes "published only in dev" structural instead of dependent on
 # every environment's .env remembering not to set HOST_PORT.
+#
+# Second, undoing the `awslogs` driver. Dev has no AWS credentials and no log group, and
+# the driver is not best-effort: Docker refuses to start a container it cannot attach to,
+# so leaving it on would break `make dev-up` outright rather than degrade. `json-file` is
+# Docker's own default, restated explicitly so `docker logs` and `make dev-logs` keep
+# working — and stated here rather than by leaving the shared file undecided, because on
+# staging/prod the driver has to be on by default, not by an .env remembering to set it.
 services:
   api:
     ports:
       - "${HOST_PORT:-8080}:8080"
+    logging:
+      driver: json-file

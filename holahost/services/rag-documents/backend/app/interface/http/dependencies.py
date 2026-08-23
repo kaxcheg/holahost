@@ -9,18 +9,16 @@ shared instance *within* one request's resolution graph, which is what lets a ro
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import lru_cache
 from typing import Annotated, cast
 
-from fastapi import Depends, Header, Request
-from holahost_auth import AuthConfig, HolahostAuth, TokenContext
+from fastapi import Depends
+from holahost_auth import AuthConfig
+from holahost_http import InMemoryRateLimiter, RateLimiter
 from sqlalchemy import Engine
 
-from application.exceptions import InvalidPayloadError
 from application.ports.embedding import EmbeddingModel
 from application.ports.ingestion import FileParser, TextChunker
-from application.ports.rate import RateLimiter
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.ports.vector import VectorSearchFactory
@@ -30,10 +28,8 @@ from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork, buil
 from infrastructure.embedding.fastembed_embedding_model import FastembedEmbeddingModel
 from infrastructure.ingestion.composite_file_parser import CompositeFileParser
 from infrastructure.ingestion.recursive_text_chunker import RecursiveTextChunker
-from infrastructure.rate.in_memory_rate_limiter import InMemoryRateLimiter
 from infrastructure.vector.pgvector_search import PgvectorSearch
-
-_RATE_LIMIT_WINDOW_SECONDS = 3600  # RATE_LIMIT_DEFAULT/RATE_LIMIT_INGEST are req/hour (§3.7)
+from interface.http.edge import INGEST_BUCKET, RATE_LIMIT_WINDOW_SECONDS, READ_BUCKET
 
 
 @lru_cache
@@ -90,81 +86,37 @@ def get_chunker() -> TextChunker:
 
 @lru_cache
 def get_rate_limiter() -> RateLimiter:
+    """Process-wide counters (§8.1 step 3), consulted by `RateLimitMiddleware`.
+
+    Keyed by `(bucket, is_service)` — the ceiling depends both on what the operation
+    costs and on what the counter counts. `True` is a service token, whose `sub` is its
+    own `client_id`, so one counter covers that whole integration; `False` is an
+    exchanged token carrying a real user's `sub`, so the counter is per user.
+    """
     settings = get_settings()
     return InMemoryRateLimiter(
-        cap_by_bucket={"ingest": settings.rate_limit_ingest, "read": settings.rate_limit_default},
-        window_seconds=_RATE_LIMIT_WINDOW_SECONDS,
+        cap_by_bucket={
+            (INGEST_BUCKET, False): settings.rate_limit_user_ingest,
+            (READ_BUCKET, False): settings.rate_limit_user_read,
+            (INGEST_BUCKET, True): settings.rate_limit_service_ingest,
+            (READ_BUCKET, True): settings.rate_limit_service_read,
+        },
+        window_seconds=RATE_LIMIT_WINDOW_SECONDS,
     )
 
 
-@lru_cache
-def get_auth() -> HolahostAuth:
+def get_auth_config() -> AuthConfig:
+    """Validation config for `HolahostAuthMiddleware`.
+
+    Read once by `create_app()` when it builds the middleware stack, not per request:
+    middleware is constructed at app-build time, so there is no `Depends()` graph to
+    resolve it through and nothing to cache.
+    """
     settings = get_settings()
-    return HolahostAuth(
-        AuthConfig(
-            jwks_url=settings.jwks_url,
-            expected_algorithm=settings.expected_algorithm,
-            expected_issuer=settings.expected_issuer,
-            expected_audience=settings.expected_audience,
-            clock_skew_seconds=settings.jwt_clock_skew_seconds,
-        )
+    return AuthConfig(
+        jwks_url=settings.jwks_url,
+        expected_algorithm=settings.expected_algorithm,
+        expected_issuer=settings.expected_issuer,
+        expected_audience=settings.expected_audience,
+        clock_skew_seconds=settings.jwt_clock_skew_seconds,
     )
-
-
-def require_request_id(request: Request) -> None:
-    """`X-Request-ID` is a contract requirement, not an optional courtesy header
-    (§3.1: both real entry paths — nginx on staging/prod, the CLI orchestrator on
-    dev — unconditionally attach it before a request ever reaches this service).
-    Its absence means a caller is misconfigured or bypassing the intended path, and
-    silently proceeding would defeat the whole point of introducing it (end-to-end
-    traceability, US-R11) with no distinct signal that it happened. `request.state`
-    is already populated by `RequestIdMiddleware`, which runs for every request
-    (including `/health`) before any `Depends()` resolves — this dependency is what
-    turns "absent" into a rejection, scoped only to the routes that need it (`/health`
-    is deliberately never wired to this dependency).
-
-    :raises InvalidPayloadError: `X-Request-ID` header is missing.
-    """
-    if request.state.request_id is None:
-        raise InvalidPayloadError(field="X-Request-ID")
-
-
-def get_current_token(
-    request: Request,
-    _request_id: Annotated[None, Depends(require_request_id)],
-    auth: Annotated[HolahostAuth, Depends(get_auth)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> TokenContext:
-    """FastAPI dependency wrapping the singleton `HolahostAuth` instance.
-
-    Depends on `require_request_id` first — every route needing auth also needs a
-    valid `X-Request-ID`, and chaining it here (rather than listing both separately
-    on each route) guarantees the request-id check runs before auth, the same way
-    auth is guaranteed to run before body validation.
-
-    Receives `auth` via `Depends(get_auth)` — not a bare `get_auth()` call — so
-    `app.dependency_overrides[get_auth]` actually takes effect here too (a plain
-    in-body function call bypasses FastAPI's override mechanism entirely; only
-    `Depends()`-injected parameters are interceptable). Tests overriding this whole
-    function directly (the common case — a fixed `TokenContext`) still never resolve
-    `get_auth()`'s settings/JWKS chain either way. Stashes the token on `request.state`
-    so `errors.py`'s failure logging can report `client_id`/`sub` for failures that
-    occur *after* auth succeeds (e.g. rate limiting).
-    """
-    token = auth(authorization)
-    request.state.token = token
-    return token
-
-
-def _rate_limit_dependency(bucket: str) -> Callable[[TokenContext, RateLimiter], None]:
-    def check(
-        token: Annotated[TokenContext, Depends(get_current_token)],
-        limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
-    ) -> None:
-        limiter.check(client_id=token.client_id, subject=token.subject, bucket=bucket)
-
-    return check
-
-
-check_ingest = _rate_limit_dependency("ingest")  # create, replace
-check_read = _rate_limit_dependency("read")  # search, get, delete

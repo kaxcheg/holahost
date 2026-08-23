@@ -27,7 +27,7 @@ inputs:
     description: Target ECR repository URL (no tag).
     required: true
   sha-tag:
-    description: e.g. git-<short-sha>.
+    description: e.g. git-<sha> (full 40-char commit sha — see the callers).
     required: true
   aws-region:
     required: true
