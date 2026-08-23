@@ -33,7 +33,7 @@
 #
 # Percentile/ratio alarms use var.ingest_metric_period_seconds/search_metric_period_seconds (1h/
 # 15m defaults), not a flat 300s: a "p95" computed from 1-2 samples isn't a percentile, just noise
-# — RATE_LIMIT_INGEST (60/hr/client) vs RATE_LIMIT_DEFAULT for search (600/hr/client) signals
+# — RATE_LIMIT_*_INGEST (60/hr) vs RATE_LIMIT_*_READ for search (600/hr) signals
 # ingest is structurally ~10x rarer, and real volume at this early stage is likely well below even
 # those ceilings. `datapoints_to_alarm` (M of N, not strictly consecutive) tolerates one sparse/
 # missing window rather than resetting on any gap.

@@ -62,6 +62,13 @@ test-int: ## integration tests (testcontainers; needs Docker)
 lint-imports: ## clean-architecture import contract
 	cd $(BE) && poetry run lint-imports
 
+.PHONY: openapi openapi-check
+openapi: ## regenerate docs/openapi.json from the code
+	cd $(BE) && poetry run python -m scripts.dump_openapi
+
+openapi-check: ## fail if docs/openapi.json is stale (CI parity)
+	cd $(BE) && poetry run python -m scripts.dump_openapi --check
+
 # Explicit `docker build`, not `docker compose up --build`: docker-compose.yml has no `build:`
 # section (see its own header comment) — this is now the *only* place anything gets built for
 # dev, same shape as CI's own `build-push-image` action (`-f`/context/`--build-arg` all mirror

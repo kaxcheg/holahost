@@ -15,6 +15,13 @@ on:
   push:
     branches: ["feature/**", "bugfix/**", "refactor/**", "chore/**", "docs/**", "test/**"]
 
+permissions:
+  contents: read
+  # For the OIDC token the `terraform plan` steps exchange for the read-only AWS role. Every
+  # other step needs nothing beyond `contents: read`, so the grant stays at the minimum that
+  # lets the one step that needs it work.
+  id-token: write
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -30,7 +37,7 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
-          if git diff --name-only "$base" HEAD | grep -qE '^holahost/(services/rag-documents|libs/holahost-auth)/'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^holahost/(services/rag-documents|libs/holahost-(auth|http))/'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -57,18 +64,31 @@ jobs:
         working-directory: holahost/services/rag-documents/backend
         run: poetry install
 
+      # holahost-http first: holahost-auth has a path dependency on it, so installing auth
+      # into a tree where http is absent resolves nothing.
+      - name: Install dependencies (holahost-http)
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/libs/holahost-http
+        run: poetry install
+
       - name: Install dependencies (holahost-auth)
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/libs/holahost-auth
         run: poetry install
 
-      - name: Pre-commit (this service's + holahost-auth's changed files)
+      - name: Library unit tests (holahost-http, holahost-auth)
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          (cd holahost/libs/holahost-http && poetry run pytest -q)
+          (cd holahost/libs/holahost-auth && poetry run pytest -q)
+
+      - name: Pre-commit (this service's + the shared libraries' changed files)
         if: steps.filter.outputs.changed == 'true'
         run: |
           pip install pre-commit
           base="${{ github.event.pull_request.base.sha || github.event.before }}"
           git cat-file -e "$base" 2>/dev/null || base="$(git rev-list --max-parents=0 HEAD)"
-          pre-commit run --files $(git diff --name-only "$base" HEAD -- holahost/services/rag-documents holahost/libs/holahost-auth)
+          pre-commit run --files $(git diff --name-only "$base" HEAD -- holahost/services/rag-documents holahost/libs)
 
       - name: Unit tests
         if: steps.filter.outputs.changed == 'true'
@@ -80,6 +100,15 @@ jobs:
         working-directory: holahost/services/rag-documents/backend
         run: poetry run pytest -m integration
 
+      # The published contract, checked like any other generated artifact. Regenerating and
+      # diffing (rather than trusting the committed file) is what makes it a check at all: a
+      # renamed route or a field that quietly became optional is a change to what callers
+      # integrate against, and without this it reaches them as a surprise instead of a diff.
+      - name: OpenAPI schema is current
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/services/rag-documents
+        run: make openapi-check
+
       - name: Docker build (no push)
         if: steps.filter.outputs.changed == 'true'
         run: |
@@ -88,14 +117,34 @@ jobs:
             --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
             -t rag-documents:ci .
 
+      # §12's size budget, checked where it can still be acted on. The image carries an
+      # embedding model's runtime plus its dependencies, and nothing else warns when a
+      # transitive dependency, a stray cache directory, or the model weights themselves
+      # start riding along — a `.dockerignore` gap shipped `.import_linter_cache` into the
+      # image once already, and only a by-hand `docker run ls` caught it. The ceiling is
+      # deliberately loose: it is a tripwire against an order-of-magnitude drift, not a
+      # budget to optimise against.
+      - name: Image size budget
+        if: steps.filter.outputs.changed == 'true'
+        env:
+          MAX_IMAGE_MB: 900
+        run: |
+          set -euo pipefail
+          size_mb=$(( $(docker image inspect rag-documents:ci --format '{{.Size}}') / 1000000 ))
+          echo "rag-documents:ci is ${size_mb} MB (ceiling ${MAX_IMAGE_MB} MB)"
+          if [ "$size_mb" -gt "$MAX_IMAGE_MB" ]; then
+            echo "::error::image grew past the §12 budget — check .dockerignore and new dependencies"
+            exit 1
+          fi
+
       - uses: hashicorp/setup-terraform@v3
         if: steps.filter.outputs.changed == 'true'
 
-      # `validate` only, not a real `terraform plan`: a real plan needs read access to the
-      # platform's S3 state backend + provider APIs, i.e. its own read-only AWS OIDC role — which,
-      # like the deploy/promote roles, depends on the platform AWS account that doesn't exist yet
-      # (see .build-state/.../clarifications.md scope-boundary note). Upgrade to a real
-      # `terraform plan` once that role exists; `validate` is what's honestly achievable today.
+      # `validate` is the baseline that always runs: it needs no credentials and no state, so it
+      # works on a fork PR and on a machine with no AWS at all. It cannot see drift, though —
+      # it never reads state, so a resource changed by hand in the console passes it untouched,
+      # and the frame spec calls that an incident rather than a nuisance. `terraform plan` below
+      # is what catches it; the two are a pair, not alternatives.
       - name: Terraform validate (common)
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/services/rag-documents/infra/common
@@ -110,3 +159,48 @@ jobs:
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/services/rag-documents/infra/envs/prod
         run: terraform init -backend=false && terraform validate
+
+      # A real plan reads the S3 state backend and calls the provider APIs, so it needs
+      # credentials — a read-only OIDC role of its own, never the deploy roles: a pull request,
+      # including one from a fork, must not be able to reach a role that can change anything.
+      #
+      # Two conditions gate it, and both are needed for different reasons:
+      #
+      #   vars.AWS_ACCOUNT_ID != ''    the platform AWS account and this role do not exist yet
+      #                                (same dependency the placeholder ARNs in deploy-staging/
+      #                                promote-prod carry). Setting the repository variable is
+      #                                what turns these steps on — no workflow edit needed.
+      #   ...fork != true              a fork PR gets no secrets and no OIDC token by GitHub's
+      #                                own design, so the step could only fail. It is skipped,
+      #                                and a skipped step reports success — which is what the
+      #                                frame spec requires of a filtered job, rather than a
+      #                                required check stuck red on every outside contribution.
+      #
+      # `plan` exits 0 whether or not there is a diff; drift shows up as a non-empty plan in the
+      # log, which is the point. `-lock=false` because reading state for a plan should never
+      # block a concurrent apply.
+      - name: Configure AWS credentials (read-only, for plan)
+        id: aws
+        if: >-
+          steps.filter.outputs.changed == 'true'
+          && vars.AWS_ACCOUNT_ID != ''
+          && github.event.pull_request.head.repo.fork != true
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-actions-rag-documents-plan
+
+      - name: Terraform plan (common)
+        if: steps.aws.outcome == 'success'
+        working-directory: holahost/services/rag-documents/infra/common
+        run: terraform init && terraform plan -lock=false -input=false
+
+      - name: Terraform plan (envs/staging)
+        if: steps.aws.outcome == 'success'
+        working-directory: holahost/services/rag-documents/infra/envs/staging
+        run: terraform init && terraform plan -lock=false -input=false
+
+      - name: Terraform plan (envs/prod)
+        if: steps.aws.outcome == 'success'
+        working-directory: holahost/services/rag-documents/infra/envs/prod
+        run: terraform init && terraform plan -lock=false -input=false

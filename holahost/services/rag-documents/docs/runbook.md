@@ -226,6 +226,27 @@ for irreversible migrations.
 
 ---
 
+## Prerequisite outside this service's terraform
+
+The `api` container logs through Docker's `awslogs` driver straight into
+`/holahost/<env>/rag-documents` (docker-compose.yml). That needs **`logs:CreateLogStream`
+and `logs:PutLogEvents` on the instance role**, and this service's terraform cannot grant
+it: `infra/envs/<env>` owns the log group, the metric filters and the alarms, `infra/common`
+owns ECR — no compute, no instance profile, no IAM role. Those are platform-level, same as
+the `github-actions-rag-documents-*` roles both pipelines assume.
+
+Until the permission exists the container **will not start** on staging or prod: Docker
+refuses to run a container whose log driver cannot attach. That is the intended failure —
+loud at deploy time, rather than a service that runs while its whole observability stack
+(ten metric filters, four alarms, the dashboard) sits on a log group receiving nothing and
+reads as healthy, since `treat_missing_data = "notBreaching"` cannot tell silence from calm.
+
+Symptom if it is missing: `docker compose up -d` fails on the instance with a
+`ResourceNotFoundException` or `AccessDeniedException` from the driver, visible in the SSM
+command output the deploy step already surfaces.
+
+---
+
 ## Access
 
 Staging/prod: GitHub OIDC (no long-lived AWS keys) — `deploy-staging`/`promote-prod` assume
