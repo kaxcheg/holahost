@@ -723,13 +723,30 @@ squash. Head-ветки удаляются автоматически. PR-шаб
 | Сущность | Где живёт | Статус |
 |---|---|---|
 | `holahost-auth` — мидлварь оффлайн-валидации JWT (подпись, claims, кэш JWKS, дисциплина 401/403) | `holahost/libs/holahost-auth/` | разрабатывается в объёме спеки `rag-documents` |
-| `holahost-errors` — envelope `{error:{code,message,details}}`, базовые классы ошибок, обработчик для FastAPI | `holahost/libs/holahost-errors/` | плейсхолдер |
-| `holahost-observability` — structured JSON logging, allowlist полей, сквозной `X-Request-ID` | `holahost/libs/holahost-observability/` | плейсхолдер |
-| `holahost-ratelimit` — in-memory limiter по `client_id`+`sub`, ответ 429 + `Retry-After` | `holahost/libs/holahost-ratelimit/` | плейсхолдер |
+| `holahost-http` — HTTP-край сервиса: envelope `{error:{code,message,details}}` и базовый класс ошибок, мидлварь `X-Request-ID` (чтение, эхо и требование заголовка), ограничителя тела и рейт-лимита, порт `RateLimiter` с in-memory реализацией | `holahost/libs/holahost-http/` | разрабатывается в объёме спеки `rag-documents`; поглощает `holahost-errors` и `holahost-ratelimit` |
+| ~~`holahost-errors`~~ — вошла в `holahost-http` | — | снята |
+| ~~`holahost-ratelimit`~~ — вошла в `holahost-http` | — | снята |
+| `holahost-observability` — structured JSON logging, allowlist полей | `holahost/libs/holahost-observability/` | плейсхолдер; часть про сквозной `X-Request-ID` ушла в `holahost-http` |
 | Шаблон сервиса: дерево каталогов clean-arch, `Dockerfile`, `docker-compose.yml`, `.env.dev.example`, `alembic.ini` | `holahost/templates/service/` | плейсхолдер |
 | Базовый `pyproject.toml`: `ruff` (target `py312`, набор правил), `mypy` strict, контракт `import-linter` (`layers = ["interface","infrastructure","application","domain"]`), `pytest` | часть шаблона сервиса | плейсхолдер |
 | Общие make-цели (`lint`, `format`, `typecheck`, `lint-imports`, `test`, `ci-local`, `dev-up`, `migrate`) | `holahost/make/common.mk`, подключается `include` из `Makefile` сервиса | плейсхолдер |
 | Общие composite-actions CI (setup toolchain, build & push образа, smoke) | `holahost/.github/actions/` | плейсхолдер |
+
+Три строки выше слились в одну намеренно. `holahost-errors` и `holahost-ratelimit` порознь не
+живут: лимитер отвечает отказ тем же конвертом, что и остальные мидлвари, а сами мидлвари — это
+одна и та же вещь (обработка запроса *до* роутинга), просто с разными проверками. Три poetry-проекта
+с тремя lock-файлами, тремя venv и тремя ветками pre-commit ради ~400 строк с общей зависимостью —
+накладные расходы больше содержимого. `holahost-observability` при этом остаётся живым
+плейсхолдером: её основная часть — настройка JSON-логгера и allowlist полей — к HTTP-краю отношения
+не имеет и пока лежит в самом сервисе. В `holahost-http` уехала только пропаганда `X-Request-ID`,
+потому что это ASGI-мидлварь, а не логгер.
+
+Почему у этих проверок вообще есть отдельная библиотека, а не по копии в сервисе: фреймворк
+разбирает тело запроса, когда собирает аргументы обработчика, — то есть **до** того, как начнёт
+резолвить его зависимости. Проверка, написанная как `Depends`, срабатывает уже после того, как
+загрузка принята целиком. Замерено на `rag-documents`: `POST` на 50 МиБ без заголовка `Authorization`
+принимался до последнего байта и только потом получал `401`. Изнутри роутов это не чинится ничем;
+проверки обязаны стоять снаружи роутинга, а там они у всех сервисов одинаковые.
 
 Репо-уровневые артефакты — общие для всех сервисов и уже существуют в корне репозитория:
 `.tool-versions` (версии тулчейна), `.pre-commit-config.yaml` (единый набор хуков, дублируется в CI),

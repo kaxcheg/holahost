@@ -64,8 +64,9 @@ def test_health_is_public_and_ok(client: TestClient) -> None:
 def test_missing_request_id_returns_422_against_the_real_app(
     client: TestClient, make_token: Callable[..., str]
 ) -> None:
-    # Fakes in test_router.py can prove the dependency wiring in isolation; this
-    # proves the real app, with real auth resolved, actually enforces it too.
+    # test_edge.py proves the rule against a stubbed stack; this proves the real app,
+    # with real auth resolved, enforces it too — and enforces it *before* auth: the token
+    # below is valid, so a 422 here can only have come from the request-id check.
     token = make_token(sub="user-123", client_id="cli-1")
 
     response = client.get(
@@ -76,7 +77,10 @@ def test_missing_request_id_returns_422_against_the_real_app(
     assert response.status_code == 422
     body = response.json()
     assert body["error"]["code"] == "ERR_INVALID_PAYLOAD"
-    assert body["error"]["details"] == {"field": "X-Request-ID"}
+    # Mute: the one ERR_INVALID_PAYLOAD answered before authentication, so it names
+    # nothing a caller could use to get past the check. The cause goes to the log.
+    assert body["error"]["details"] == {}
+    assert "X-Request-ID" not in response.text
 
 
 def test_missing_token_returns_401_against_the_real_app(client: TestClient) -> None:

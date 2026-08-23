@@ -28,9 +28,11 @@ WORKDIR /app
 COPY .tool-versions ./
 RUN pip install --no-cache-dir "poetry==$(awk '$1=="poetry"{print $2}' .tool-versions)" \
  && poetry config virtualenvs.in-project true
-# Copied at the SAME nested depth as on disk (../../../libs/holahost-auth is relative to
-# backend/pyproject.toml's own location) so the Poetry path dependency resolves inside the image.
-COPY holahost/libs/holahost-auth/ /app/holahost/libs/holahost-auth/
+# Copied at the SAME nested depth as on disk (../../../libs/holahost-* is relative to
+# backend/pyproject.toml's own location) so the Poetry path dependencies resolve inside the
+# image. Both libraries, and holahost-auth's own path dependency on holahost-http means the
+# latter has to be here even for the former to install.
+COPY holahost/libs/ /app/holahost/libs/
 COPY holahost/services/rag-documents/backend/pyproject.toml holahost/services/rag-documents/backend/poetry.lock \
      /app/holahost/services/rag-documents/backend/
 WORKDIR /app/holahost/services/rag-documents/backend
@@ -43,12 +45,12 @@ ENV PYTHONPATH=/app \
 WORKDIR /app
 COPY --from=builder /app/holahost/services/rag-documents/backend/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
-# holahost-auth is a Poetry `develop = true` path dependency: it's installed editable, so
-# site-packages/holahost_auth.pth points at the literal builder-stage path
-# (/app/holahost/libs/holahost-auth, same root as this stage — see the builder stage's own
-# comment above) instead of vendoring the module — that path must exist here too, at the exact
-# same location, or the import fails at runtime.
-COPY holahost/libs/holahost-auth/ /app/holahost/libs/holahost-auth/
+# Both libs are Poetry `develop = true` path dependencies: installed editable, so
+# site-packages/holahost_{auth,http}.pth point at the literal builder-stage paths
+# (/app/holahost/libs/..., same root as this stage — see the builder stage's own comment
+# above) instead of vendoring the modules — those paths must exist here too, at the exact
+# same locations, or the imports fail at runtime.
+COPY holahost/libs/ /app/holahost/libs/
 COPY holahost/services/rag-documents/backend/app/ /app/
 COPY holahost/services/rag-documents/backend/migrations/ /app/migrations/
 COPY holahost/services/rag-documents/backend/alembic.ini /app/alembic.ini

@@ -1285,11 +1285,29 @@ develop = true
 
 [package.dependencies]
 fastapi = "^0.115"
+holahost-http = {path = "../holahost-http", develop = true}
 pyjwt = {version = "^2.13", extras = ["crypto"]}
 
 [package.source]
 type = "directory"
 url = "../../../libs/holahost-auth"
+
+[[package]]
+name = "holahost-http"
+version = "0.1.0"
+description = "Shared HTTP edge for Holahost services: error envelope and pre-routing middleware."
+optional = false
+python-versions = ">=3.12,<4.0"
+groups = ["main"]
+files = []
+develop = true
+
+[package.dependencies]
+starlette = ">=0.40,<1.0"
+
+[package.source]
+type = "directory"
+url = "../../../libs/holahost-http"
 
 [[package]]
 name = "httpcore"
@@ -4613,4 +4631,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "822b00ad029ffeb546fbbeb9bc1b4ecb040846b8af9a429b8f9dfd6c03a961f5"
+content-hash = "0f4994c132851da119e5d86094611b236e5505a139ade9d51a98d6fade1058f4"

@@ -141,9 +141,10 @@ class Settings(AppRoleSettings):
     `expected_*` fields were added by R-20/R-24 for `holahost-auth` wiring. Deliberately
     does *not* carry `ALLOWED_MIME_TYPES`/`MAX_UPLOAD_SIZE`: those stay domain/
     application-owned constants (`domain.value_objects.mime_type.ALLOWED_MIME_TYPES`,
-    `application.limits.MAX_UPLOAD_SIZE`) — the interface layer never needs its own
-    copy of either, matching the project's "co-located with the adapter that reads it"
-    convention.
+    `application.limits.MAX_UPLOAD_SIZE`), matching the project's "co-located with the
+    adapter that reads it" convention. The interface layer derives its own transport cap
+    from the latter (`interface.http.app.MAX_REQUEST_BODY_SIZE`) but never re-declares
+    the number.
     """
 
     env: Literal["dev", "staging", "prod"]
@@ -154,8 +155,16 @@ class Settings(AppRoleSettings):
     search_top_k: int = Field(gt=0)
     similarity_threshold: float = Field(ge=-1.0, le=1.0)
     max_query_length: int = Field(gt=0)
-    rate_limit_default: int = Field(gt=0)
-    rate_limit_ingest: int = Field(gt=0)
+    # Two dimensions, four ceilings (§3.7). The bucket says how expensive the operation
+    # is; the identity kind says what the ceiling is a ceiling *on*. A service token's
+    # `sub` equals its `client_id`, so its counter is one aggregate for the whole calling
+    # service; an exchanged token carries a real user's `sub`, so its counter is per user
+    # of that client. One number for both would either starve a busy integration or hand
+    # every one of its users the whole integration's allowance.
+    rate_limit_user_ingest: int = Field(gt=0)
+    rate_limit_user_read: int = Field(gt=0)
+    rate_limit_service_ingest: int = Field(gt=0)
+    rate_limit_service_read: int = Field(gt=0)
     jwt_clock_skew_seconds: int = Field(ge=0)
     jwks_url: str = Field(min_length=1)
     expected_algorithm: str = Field(min_length=1)

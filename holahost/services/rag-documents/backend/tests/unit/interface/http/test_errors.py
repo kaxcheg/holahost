@@ -1,13 +1,16 @@
-"""Unit tests for the exception -> HTTP envelope handler (ticket R-22, spec §7.6/§8.6)."""
+"""Unit tests for the exception -> HTTP envelope handler (ticket R-22, spec §7.6/§8.6).
+
+Covers what routes raise. Rate limiting, body size and the request-id requirement are
+refused before routing now and never reach these handlers — see `test_middleware.py`.
+"""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from holahost_http import RequestIdMiddleware
 from pydantic import BaseModel
 
 from application.exceptions import NotFoundError, TooManyChunksError, UploadTooLargeError
-from application.ports.rate import RateLimitExceededError
 from interface.http.errors import register_error_handlers
-from interface.http.middleware import RequestIdMiddleware
 
 
 class _Body(BaseModel):
@@ -30,10 +33,6 @@ def _build_app() -> FastAPI:
     @app.get("/not-found")
     def not_found() -> None:
         raise NotFoundError
-
-    @app.get("/rate-limited")
-    def rate_limited() -> None:
-        raise RateLimitExceededError(retry_after=30)
 
     @app.post("/validated")
     def validated(body: _Body) -> None:
@@ -76,17 +75,6 @@ class TestApplicationErrorMapping:
             "message": "document not found",
             "details": {},
         }
-
-
-class TestRateLimitMapping:
-    def test_maps_to_429_with_retry_after_header(self) -> None:
-        client = TestClient(_build_app(), raise_server_exceptions=False)
-
-        response = client.get("/rate-limited")
-
-        assert response.status_code == 429
-        assert response.headers["Retry-After"] == "30"
-        assert response.json()["error"]["details"] == {"retry_after_seconds": 30}
 
 
 class TestValidationErrorMapping:

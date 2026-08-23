@@ -7,7 +7,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from holahost_auth import TokenContext
+from holahost_auth import TokenContext, current_token
 
 from application.dto.documents import (
     CreateDocumentCmd,
@@ -28,10 +28,7 @@ from application.use_cases.replace_document import ReplaceDocumentUseCase
 from application.use_cases.search_document import SearchDocumentUseCase
 from config.logging import log_event
 from interface.http.dependencies import (
-    check_ingest,
-    check_read,
     get_chunker,
-    get_current_token,
     get_documents_repo_factory,
     get_embedding_model,
     get_parser,
@@ -80,8 +77,7 @@ def create_document(
     request: Request,
     file: Annotated[UploadFile, File()],
     name: Annotated[str, Form()],
-    token: Annotated[TokenContext, Depends(get_current_token)],
-    _rate: Annotated[None, Depends(check_ingest)],
+    token: Annotated[TokenContext, Depends(current_token)],
     documents_repo_factory: Annotated[DocumentsRepoFactory, Depends(get_documents_repo_factory)],
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     parser: Annotated[FileParser, Depends(get_parser)],
@@ -109,8 +105,7 @@ def replace_document(
     request: Request,
     document_id: uuid.UUID,
     file: Annotated[UploadFile, File()],
-    token: Annotated[TokenContext, Depends(get_current_token)],
-    _rate: Annotated[None, Depends(check_ingest)],
+    token: Annotated[TokenContext, Depends(current_token)],
     documents_repo_factory: Annotated[DocumentsRepoFactory, Depends(get_documents_repo_factory)],
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     parser: Annotated[FileParser, Depends(get_parser)],
@@ -145,8 +140,7 @@ def search_document(
     request: Request,
     document_id: uuid.UUID,
     body: SearchRequest,
-    token: Annotated[TokenContext, Depends(get_current_token)],
-    _rate: Annotated[None, Depends(check_read)],
+    token: Annotated[TokenContext, Depends(current_token)],
     documents_repo_factory: Annotated[DocumentsRepoFactory, Depends(get_documents_repo_factory)],
     vector_search_factory: Annotated[VectorSearchFactory, Depends(get_vector_search_factory)],
     embedder: Annotated[EmbeddingModel, Depends(get_embedding_model)],
@@ -170,8 +164,7 @@ def search_document(
 def get_document(
     request: Request,
     document_id: uuid.UUID,
-    token: Annotated[TokenContext, Depends(get_current_token)],
-    _rate: Annotated[None, Depends(check_read)],
+    token: Annotated[TokenContext, Depends(current_token)],
     documents_repo_factory: Annotated[DocumentsRepoFactory, Depends(get_documents_repo_factory)],
     uow: Annotated[UnitOfWork, Depends(get_uow)],
 ) -> DocumentResponse:
@@ -185,8 +178,7 @@ def get_document(
 def delete_document(
     request: Request,
     document_id: uuid.UUID,
-    token: Annotated[TokenContext, Depends(get_current_token)],
-    _rate: Annotated[None, Depends(check_read)],
+    token: Annotated[TokenContext, Depends(current_token)],
     documents_repo_factory: Annotated[DocumentsRepoFactory, Depends(get_documents_repo_factory)],
     uow: Annotated[UnitOfWork, Depends(get_uow)],
 ) -> None:

@@ -3,17 +3,27 @@
 Type-based dispatch (not `code`-based): `_STATUS_BY_TYPE` is keyed by exact exception
 type, which is what correctly separates `UploadTooLargeError` (413) from
 `ParsedTextTooLargeError` (422) despite sharing the wire code `ERR_PAYLOAD_TOO_LARGE`.
+
+Covers what is raised from inside a route. The three checks that run *before* routing —
+request id, body size, rate limit (§8.1 steps 1-3) — answer for themselves and are not
+represented here: FastAPI binds these handlers to Starlette's `ExceptionMiddleware`,
+which sits inside the middleware stack, so an exception raised in middleware flies past
+every one of them and lands on the 500 handler instead. Their status, envelope and log
+line live with the middleware that produces them (`interface/http/edge.py` and
+`holahost-http`). Authentication is the same story, in `holahost-auth`.
+
+The envelope itself comes from `holahost-http`, so every service returns the same shape;
+which codes exist and which status each maps to stays here, where §7.6 lives.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from holahost_auth import AuthenticationError, JwksUnavailableError
+from holahost_http import error_envelope
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from application.exceptions import (
@@ -27,7 +37,6 @@ from application.exceptions import (
     UnsupportedMediaTypeError,
     UploadTooLargeError,
 )
-from application.ports.rate import RateLimitExceededError
 from config.logging import log_event
 
 _STATUS_BY_TYPE: dict[type[ApplicationError], int] = {
@@ -40,10 +49,6 @@ _STATUS_BY_TYPE: dict[type[ApplicationError], int] = {
     TooManyChunksError: 422,
     NotFoundError: 404,
 }
-
-
-def _envelope(code: str, message: str, details: Mapping[str, object]) -> dict[str, object]:
-    return {"error": {"code": code, "message": message, "details": dict(details)}}
 
 
 def _duration_ms(request: Request) -> float:
@@ -84,18 +89,7 @@ def register_error_handlers(app: FastAPI) -> None:
         status = _STATUS_BY_TYPE.get(type(exc), 500)
         _log_failure(request, outcome=exc.code)
         return JSONResponse(
-            status_code=status, content=_envelope(exc.code, str(exc), exc.details_dict())
-        )
-
-    @app.exception_handler(RateLimitExceededError)
-    def handle_rate_limit(request: Request, exc: RateLimitExceededError) -> JSONResponse:
-        _log_failure(request, outcome=exc.code)
-        return JSONResponse(
-            status_code=429,
-            headers={"Retry-After": str(exc.retry_after)},
-            content=_envelope(
-                exc.code, "rate limit exceeded", {"retry_after_seconds": exc.retry_after}
-            ),
+            status_code=status, content=error_envelope(exc.code, str(exc), exc.details_dict())
         )
 
     @app.exception_handler(RequestValidationError)
@@ -109,24 +103,10 @@ def register_error_handlers(app: FastAPI) -> None:
         _log_failure(request, outcome="ERR_INVALID_PAYLOAD")
         return JSONResponse(
             status_code=422,
-            content=_envelope("ERR_INVALID_PAYLOAD", "invalid request payload", {"field": field}),
+            content=error_envelope(
+                "ERR_INVALID_PAYLOAD", "invalid request payload", {"field": field}
+            ),
         )
-
-    @app.exception_handler(AuthenticationError)
-    def handle_authentication_error(request: Request, exc: AuthenticationError) -> JSONResponse:
-        # holahost-auth raises this directly (not fastapi.HTTPException) — mapping
-        # it to a status/response shape is this service's own call (see the
-        # library's own README "Errors" section). No envelope, no reason disclosed
-        # in the body (US-R07); exc.reason is logged server-side only.
-        _log_failure(request, outcome="401", error_code="401", error_message_sanitized=exc.reason)
-        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-
-    @app.exception_handler(JwksUnavailableError)
-    def handle_jwks_unavailable(request: Request, exc: JwksUnavailableError) -> JSONResponse:
-        # An infra incident (JWKS endpoint down/malformed) must not look like
-        # "invalid credentials" to the caller — 503, not 401.
-        _log_failure(request, outcome="503", error_code="503", error_message_sanitized=exc.reason)
-        return JSONResponse(status_code=503, content={"detail": "Service Unavailable"})
 
     @app.exception_handler(StarletteHTTPException)
     def handle_http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -158,6 +138,6 @@ def register_error_handlers(app: FastAPI) -> None:
         headers = {"X-Request-ID": request_id} if request_id is not None else None
         return JSONResponse(
             status_code=500,
-            content=_envelope("ERR_INTERNAL", "internal error", {}),
+            content=error_envelope("ERR_INTERNAL", "internal error", {}),
             headers=headers,
         )

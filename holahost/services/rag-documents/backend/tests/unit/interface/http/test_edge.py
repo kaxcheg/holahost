@@ -1,0 +1,211 @@
+"""Unit tests for this service's edge policy (spec §3.1, §8.1 steps 1-3).
+
+The point of these is *ordering*. Each of the four checks is easy to get right on its
+own; what §8.1 actually specifies is which one wins when several would fail, and — the
+reason any of this is middleware at all — that none of them waits for the request body
+to be read first.
+"""
+
+from collections.abc import Iterator
+
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+from holahost_auth import TokenContext
+from holahost_http import (
+    BodySizeLimitMiddleware,
+    RateLimitMiddleware,
+    RequestIdMiddleware,
+)
+from starlette.middleware import Middleware
+from starlette.types import ASGIApp, Receive, Scope, Send
+from tests._support.fakes import FakeRateLimiter
+
+from interface.http.api_base import API_BASE_URL
+from interface.http.edge import (
+    HEALTH_PATH,
+    MAX_REQUEST_BODY_SIZE,
+    MISSING_REQUEST_ID_ERROR,
+    bucket_for,
+    log_rejection,
+)
+from interface.http.errors import register_error_handlers
+
+_TOKEN = TokenContext(subject="user-123", client_id="cli-1", roles=(), act=None)
+_DOCUMENTS = f"{API_BASE_URL}/documents"
+_HEADERS = {"X-Request-ID": "test-request-id"}
+
+
+class StubAuthMiddleware:
+    """Stands in for `HolahostAuthMiddleware`: same scope key, no JWKS.
+
+    Occupies the real one's slot in the stack so the surrounding order is the real
+    order — the alternative, dropping auth from the stack under test, would leave the
+    ordering claims untested exactly where they matter.
+    """
+
+    def __init__(self, app: ASGIApp, *, accepts: bool = True) -> None:
+        self.app = app
+        self._accepts = accepts
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["path"] == HEALTH_PATH:
+            await self.app(scope, receive, send)
+            return
+        if not self._accepts:
+            log_rejection(scope, outcome="401", detail="stub rejects")
+            await _send_json(scope, receive, send, 401, {"detail": "Unauthorized"})
+            return
+        scope.setdefault("state", {})["token"] = _TOKEN
+        await self.app(scope, receive, send)
+
+
+async def _send_json(
+    scope: Scope, receive: Receive, send: Send, status: int, body: dict[str, str]
+) -> None:
+    from fastapi.responses import JSONResponse
+
+    await JSONResponse(status_code=status, content=body)(scope, receive, send)
+
+
+def build_app(
+    *, accepts_auth: bool = True, rate_limiter: FakeRateLimiter | None = None
+) -> tuple[FastAPI, list[int]]:
+    """The production stack, with auth stubbed. Records bytes that reached the route."""
+    read_sizes: list[int] = []
+    app = FastAPI(
+        middleware=[
+            Middleware(
+                RequestIdMiddleware,
+                missing_header_error=MISSING_REQUEST_ID_ERROR,
+                exempt_paths=(HEALTH_PATH,),
+                on_rejected=log_rejection,
+            ),
+            Middleware(
+                BodySizeLimitMiddleware,
+                max_bytes=MAX_REQUEST_BODY_SIZE,
+                on_rejected=log_rejection,
+            ),
+            Middleware(StubAuthMiddleware, accepts=accepts_auth),
+            Middleware(
+                RateLimitMiddleware,
+                limiter=rate_limiter or FakeRateLimiter(),
+                bucket_for=bucket_for,
+                on_rejected=log_rejection,
+            ),
+        ]
+    )
+    register_error_handlers(app)
+
+    @app.post(_DOCUMENTS)
+    async def create(request: Request) -> dict[str, int]:
+        read_sizes.append(len(await request.body()))
+        return {"ok": 1}
+
+    @app.get(HEALTH_PATH)
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return app, read_sizes
+
+
+class TestBucketMapping:
+    def test_create_and_replace_are_ingest(self) -> None:
+        assert bucket_for("POST", _DOCUMENTS) == "ingest"
+        assert bucket_for("PUT", f"{_DOCUMENTS}/doc-1") == "ingest"
+
+    def test_search_is_a_read_despite_being_a_post(self) -> None:
+        # §8.1 step 3: split by what the operation costs, not by the verb.
+        assert bucket_for("POST", f"{_DOCUMENTS}/doc-1/search") == "read"
+
+    def test_get_and_delete_are_reads(self) -> None:
+        assert bucket_for("GET", f"{_DOCUMENTS}/doc-1") == "read"
+        assert bucket_for("DELETE", f"{_DOCUMENTS}/doc-1") == "read"
+
+    def test_health_is_not_limited(self) -> None:
+        assert bucket_for("GET", HEALTH_PATH) is None
+
+
+class TestRequestIdRequired:
+    def test_missing_request_id_returns_422(self) -> None:
+        app, _ = build_app()
+        response = TestClient(app).post(_DOCUMENTS, files={"file": ("a.txt", b"x")})
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error"]["code"] == "ERR_INVALID_PAYLOAD"
+        # Mute on purpose: this is the one ERR_INVALID_PAYLOAD answered before auth, and
+        # naming the header would tell an unintended caller how to get past the check.
+        assert body["error"]["details"] == {}
+        assert "X-Request-ID" not in response.text
+
+    def test_request_id_check_runs_before_auth(self) -> None:
+        # Both would fail; §8.1 puts the transport contract first, so a caller that
+        # broke it hears about that rather than about its credentials.
+        app, _ = build_app(accepts_auth=False)
+        response = TestClient(app).post(_DOCUMENTS, files={"file": ("a.txt", b"x")})
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "ERR_INVALID_PAYLOAD"
+
+    def test_health_is_exempt(self) -> None:
+        app, _ = build_app()
+        assert TestClient(app).get(HEALTH_PATH).status_code == 200
+
+
+class TestBodyIsNotReadBeforeTheChecks:
+    def test_oversized_body_is_refused_unread(self) -> None:
+        app, read_sizes = build_app()
+        response = TestClient(app).post(
+            _DOCUMENTS,
+            content=b"x" * (MAX_REQUEST_BODY_SIZE + 1),
+            headers={**_HEADERS, "Content-Type": "application/octet-stream"},
+        )
+
+        assert response.status_code == 413
+        assert read_sizes == []
+        assert response.json()["error"]["code"] == "ERR_PAYLOAD_TOO_LARGE"
+
+    def test_anonymous_upload_is_refused_without_being_read(self) -> None:
+        """The regression this whole layer exists for: a 50 MiB POST with no
+        Authorization used to be received in full and only then answered 401,
+        because `await request.form()` runs ahead of the endpoint's dependencies."""
+        app, read_sizes = build_app(accepts_auth=False)
+
+        def chunks() -> Iterator[bytes]:
+            for _ in range(64):
+                yield b"x" * 1024
+
+        response = TestClient(app).post(_DOCUMENTS, content=chunks(), headers=_HEADERS)
+
+        assert response.status_code == 401
+        assert read_sizes == []
+
+    def test_over_quota_caller_is_refused_without_being_read(self) -> None:
+        app, read_sizes = build_app(rate_limiter=FakeRateLimiter(should_raise=True))
+
+        def chunks() -> Iterator[bytes]:
+            for _ in range(64):
+                yield b"x" * 1024
+
+        response = TestClient(app).post(_DOCUMENTS, content=chunks(), headers=_HEADERS)
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "30"
+        assert response.json()["error"]["code"] == "ERR_RATE_LIMIT"
+        assert read_sizes == []
+
+
+class TestRateLimitWiring:
+    def test_identity_kind_reaches_the_limiter(self) -> None:
+        limiter = FakeRateLimiter()
+        app, _ = build_app(rate_limiter=limiter)
+        TestClient(app).post(_DOCUMENTS, files={"file": ("a.txt", b"x")}, headers=_HEADERS)
+
+        assert limiter.calls == [("cli-1", "user-123", "ingest", False)]
+
+    def test_health_never_reaches_the_limiter(self) -> None:
+        limiter = FakeRateLimiter()
+        app, _ = build_app(rate_limiter=limiter)
+        TestClient(app).get(HEALTH_PATH)
+
+        assert limiter.calls == []

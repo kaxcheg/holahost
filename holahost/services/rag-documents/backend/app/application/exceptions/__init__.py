@@ -12,15 +12,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from holahost_http import PlatformError
 
-class ApplicationError(Exception):
-    """Base for every application-layer, HTTP-facing exception."""
 
-    code: str = "ERR_INTERNAL"
+class ApplicationError(PlatformError):
+    """Base for every application-layer, HTTP-facing exception.
 
-    def details_dict(self) -> Mapping[str, object]:
-        """Wire-format `details` payload for this error. Empty by default."""
-        return {}
+    Inherits the platform base purely for the envelope contract it defines (`code` +
+    `details_dict()`, both already the shape used here) — that is what lets the shared
+    envelope builder render any of these. The taxonomy below stays this service's own:
+    the library owns no codes except the two its own middleware raise.
+    """
 
 
 class UnsupportedMediaTypeError(ApplicationError):
@@ -56,6 +58,25 @@ class InvalidPayloadError(ApplicationError):
         if self.limit is not None:
             details["limit"] = self.limit
         return details
+
+
+class MalformedRequestError(ApplicationError):
+    """A request violated the transport contract, with nothing disclosed about how.
+
+    Same wire code as `InvalidPayloadError` and deliberately **no** `details`: this is the
+    only `ERR_INVALID_PAYLOAD` answered *before* authentication. Every other one goes to a
+    caller the service has already identified and who is entitled to know which field it
+    got wrong; this one goes to a caller that, by construction, arrived by a path it was
+    not meant to — both real entry paths attach `X-Request-ID` unconditionally. Naming the
+    header in the body would hand exactly that caller the one hint needed to get past this
+    check. Same discipline §7.6 already applies to `401`: the reason is logged, never
+    returned.
+    """
+
+    code = "ERR_INVALID_PAYLOAD"
+
+    def __init__(self) -> None:
+        super().__init__("invalid request")
 
 
 class UploadTooLargeError(ApplicationError):

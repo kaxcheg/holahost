@@ -886,7 +886,8 @@ GET /api/rag-documents/health          # без авторизации
 
 | Код | HTTP | Когда | `details` | Повторять? |
 |---|---|---|---|---|
-| `ERR_INVALID_PAYLOAD` | 422 | пустое или слишком длинное имя, пустой или слишком длинный запрос, отсутствующее поле, отсутствующий `X-Request-ID`, файл повреждён или не разбирается (`DocumentParseError`) | `field`, `limit` | нет |
+| `ERR_INVALID_PAYLOAD` | 422 | пустое или слишком длинное имя, пустой или слишком длинный запрос, отсутствующее поле, файл повреждён или не разбирается (`DocumentParseError`) | `field`, `limit` | нет |
+| `ERR_INVALID_PAYLOAD` | 422 | отсутствующий `X-Request-ID` | — | нет |
 | `ERR_UNSUPPORTED_MEDIA_TYPE` | 415 | MIME вне `ALLOWED_MIME_TYPES` | `allowed` | нет |
 | `ERR_PAYLOAD_TOO_LARGE` | 413 | файл больше `MAX_UPLOAD_SIZE` — проверка **до** парсинга | `limit`, `actual` | нет |
 | `ERR_PAYLOAD_TOO_LARGE` | 422 | текст после парсинга длиннее `MAX_PARSED_TEXT_LENGTH` — проверка **после** парсинга | `limit`, `actual` | нет |
@@ -1074,7 +1075,8 @@ class RateLimiter(Protocol):
 
 ### 8.1 Общий контур запроса
 
-`interface/http/middleware.RequestIdMiddleware` оборачивает приложение целиком и применяется
+`holahost_http.RequestIdMiddleware` (параметризуется в `interface/http/edge.py`) оборачивает
+приложение целиком и применяется
 безусловно ко всем роутам, включая `GET /api/rag-documents/health`: читает `X-Request-ID` (или фиксирует его
 отсутствие) в контекст логирования, запускает таймер запроса, эхом возвращает заголовок в ответе,
 когда он был. Заголовок никогда не синтезируется — только читается то, что уже пришло.
@@ -1084,7 +1086,10 @@ class RateLimiter(Protocol):
 1. `interface/http/dependencies.require_request_id` — требует, чтобы `X-Request-ID` присутствовал;
    оба реальных входа (§3.1) архитектурно гарантируют его — nginx на staging/prod, CLI-инструмент на
    dev, — поэтому его отсутствие для остальных роутов не остаётся молчаливым фактом в логе, а
-   трактуется как нарушение контракта: `422 ERR_INVALID_PAYLOAD` (`details.field = "X-Request-ID"`).
+   трактуется как нарушение контракта: `422 ERR_INVALID_PAYLOAD` **с пустым `details`** — единственный
+   `ERR_INVALID_PAYLOAD`, отдаваемый до аутентификации, поэтому причина уходит в лог, а не в тело
+   (та же дисциплина, что у `401`, §7.6): назвать заголовок значило бы подсказать вызывателю,
+   пришедшему не тем путём, чем именно этот рубеж проходится.
    Не применяется к `GET /api/rag-documents/health` (health-проверки не проставляют трейсинговые заголовки). Проверка
    зацеплена перед авторизацией (шаг 2).
 2. `holahost_auth.middleware.authenticate(request) -> TokenContext` — валидация подписи и claims; `401` при неудаче. `TokenContext = (subject, client_id, roles, act)`.
