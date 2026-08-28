@@ -79,11 +79,9 @@ class TestCreateDocument:
         assert "document_id" in body
 
     def test_missing_name_field_returns_422(self) -> None:
-        # Missing entirely -> RequestValidationError -> 422 (FastAPI's own default,
-        # matching RFC 4918: syntax fine, content doesn't satisfy what's needed).
-        # An empty *value* for `name` goes through a different path
-        # (application-layer InvalidPayloadError) but lands on the same 422 now too
-        # — unified, see clarifications.md.
+        # Missing entirely -> RequestValidationError -> 422. An empty *value* for `name`
+        # takes a different path (application-layer InvalidPayloadError) and lands on the
+        # same 422.
         client = TestClient(_build_app())
 
         response = client.post(

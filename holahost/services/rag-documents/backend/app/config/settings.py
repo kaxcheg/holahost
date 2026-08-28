@@ -11,18 +11,12 @@ def _postgres_dsn(
 ) -> SecretStr:
     """Assemble a Postgres DSN from its parts.
 
-    `PostgresDsn.build` over f-string interpolation: it percent-encodes special characters in
-    user/password correctly (an f-string wouldn't — a `@` or `:` in a generated Secrets Manager
-    password would silently produce a malformed URL, not an error).
+    `PostgresDsn.build` over f-string interpolation: it percent-encodes user and password
+    correctly, where an f-string would turn a `@` in a generated password into a malformed
+    URL rather than an error.
 
-    `postgresql+psycopg`, the driver dialect included, rather than a bare `postgresql` scheme
-    each caller rewrites: every consumer of these DSNs reaches Postgres through SQLAlchemy, so
-    the dialect is not a per-caller decision to defer. It used to be bare because
-    `scripts/provision_app_role.py` handed the string straight to `psycopg.connect`, and libpq
-    rejects the `+driver` form — but that made one script's choice of client dictate the
-    spelling for the whole codebase, and paid for it with the same `.replace("postgresql://",
-    "postgresql+psycopg://", 1)` written out at six call sites. That script now builds an
-    `Engine` like everything else, so the exception, and all six rewrites, are gone.
+    The scheme carries the driver dialect, `postgresql+psycopg`: every consumer reaches
+    Postgres through SQLAlchemy, so the dialect is not a per-caller decision.
     """
     dsn = PostgresDsn.build(
         scheme="postgresql+psycopg",
@@ -57,11 +51,9 @@ class _PostgresLocation(BaseSettings):
 class AppRoleSettings(_PostgresLocation):
     """The credentials the *application* authenticates with — an unprivileged role.
 
-    Split out of `Settings` so that `scripts/provision_app_role.py` can read exactly this and
-    nothing else: it needs the app role's name and password (it is the code that creates the
-    role and applies that password), but it is a standalone entry point with no business
-    supplying JWKS, chunking or rate-limit config. `Settings` inherits the pair rather than
-    redeclaring it, so there is one declaration of the app's own identity, not two.
+    Split out of `Settings` so `scripts/provision_app_role.py` can read exactly this pair —
+    it creates the role and applies the password — without having to supply JWKS, chunking
+    or rate-limit config. `Settings` inherits it rather than redeclaring it.
     """
 
     postgres_user: str = Field(min_length=1)
@@ -83,28 +75,22 @@ class AppRoleSettings(_PostgresLocation):
 class SuperuserSettings(_PostgresLocation):
     """The credentials the deploy-time elevated entry points authenticate with (§8.0).
 
-    A separate model, not extra fields on `Settings`, and the separation is the same one the
-    two Postgres roles exist for at all: the running application must never hold superuser
-    credentials — that is what makes its own role's inability to bypass row-level security mean
-    anything (`scripts/bootstrap.py::_assert_rls_is_enforced`). A `postgres_superuser_*` field
-    on `Settings` would be either required — forcing every api container to carry the one
-    credential it must not have — or optional, which is dead weight plus a standing invitation
-    to set it.
+    A separate model rather than extra fields on `Settings`, for the reason the two Postgres
+    roles exist at all: the serving application must never hold superuser credentials, which
+    is what makes its own role's inability to bypass RLS mean anything
+    (`scripts/bootstrap.py::_assert_rls_is_enforced`). A field on `Settings` would be either
+    required — forcing every api container to carry the one credential it must not have — or
+    optional, which is an invitation to set it.
 
-    Read by exactly two callers, both elevated, both run once per deploy and never by the
-    serving process: `migrations/env.py` (CREATE EXTENSION, CREATE POLICY, table ownership) and
-    `scripts/provision_app_role.py` (creates the app role, applies its password). Note that
-    neither carries `AppRoleSettings`' fields by inheritance, deliberately: the deploy passes
-    the app role's password only to the provisioning step, so requiring it here would break the
-    migration step, which has no reason to know it.
+    Read by two elevated callers, both run once per deploy: `migrations/env.py` and
+    `scripts/provision_app_role.py`. Neither inherits `AppRoleSettings`: the deploy passes the
+    app role's password only to the provisioning step.
     """
 
-    # docker-compose.yml's `postgres` service reads this same variable, with this same default,
-    # to name the role its initdb creates — one variable for both sides of the identity, since a
-    # client authenticating as a role the server never created just fails the deploy. The default
-    # is chosen so it cannot collide with the app role named by POSTGRES_USER in
-    # infra/envs/<env>/.env. Effectively fixed once per environment: the name is baked into the
-    # `pgdata` volume at initdb, so changing it later renames nothing (see that file's comment).
+    # docker-compose.yml's `postgres` service reads this same variable to name the role its
+    # initdb creates — one variable for both sides of the identity. Effectively fixed per
+    # environment: the name is baked into the `pgdata` volume at initdb, so changing it
+    # later renames nothing.
     postgres_superuser: str = Field(default="postgres", min_length=1)
     postgres_superuser_password: SecretStr = Field(min_length=1)
 
@@ -124,27 +110,17 @@ class SuperuserSettings(_PostgresLocation):
 class Settings(AppRoleSettings):
     """Typed runtime configuration loaded from environment variables (§3.7/§3.8).
 
-    One class with an `env` discriminator (not per-env subclasses) — per-environment
-    behavior branches inside validators such as `_validate_chunking_window`, since
-    there is a single config source (`os.environ`); staging/prod populate
-    `POSTGRES_PASSWORD` via `scripts.bootstrap._fetch_password_if_needed` BEFORE this class is
-    constructed (R-24 composition root reads `env` first to decide whether to run it —
-    out of scope here).
+    One class with an `env` discriminator rather than per-env subclasses: there is a single
+    config source (`os.environ`), and staging/prod populate `POSTGRES_PASSWORD` via
+    `scripts.bootstrap._fetch_password_if_needed` before this class is constructed.
 
-    Inherits the application's own Postgres identity and location from `AppRoleSettings` /
-    `_PostgresLocation` rather than declaring them here, so the app role's credentials have
-    one declaration shared with `scripts/provision_app_role.py`, which needs exactly that pair
-    and nothing else. The *superuser* pair lives in `SuperuserSettings` and deliberately never
-    reaches this class — see its docstring.
+    Inherits the application's Postgres identity from `AppRoleSettings`, so those
+    credentials have one declaration shared with `scripts/provision_app_role.py`. The
+    superuser pair lives in `SuperuserSettings` and never reaches this class.
 
-    Field set originally covered the R-11..R-19 subsystems; the four `jwks_url`/
-    `expected_*` fields were added by R-20/R-24 for `holahost-auth` wiring. Deliberately
-    does *not* carry `ALLOWED_MIME_TYPES`/`MAX_UPLOAD_SIZE`: those stay domain/
-    application-owned constants (`domain.value_objects.mime_type.ALLOWED_MIME_TYPES`,
-    `application.limits.MAX_UPLOAD_SIZE`), matching the project's "co-located with the
-    adapter that reads it" convention. The interface layer derives its own transport cap
-    from the latter (`interface.http.app.MAX_REQUEST_BODY_SIZE`) but never re-declares
-    the number.
+    Deliberately carries no `ALLOWED_MIME_TYPES` / `MAX_UPLOAD_SIZE`: those are domain and
+    application constants, co-located with the code that enforces them. The interface layer
+    derives its transport cap from the latter without re-declaring the number.
     """
 
     env: Literal["dev", "staging", "prod"]
@@ -155,12 +131,11 @@ class Settings(AppRoleSettings):
     search_top_k: int = Field(gt=0)
     similarity_threshold: float = Field(ge=-1.0, le=1.0)
     max_query_length: int = Field(gt=0)
-    # Two dimensions, four ceilings (§3.7). The bucket says how expensive the operation
-    # is; the identity kind says what the ceiling is a ceiling *on*. A service token's
-    # `sub` equals its `client_id`, so its counter is one aggregate for the whole calling
-    # service; an exchanged token carries a real user's `sub`, so its counter is per user
-    # of that client. One number for both would either starve a busy integration or hand
-    # every one of its users the whole integration's allowance.
+    # Two dimensions, four ceilings (§3.7): the bucket says how expensive the operation is,
+    # the identity kind says what the ceiling counts. A service token's counter is one
+    # aggregate for the calling service; an exchanged token's is per user of that client.
+    # One number for both would starve a busy integration or hand each of its users the
+    # whole integration's allowance.
     rate_limit_user_ingest: int = Field(gt=0)
     rate_limit_user_read: int = Field(gt=0)
     rate_limit_service_ingest: int = Field(gt=0)

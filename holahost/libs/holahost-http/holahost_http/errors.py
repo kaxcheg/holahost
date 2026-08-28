@@ -1,18 +1,13 @@
 """The wire *form* of an error response — not the taxonomy.
 
-Which codes exist, and which HTTP status each one maps to, is a consuming service's
-own decision (its spec's error table) and stays in that service. What lives here is
-only what every Holahost service must agree on to look like one platform:
+Which errors exist, and which HTTP status each maps to, is a consuming service's own
+decision and stays in that service. Here lives only what every Holahost service must
+agree on: the envelope ``{"error": {code, message, details}}``, the ``PlatformError``
+contract it is built from, and the two errors this library's own middleware raise.
 
-- ``error_envelope`` — the JSON shape ``{"error": {code, message, details}}``;
-- ``PlatformError`` — the contract that shape is built from (``code`` +
-  ``details_dict()``), which a service's own error base class inherits;
-- the two errors this library's own middleware raise, and therefore owns.
-
-``PlatformError`` deliberately carries no HTTP status. Status is a protocol fact
-decided at the point a response is written: a body rejected unread is a 413, parsed
-content that turned out too large is a 422, and two errors may well share one status.
-A ``status`` attribute on the exception would force that decision onto the error.
+``PlatformError`` carries no HTTP status: status is decided where a response is written
+(a body rejected unread is a 413, parsed content that turned out too large is a 422), and
+two errors may share one.
 """
 
 from __future__ import annotations
@@ -35,26 +30,12 @@ class PlatformError(Exception):
     def code(self) -> str:
         """This error's identity on the wire — its class name, verbatim.
 
-        Not declared beside the class, and not transformed either. An error's identity
-        and the shape of its ``details`` are two halves of one contract, and
-        ``details_dict()`` already lives on the class, so a ``code`` string declared next
-        to it splits that contract across two places kept equal by hand. It buys nothing:
-        nothing here or in any service dispatches on ``code``, it is purely an output
-        value (status comes from the interface layer's own type -> status table).
+        Derived rather than declared beside the class, so the identity and the shape of
+        ``details`` cannot drift apart, and a code read in a log greps straight back to
+        the class that produced it. A class rename is therefore a contract change, and
+        shows up as one in the service's published schema.
 
-        Verbatim rather than mapped to a screaming-snake ``ERR_*`` form, which is what
-        this used to do. The mapping added no information and cost the one thing that
-        matters when reading a log: the value in the log could no longer be grepped back
-        to the class that produced it, because the string existed nowhere in the source.
-        It also needed a documented caveat for consecutive capitals (``HTTPError``).
-
-        A class rename is therefore a contract change. That is the point, not a
-        drawback: it surfaces as a diff in the service's published schema and fails CI,
-        rather than passing as a silent refactor.
-
-        Accessible on the class as ``SomeError.__name__`` wherever an instance is not at
-        hand — an interface layer answering an unpublished subclass *as* its published
-        ancestor needs exactly that, and now needs no helper for it.
+        Available on the class as ``SomeError.__name__`` where no instance is at hand.
         """
         return type(self).__name__
 
@@ -67,11 +48,8 @@ class PayloadTooLargeError(PlatformError):
     """The request body exceeds the cap enforced by ``BodySizeLimitMiddleware``.
 
     ``actual`` is ``None`` when the size was not known before reading — under
-    ``Transfer-Encoding: chunked`` the true size is never learned (the point of the
-    middleware is to stop reading), and reporting the partial count would dress a lower
-    bound up as a measurement. It is still *present* in ``details``: one identity, one
-    set of keys, so a consumer reading ``details.actual`` never has to discover which
-    transport the caller happened to use.
+    ``Transfer-Encoding: chunked`` it never is. The key is still present: one identity,
+    one set of keys, so a consumer need not know which transport the caller used.
     """
 
     def __init__(self, limit: int, actual: int | None = None) -> None:
@@ -107,14 +85,10 @@ def error_envelope(code: str, message: str, details: Mapping[str, object]) -> di
 class RejectionLogger(Protocol):
     """How a middleware reports a request it rejected before routing.
 
-    Middleware in this library answers a request without ever reaching the service's
-    route handlers, so nothing downstream can emit that request's completion log
-    line. Rather than log in a shape this library would have to invent (field names,
-    event name and allowlist are the service's own observability contract), it calls
-    back with the two facts it alone knows and lets the service write the line.
-
-    Optional everywhere it is accepted: a service that has no such contract passes
-    nothing and loses only the log line, never the rejection itself.
+    Middleware here answers without reaching a service's route handlers, so nothing
+    downstream can log that request's completion. Field names and event schema are the
+    service's own observability contract, so this library hands back the two facts it
+    alone knows and lets the service write the line. Optional everywhere it is accepted.
     """
 
     def __call__(self, scope: Scope, *, outcome: str, detail: str | None = None) -> None:
@@ -140,11 +114,10 @@ async def send_platform_error(
 ) -> None:
     """Write ``error`` as an envelope response directly onto the ASGI channel.
 
-    Middleware cannot raise its way to a service's ``@app.exception_handler``: those
-    are bound to Starlette's ``ExceptionMiddleware``, which sits *inside* the
-    user-middleware stack, so an exception raised in middleware flies straight past
-    them to ``ServerErrorMiddleware`` and becomes a 500. Middleware that wants a
-    specific status has to produce the response itself, which is what this does.
+    Middleware cannot raise its way to a service's ``@app.exception_handler``: those are
+    bound to Starlette's ``ExceptionMiddleware``, which sits *inside* the user-middleware
+    stack, so an exception raised in middleware becomes a 500. Middleware that wants a
+    specific status has to produce the response itself.
     """
     response = JSONResponse(
         status_code=status,

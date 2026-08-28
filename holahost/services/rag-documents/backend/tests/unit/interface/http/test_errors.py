@@ -113,12 +113,9 @@ class TestApplicationErrorMapping:
         }
 
     def test_an_unpublished_subclass_is_answered_as_its_published_ancestor(self) -> None:
-        # Two regressions in one. Exact-type `dict.get(type(exc))` answered 500 for
-        # every subclass not literally in the table, with nothing to reveal it — so the
-        # lookup walks the MRO. But the walk must also take the *identity* from the
-        # matched ancestor: a subclass added later has no entry in docs/openapi.json,
-        # and answering with its own name (`_DerivedNotFoundError`) would put
-        # an identity on the wire that the published schema does not describe.
+        # The lookup walks the MRO, and takes the *identity* from the matched ancestor:
+        # a subclass has no entry in docs/openapi.json, so answering with its own name
+        # would put an identity on the wire the published schema does not describe.
         client = TestClient(_build_app(), raise_server_exceptions=False)
 
         response = client.get("/derived-not-found")
@@ -145,8 +142,7 @@ class TestUnmappedApplicationErrorIsInternal:
         assert "norm=" not in response.text
 
     def test_reason_reaches_the_log(self, capsys: pytest.CaptureFixture[str]) -> None:
-        # The other half of the inversion: the old handler put the message in the body
-        # and logged `error_reason=None`, so the cause survived nowhere.
+        # The body carries nothing, so this line is the only place the cause survives.
         configure_logging()
         client = TestClient(_build_app(), raise_server_exceptions=False)
 
@@ -156,8 +152,8 @@ class TestUnmappedApplicationErrorIsInternal:
 
 
 class TestDomainValidationErrorIsInternal:
-    """Replaces what the `wrap_value_error` decorator used to do, explicitly and in one
-    place — see `handle_domain_validation_error`."""
+    """An untranslated domain invariant violation is a defect — see
+    `handle_domain_validation_error`."""
 
     def test_invariant_violation_maps_to_500_without_leaking(self) -> None:
         client = TestClient(_build_app(), raise_server_exceptions=False)

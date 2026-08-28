@@ -23,12 +23,10 @@ class Document:
     are enforced (§4.3 — Chunk itself has no repo, no update, and dies with its
     document).
 
-    Mutable — `name` changes on rename, `mime_type`/`chunk_count` change on
-    content replacement, `updated_at` changes with either. `owner` is fixed
-    at creation (ownership transfer is out of scope, spec §4.2). Equality
-    and hashing are by `id` (entity identity), not field values —
-    `eq=False` disables the dataclass's field-wise default so the
-    hand-written `__eq__`/`__hash__` below govern instead.
+    Mutable — `name` changes on rename, `mime_type`/`chunk_count` on content
+    replacement, `updated_at` with either. `owner` is fixed at creation (transfer is
+    out of scope, §4.2). Equality and hashing are by `id`, which is what `eq=False`
+    plus the hand-written `__eq__`/`__hash__` below achieve.
 
     :param id: Self-generated identifier.
     :param owner: Immutable after creation.
@@ -71,21 +69,15 @@ class Document:
     ) -> Document:
         """Create a new document with matching timestamps.
 
-        `id` is caller-provided, not self-generated: chunks need a `document_id` to
-        exist, so the caller must generate the id (`DocumentId.new()`) and build
-        `chunks` with it before calling this — the same order `create_document`/
-        `replace_document` already use for the id-then-chunks dependency.
+        `id` is caller-provided: chunks need a `document_id` to exist, so the caller
+        generates the id and builds `chunks` with it before calling this.
 
-        :raises ChunkCountExceededError: more than `MAX_CHUNKS_PER_DOCUMENT` chunks.
-            Only knowable after chunking completes, and the one client-facing invariant
-            here (US-R01: 422 `TooManyChunksError`) — which is why it has a type of its
-            own: a caller translating it must select it, not catch the base.
-        :raises DomainValidationError: with `field` unset — `chunks` is empty, or
-            contains a chunk whose `document_id` does not match `id`. Structurally
-            unreachable (empty documents are rejected earlier, at the parsing stage,
-            US-R01; a mismatched `document_id` would be a caller defect), and so an
-            internal defect if it does happen: nothing translates it, it surfaces as
-            `500`.
+        :raises ChunkCountExceededError: more than `MAX_CHUNKS_PER_DOCUMENT` chunks —
+            the one client-facing invariant here (US-R01: 422 `TooManyChunksError`),
+            which is why it has a type of its own for the caller to select.
+        :raises DomainValidationError: with `field` unset — `chunks` is empty, or holds a
+            chunk belonging to another document. Both are structurally unreachable, so
+            either is an internal defect: nothing translates it, and it surfaces as 500.
         """
         _validate_chunks(id, chunks)
         now = datetime.now(tz=UTC)

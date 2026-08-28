@@ -113,8 +113,7 @@ class TestRequiredHeader:
         }
 
     def test_a_blank_header_is_refused_like_an_absent_one(self) -> None:
-        # The gate used to be `if request_id is None`, which a header sent with an empty
-        # value walked straight through: presence satisfied, correlation key gone.
+        # A presence-only gate lets an empty value through: satisfied, correlation key gone.
         response = TestClient(build_guarded_app()).get("/echo", headers={"X-Request-ID": ""})
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "MalformedRequestError"

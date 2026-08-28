@@ -11,7 +11,7 @@ name: rag-documents
 #     /opt/services/rag-documents/docker-compose.yml by the deploy pipeline's SSM command
 #     (ssm-migrate-deploy action), then run there with IMAGE=<ecr-repo>@sha256:<digest>.
 #
-# No `build:` section on `api` (removed — see .build-state/R-25-.../clarifications.md): this file
+# No `build:` section on `api`: this file
 # only ever *runs* an image, it never builds one, in either context above. That was always true
 # for staging/prod (the build context wouldn't even exist on the instance) and is now made
 # structurally true for dev too, by moving the build to an explicit Makefile step instead of

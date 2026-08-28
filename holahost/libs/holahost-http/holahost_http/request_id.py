@@ -21,32 +21,22 @@ class RequestIdMiddleware:
     synthesizes a missing header — it only reports what actually arrived.
 
     Pass ``missing_header_error`` to also *require* the header. Every real entry path
-    attaches it — the platform gateway on staging and prod, the calling tool on dev, where
-    there is no gateway — so its absence means a caller is misconfigured or is reaching the
-    service by a path it was not meant to. Letting that through records the fact as a
-    silent null in the log and forfeits end-to-end tracing with no distinct signal that it
-    happened.
+    attaches it — the platform gateway on staging and prod, the calling tool on dev — so
+    its absence means a caller is misconfigured or reaching the service by a path it was
+    not meant to. A header that arrives blank (empty or whitespace) is treated as absent,
+    here and in ``scope["state"]``: it carries no correlation key, so honouring it would
+    satisfy the requirement while defeating its purpose.
 
-    Requiring it is one parameter rather than a second middleware on purpose. The two
-    cannot be composed independently: the enforcing half reads what the observing half
-    writes, so mounted in the wrong order it finds an empty state and answers *every*
-    request — the correctly-formed ones included — with a rejection. That is a total
-    outage produced by a wiring order nothing checks. One class makes the order
-    unexpressible.
-
-    The rule is the platform's; the answer is the service's. This library owns no code for
-    "malformed request", having no taxonomy to draw one from, so a service passes its own.
+    Requiring it is one parameter rather than a second middleware because the two cannot
+    be composed independently: the enforcing half reads what the observing half writes, so
+    in the wrong order it finds an empty state and rejects *every* request. One class
+    makes that order unexpressible. The rule is the platform's, the answer is the
+    service's — this library has no taxonomy to draw a "malformed request" error from, so
+    a service passes its own.
 
     Plain ASGI rather than ``BaseHTTPMiddleware``: this is the outermost middleware, so
-    everything else — notably a body-size limiter's byte counting — receives the request
-    through it. ``BaseHTTPMiddleware`` re-plumbs the request body through anyio memory
-    streams to offer its ``Request``/``Response`` convenience, which is real machinery to
-    run on every byte of every upload in exchange for reading one header.
-
-    A header that arrives blank — empty, or nothing but whitespace — is treated exactly
-    as an absent one, here and in ``scope["state"]``: it carries no correlation key, so
-    honouring it would satisfy the requirement while defeating what the requirement is
-    for.
+    every byte of every upload passes through it, and ``BaseHTTPMiddleware`` would re-plumb
+    the body through anyio memory streams in exchange for reading one header.
 
     Args:
         missing_header_error: What to answer with when the header is absent or blank.
@@ -87,14 +77,8 @@ class RequestIdMiddleware:
         for raw_name, raw_value in scope["headers"]:
             if raw_name.lower() == REQUEST_ID_HEADER.encode():
                 header_arrived = True
-                # A blank value counts as absent, not as an id. The requirement exists to
-                # prove the caller came through an entry path that attaches one (see the
-                # class docstring), and `X-Request-ID:` with nothing after it satisfies a
-                # presence check while carrying no correlation key at all — the log line
-                # would record `""` and the response would echo an empty header, so the
-                # check was defeated by one character. `.strip()` because a value of
-                # spaces states the same non-fact; HTTP parsers already drop the
-                # surrounding whitespace, so this only catches what survives them.
+                # Blank counts as absent: a presence check that `X-Request-ID:` with
+                # nothing after it satisfies would leave `""` as the correlation key.
                 request_id = raw_value.decode("latin-1").strip() or None
                 break
 
@@ -106,13 +90,10 @@ class RequestIdMiddleware:
             error = self._missing_header_error
             if error is not None and scope["path"] not in self._exempt_paths:
                 if self._on_rejected is not None:
-                    # Which header was missing goes to the log, not necessarily to the
-                    # caller: this rejection happens before authentication, so a service
-                    # may well choose to answer it mute (see `missing_header_error`).
-                    # "blank" and "missing" are separated here because they point at
-                    # different faults — a proxy that sets the header from an unset
-                    # variable versus a caller that never had one — and the body, being
-                    # mute, is no place to tell them apart.
+                    # The cause goes to the log, not necessarily to the caller: this
+                    # rejection precedes authentication, so a service may answer it mute.
+                    # Blank and missing point at different faults — a proxy filling the
+                    # header from an unset variable, versus a caller without one.
                     reason = "blank" if header_arrived else "missing"
                     self._on_rejected(
                         scope, outcome=error.code, detail=f"{reason} {REQUEST_ID_HEADER}"

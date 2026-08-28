@@ -114,9 +114,8 @@ timing.)
 
 **Get a token — blocked, stub only.** Per the frame spec, until `auth` is built, dev tokens come
 from a platform-level script `infra/scripts/mint-dev-token.py` (shared by every service, lives
-under `holahost/infra/`). Neither that script nor `holahost/infra/` exists yet in this repo, and
-building it is out of this ticket batch's scope (deferred — see
-`.build-state/R-25-.../clarifications.md` "Dev JWT minting — deferred"). Until it lands, there is
+under `holahost/infra/`). Neither that script nor `holahost/infra/` exists yet in this repo.
+Until it lands, there is
 no working command for this step; construct a token manually against `JWKS_URL`/`EXPECTED_*` in
 `infra/envs/dev/.env` if you need one for manual testing.
 

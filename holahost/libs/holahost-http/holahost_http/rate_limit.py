@@ -41,11 +41,9 @@ class RateLimiter(Protocol):
     def check(self, *, client_id: str, subject: str, bucket: str, is_service: bool) -> None:
         """Check and increment the counter for this caller and bucket.
 
-        Concurrency: check-and-increment must be atomic. A plain read-then-write lets
-        two concurrent requests both read the same pre-increment count and both pass,
-        leaking the limit; a process serving requests on a thread pool will do exactly
-        that. An in-process mutex around an integer increment is the expected cost
-        here — nanoseconds, contending only with another thread doing the same thing.
+        Concurrency: check-and-increment must be atomic. Read-then-write lets two
+        concurrent requests read the same pre-increment count and both pass, which a
+        thread-pool process will do routinely.
 
         Args:
             client_id: The calling client's id.
@@ -64,15 +62,14 @@ class RateLimiter(Protocol):
 class RateLimitMiddleware:
     """Applies the limiter before routing — and therefore before the body is read.
 
-    Ordering is the whole point. As a route dependency the check runs after the
-    framework has resolved the request body, so a caller already over its quota still
-    gets its upload read in full before being told 429. Sitting here, ahead of
-    routing, the counter is consulted while the body is still on the wire.
+    Ordering is the point: as a route dependency the check would run after the framework
+    resolved the request body, so a caller already over quota still gets its upload read
+    in full before being told 429. Here the counter is consulted while the body is still
+    on the wire.
 
-    Runs after authentication (which is what puts the caller in ``scope["state"]``)
-    and expects it: a route that ``bucket_for`` selects a bucket for but that no
-    authentication covered is a wiring mistake, and is reported as one rather than
-    silently unlimited.
+    Runs after authentication, which is what puts the caller in ``scope["state"]``, and
+    expects it: a bucketed route no authentication covered is a wiring mistake, reported
+    as one rather than silently unlimited.
 
     Args:
         limiter: The counter implementation.
@@ -114,9 +111,8 @@ class RateLimitMiddleware:
                 f"({scope['method']} {scope['path']}) — authentication middleware must "
                 f"run before RateLimitMiddleware"
             )
-        # cast, not isinstance: `CallerIdentity` is a structural protocol of properties,
-        # and a runtime-checkable protocol only ever verifies attribute presence anyway.
-        # Anything else in this slot is a wiring mistake that fails on the next line.
+        # cast, not isinstance: a runtime-checkable protocol would only verify attribute
+        # presence, and anything else here fails on the next line anyway.
         caller = cast(CallerIdentity, stored)
 
         try:

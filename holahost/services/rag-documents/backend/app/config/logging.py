@@ -31,9 +31,8 @@ _ALLOWED_LOG_FIELDS = frozenset(
         "route",
         "outcome",
         "duration_ms",
-        # No `error_code`: `outcome` already carries the failure's code (§8.7 lists it as
-        # the field every failure metric matches on), and every caller that ever set
-        # `error_code` set it to the same value it passed as `outcome`.
+        # No `error_code`: `outcome` carries the failure's code, and it is what §8.7's
+        # metric filters match on.
         "error_reason",
         "chunk_count",
         "hits",
@@ -77,22 +76,14 @@ def get_logger(name: str) -> logging.Logger:
 def _redact_value(key: str, value: object) -> object:
     """Scrub tokens and e-mail addresses out of the one free-text field.
 
-    **This is what does the sanitising**, and the field is named for what it holds rather
-    than for that: callers pass their reason raw (`errors._log_failure` passes `str(exc)`,
-    `edge.log_rejection` the middleware's own reason), and the scrubbing happens here, at
-    the sink — the only place that sees every event. It was `error_message_sanitized`,
-    which named the processing and named it from the wrong side: it read as a
-    precondition on the caller, and no caller ever met it.
+    **This is what does the sanitising.** Callers pass their reason raw — `str(exc)` from
+    `errors._log_failure`, the middleware's own reason from `edge.log_rejection` — and the
+    scrubbing happens here at the sink, the one place that sees every event.
 
-    The field name is hardcoded rather than looked up in a set of free-text fields:
-    there is exactly one, and a set of one generalises nothing. A second would mean
-    editing this function, which is where the reasoning below lives anyway.
-
-    Not applied to the other fields, and that is a decision rather than an optimisation.
-    `request_id` is taken verbatim from a caller-supplied header with no length cap, and
-    `sub`/`client_id` are opaque identifiers — a 64-character trace id matches
-    `_TOKEN_RE` exactly, so scrubbing every string would replace the correlation key with
-    `<token>` and cost more than it protects. Those fields are not free text; the name
+    Not applied to the other fields, which is a decision rather than an optimisation:
+    `request_id` comes verbatim from a caller-supplied header with no length cap, and a
+    64-character trace id matches `_TOKEN_RE` exactly, so scrubbing every string would
+    replace the correlation key with `<token>`. Those fields are not free text — the name
     allowlist is what vouches for them.
     """
     if key == "error_reason" and isinstance(value, str):
@@ -110,12 +101,9 @@ def log_event(event_name: str, *, level: int = logging.INFO, **fields: object) -
 
     :raises DisallowedLogFieldError: any field NAME is outside `_ALLOWED_LOG_FIELDS`.
 
-    A real `raise`, not an `assert`. `python -O` / `PYTHONOPTIMIZE=1` compiles an
-    `assert` away entirely, so the check that stood here was absent from exactly the
-    kind of deployment most likely to enable it — while its own docstring claimed it was
-    "retained in production". Nothing pins `PYTHONOPTIMIZE` in the image, so an operator
-    adding it as a routine optimisation turned US-R11's enforced allowlist into a no-op,
-    with no signal. `holahost_auth.dependency` avoids an `assert` for the same reason.
+    A real `raise`, not an `assert`: `PYTHONOPTIMIZE` compiles asserts away, and nothing
+    pins it in the image, so the allowlist would become a silent no-op for an operator who
+    enables it.
     """
     disallowed = set(fields) - _ALLOWED_LOG_FIELDS
     if disallowed:

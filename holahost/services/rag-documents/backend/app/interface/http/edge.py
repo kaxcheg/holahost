@@ -7,11 +7,8 @@ it is logged. Those are this service's contract (§3.8, §7.6, §8.1, §8.7), an
 live here: one module for the values and rules the edge is parameterised with, so
 `app.py` is left holding nothing but the wiring.
 
-Not `middleware.py` any more, and the rename is the point: after the middleware classes
-themselves moved into the shared libraries, a module by that name held no middleware at
-all — only the policy they are configured with, which is a different thing and now says
-so. `api_base.py` stays separate and stays minimal: the container healthcheck imports it
-directly, so it must not drag in the application layer to answer "what is my base path".
+`api_base.py` stays separate and minimal: the container healthcheck imports it directly,
+so it must not drag in the application layer to answer "what is my base path".
 """
 
 from __future__ import annotations
@@ -30,52 +27,41 @@ from interface.http.api_base import API_BASE_URL
 _DOCUMENTS_PREFIX = f"{API_BASE_URL}/documents"
 HEALTH_PATH = f"{API_BASE_URL}/health"
 
-# Shared vocabulary, owned by neither user: `bucket_for` below maps a request to a bucket,
-# `dependencies.get_rate_limiter` maps a bucket to a ceiling. Naming them in either of
-# those two places would only pick which one imports the other.
+# Shared vocabulary: `bucket_for` maps a request to a bucket, `dependencies.
+# get_rate_limiter` maps a bucket to a ceiling. Naming them in either place would only
+# pick which one imports the other.
 INGEST_BUCKET = "ingest"
 READ_BUCKET = "read"
 
 # The unit every RATE_LIMIT_* setting is counted in (§3.7). A constant rather than a
-# setting of its own, deliberately: the window is what those numbers *mean*, not a knob
-# per environment — halving it would silently halve every ceiling while the .env files
-# went on claiming 60 and 600. Changing it is a contract change, made here, once.
+# setting: the window is what those numbers *mean*, and halving it would silently halve
+# every ceiling while the .env files went on claiming 60 and 600.
 RATE_LIMIT_WINDOW_SECONDS = 3600
 
-# A transport limit, not a domain one: it bounds the whole HTTP request body, multipart
-# framing included. `MAX_UPLOAD_SIZE` stays the application's own check on the extracted
-# file (§3.8) and is what a caller is told it exceeded; this is only how much the edge
-# agrees to read before anyone can look. Derived rather than written out, so the two
-# cannot drift — see `holahost_http.body_cap_for_upload` for why the slack is needed.
+# A transport limit: it bounds the whole HTTP body, multipart framing included, and only
+# decides how much the edge reads before anyone can look. `MAX_UPLOAD_SIZE` stays the
+# application's own check on the extracted file (§3.8). Derived so the two cannot drift.
 MAX_REQUEST_BODY_SIZE = body_cap_for_upload(MAX_UPLOAD_SIZE)
 
 REPORTED_UPLOAD_LIMIT = MAX_UPLOAD_SIZE
 """The `limit` a 413 from either size gate advertises (§7.6, US-R01).
 
-The middleware enforces `MAX_REQUEST_BODY_SIZE` and `CreateDocumentUseCase` enforces
-`MAX_UPLOAD_SIZE`; both are a "too large" refusal a caller has to act on, so both have to
-name the same number or the advice contradicts itself. It is the file limit, not the
-derived body cap: the cap is an internal transport number, and a caller told to trim to
-it landed just above the application's own check and was refused a second time with a
-different `limit`.
-
-Re-exported here rather than imported straight from `application.limits` by `app.py`,
-for the same reason everything else in this module is: what the edge is parameterised
-with is stated in one place, and `app.py` holds only the wiring.
+The middleware enforces `MAX_REQUEST_BODY_SIZE`, `CreateDocumentUseCase` enforces
+`MAX_UPLOAD_SIZE`, and both are a refusal the caller must act on, so both name the file
+limit — told to trim to the transport cap, a caller lands just above the application's
+own check and is refused a second time.
 """
 
 
 def bucket_for(method: str, path: str) -> str | None:
     """Which rate-limit bucket a request falls into, or `None` for unlimited (§8.1 step 3).
 
-    Split by *operation*, not by HTTP verb: `POST /{id}/search` is a read — it costs an
-    embedding of the query plus a vector scan, nowhere near an ingest's parse/chunk/embed
-    of a whole file, and grouping it with create/replace because both are POSTs would
-    price it by its verb instead of its work.
+    Split by *operation*, not by HTTP verb: `POST /{id}/search` costs a query embedding
+    plus a vector scan, nowhere near an ingest's parse/chunk/embed of a whole file, so
+    grouping it with create/replace would price it by its verb instead of its work.
 
-    Matches on prefix because it runs before routing, where `/{document_id}` has not been
-    parsed out yet — which is the same reason the limiter can be consulted while the
-    request body is still on the wire.
+    Matches on prefix because it runs before routing, where `/{document_id}` is not parsed
+    yet — the same reason the limiter can be consulted while the body is still on the wire.
     """
     if not path.startswith(_DOCUMENTS_PREFIX):
         return None

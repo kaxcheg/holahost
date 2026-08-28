@@ -179,9 +179,9 @@ class TestBodyIsNotReadBeforeTheChecks:
         assert REPORTED_UPLOAD_LIMIT == MAX_UPLOAD_SIZE < MAX_REQUEST_BODY_SIZE
 
     def test_anonymous_upload_is_refused_without_being_read(self) -> None:
-        """The regression this whole layer exists for: a 50 MiB POST with no
-        Authorization used to be received in full and only then answered 401,
-        because `await request.form()` runs ahead of the endpoint's dependencies."""
+        """What this layer exists for: `await request.form()` runs ahead of the
+        endpoint's dependencies, so a check written as one would receive an
+        unauthenticated 50 MiB POST in full before answering 401."""
         app, read_sizes = build_app(accepts_auth=False)
 
         def chunks() -> Iterator[bytes]:
@@ -225,9 +225,8 @@ class TestRateLimitWiring:
 
 
 class TestRejectionsAreLoggedAtWarning:
-    """Every outcome `log_rejection` can be handed is the caller's own doing — none of
-    them is the service failing, and none of them is `INFO`, which is what every event
-    used to be regardless of what happened."""
+    """Every outcome `log_rejection` can be handed is the caller's own doing — visible,
+    but not the service failing, so `WARNING` rather than `INFO`."""
 
     def test_a_refused_request_logs_at_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
         configure_logging()

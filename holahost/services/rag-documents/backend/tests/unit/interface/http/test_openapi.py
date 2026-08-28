@@ -108,9 +108,9 @@ class TestWhatACallerMayReceive:
         assert expected <= described
 
     def test_the_422_body_is_this_services_shape_not_fastapis(self) -> None:
-        # The regression this whole exercise started from: with no explicit `responses`,
-        # FastAPI documented its own `HTTPValidationError` for 422 — a `{"detail": [...]}`
-        # the service never returns, because `handle_validation_error` overrides it.
+        # Without explicit `responses`, FastAPI documents its own `HTTPValidationError`
+        # for 422 — a `{"detail": [...]}` the service never returns, because
+        # `handle_validation_error` overrides it.
         published = json.loads(_COMMITTED.read_text())
         assert "HTTPValidationError" not in published["components"]["schemas"]
         for name, operation in _guarded(published):

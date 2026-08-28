@@ -13,27 +13,21 @@ from holahost_http.errors import (
 CONTENT_LENGTH_HEADER = b"content-length"
 
 MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024
-"""What ``multipart/form-data`` framing costs on top of the file itself.
-
-Boundary lines, each part's own headers, the ``name`` field. A fact about the wire
-format rather than about any one service's limits, which is why it lives here: every
-service that caps an upload needs the same slack above its file limit, and a service
-left to guess at it guesses differently each time.
-"""
+"""What ``multipart/form-data`` framing costs on top of the file itself — boundary
+lines, part headers, the ``name`` field. A fact about the wire format, not about any
+service's limits, so every service that caps an upload uses the same slack."""
 
 
 def body_cap_for_upload(max_file_bytes: int) -> int:
     """Whole-request-body cap for a multipart upload of at most ``max_file_bytes``.
 
-    Use this to derive ``BodySizeLimitMiddleware``'s ``max_bytes`` from a service's own
-    file-size limit, rather than passing that limit directly. The middleware measures
-    the entire request body, framing included, so a cap set to the bare file limit
-    rejects a file of exactly that size — a 413 that depends on how many bytes of
-    boundary the client happened to send, on an upload the service considers legal.
+    Derive ``BodySizeLimitMiddleware``'s ``max_bytes`` with this rather than passing a
+    file limit directly: the middleware measures the whole body, framing included, so a
+    cap set to the bare file limit rejects a legal file of exactly that size depending on
+    how many boundary bytes the client sent.
 
-    The result is an outer bound for the edge, not a replacement for the service's own
-    exact check on the file it extracted: that check is what a caller is told it
-    exceeded, this one only decides how much gets read before anyone can look.
+    An outer bound for the edge, not a replacement for the service's own check on the
+    extracted file — that check is what a caller is told it exceeded.
     """
     return max_file_bytes + MULTIPART_OVERHEAD_ALLOWANCE
 
@@ -60,33 +54,22 @@ class BodySizeLimitMiddleware:
       half the cap would be a header check that any client can opt out of by not
       sending the header.
 
-    Why this has to be middleware, not a check inside the handler: a framework
-    resolves a multipart form by reading the whole body first — ``await
-    request.form()`` runs before any of the endpoint's own dependencies, so
-    authentication, rate limiting and every size check written as a dependency all
-    happen *after* the upload has already been received in full. Measured before this
-    existed: an unauthenticated 50 MiB POST was accepted end to end and only then
-    answered 401.
+    Middleware rather than a check inside the handler, because a framework resolves a
+    multipart form by reading the whole body first: ``await request.form()`` runs before
+    the endpoint's dependencies, so authentication, rate limiting and any size check
+    written as a dependency all run *after* the upload has been received in full.
 
-    The cap covers the whole request body, framing included, so a service uploading
-    files sets it to its file-size limit plus a small allowance for multipart
-    boundaries and part headers. It is therefore a coarse outer bound, not a
-    replacement for the service's own exact check on the file it extracted.
-
-    Which is why ``reported_limit`` exists. ``max_bytes`` is an internal transport
-    number the caller was never meant to see: a service whose own limit is 8 MiB caps
-    the body at 8 MiB + framing, so a rejection here advertised a ``limit`` slightly
-    *above* the one the service enforces on the file. A client that trimmed to exactly
-    the advertised number got past this middleware and was refused again by the
-    service's own check — same status, same code, a different ``limit``. Pass the
-    service's file limit as ``reported_limit`` and both gates name one number.
+    The cap covers the whole body, framing included (see ``body_cap_for_upload``), which
+    makes it a coarse outer bound rather than a replacement for the service's own check
+    on the extracted file.
 
     Args:
         max_bytes: Largest request body accepted, in bytes.
-        reported_limit: The limit to put in the error's ``details.limit`` — the
-            service's own file-size limit, where that is what the caller is expected
-            to act on. Defaults to ``max_bytes``, correct for a service that caps a
-            body it does not otherwise check.
+        reported_limit: The limit to put in the error's ``details.limit``. Pass the
+            service's own file-size limit so both gates advertise one number — a caller
+            told to trim to the transport cap lands just above the service's check and is
+            refused a second time. Defaults to ``max_bytes``, correct for a service that
+            caps a body it does not otherwise check.
         on_rejected: Optional callback used to log a rejection (see
             ``RejectionLogger``).
     """
@@ -111,10 +94,8 @@ class BodySizeLimitMiddleware:
 
         declared = self._declared_length(scope)
         if declared is not None and declared > self._max_bytes:
-            # `declared` is the whole body, framing included, so against a
-            # `reported_limit` that measures the file it is an upper bound rather than
-            # an exact measurement — still the honest answer to "how much did I send",
-            # and still strictly above the limit whenever this branch is reached.
+            # `declared` measures the whole body, `reported_limit` the file: an upper
+            # bound on what the caller sent, not an exact measurement of it.
             await self._reject(
                 scope, receive, send, PayloadTooLargeError(self._reported_limit, declared)
             )

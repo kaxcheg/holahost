@@ -87,10 +87,9 @@ def test_missing_request_id_returns_422_against_the_real_app(
 
 
 def test_missing_token_returns_401_against_the_real_app(client: TestClient) -> None:
-    # holahost-auth raises AuthenticationError directly (not fastapi.HTTPException,
-    # see clarifications.md) — this is the one test proving errors.py's own
-    # handle_authentication_error is actually wired to catch it for real, not just
-    # matched by the fakes in test_router.py.
+    # holahost-auth answers 401 from middleware, not via fastapi.HTTPException — this is
+    # the one test proving the real stack refuses an unauthenticated request, rather than
+    # the fakes in test_router.py matching it.
     response = client.get(
         "/api/rag-documents/documents/8f14e45f-ceea-467a-9f0a-1c2d3e4f5a6b",
         headers={"X-Request-ID": "e2e-test-request-id"},  # no Authorization at all

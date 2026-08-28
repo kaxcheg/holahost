@@ -17,8 +17,7 @@ pytestmark = pytest.mark.integration
 # fastembed's registry requires the fully-qualified name — the spec's §3.7 table and
 # ADR A-15 both reference the bare "paraphrase-multilingual-MiniLM-L12-v2", which
 # fastembed rejects outright (`TextEmbedding.list_supported_models()` lists only the
-# `sentence-transformers/`-prefixed form). Flagged in clarifications.md to propose back
-# into Source Data at Work Step 6.
+# `sentence-transformers/`-prefixed form).
 _MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 

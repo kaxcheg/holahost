@@ -41,9 +41,8 @@ class TestUnsupportedMediaTypeError:
 
 class TestInvalidPayloadError:
     def test_without_limit_still_carries_the_key(self) -> None:
-        # US-R09: one class, one `details` field set. `limit` used to be dropped when it
-        # was None, so `details.limit` was a KeyError on some raise sites of the very
-        # same error and a value on others.
+        # US-R09: one class, one `details` field set — `limit` is present as `None`, so
+        # `details.limit` is never a KeyError on some raise sites and a value on others.
         error = InvalidPayloadError(field="name")
         assert error.code == "InvalidPayloadError"
         assert error.details_dict() == {"field": "name", "limit": None}
@@ -78,8 +77,8 @@ class TestParsedTextTooLargeError:
         assert error.details_dict() == {"limit": 200_000, "actual": 250_000}
 
     def test_does_not_share_an_identity_with_upload_too_large(self) -> None:
-        # They used to share one code, so the only thing telling a caller which limit it
-        # hit was the status. Two errors, two identities.
+        # Two errors, two identities: sharing one would leave the status as the only
+        # thing telling a caller which limit it hit.
         assert (
             UploadTooLargeError(limit=1, actual=2).code
             != ParsedTextTooLargeError(limit=1, actual=2).code
