@@ -43,13 +43,18 @@ class RequestIdMiddleware:
     streams to offer its ``Request``/``Response`` convenience, which is real machinery to
     run on every byte of every upload in exchange for reading one header.
 
+    A header that arrives blank — empty, or nothing but whitespace — is treated exactly
+    as an absent one, here and in ``scope["state"]``: it carries no correlation key, so
+    honouring it would satisfy the requirement while defeating what the requirement is
+    for.
+
     Args:
-        missing_header_error: What to answer with when the header is absent. ``None``
-            (default) observes without ever rejecting. Consider an error carrying no
-            ``details``: this refusal happens before authentication, so naming the header
-            in the body tells a caller who arrived by an unintended path exactly what to
-            add to get past it. ``on_rejected`` is told which header was missing either
-            way.
+        missing_header_error: What to answer with when the header is absent or blank.
+            ``None`` (default) observes without ever rejecting. Consider an error carrying
+            no ``details``: this refusal happens before authentication, so naming the
+            header in the body tells a caller who arrived by an unintended path exactly
+            what to add to get past it. ``on_rejected`` is told which header it was, and
+            whether it was missing or blank, either way.
         status: HTTP status for that error.
         exempt_paths: Exact paths served without the header — health checks, which probes
             do not attach tracing headers to. Exempts them from the *requirement* only;
@@ -78,9 +83,19 @@ class RequestIdMiddleware:
             return
 
         request_id: str | None = None
+        header_arrived = False
         for raw_name, raw_value in scope["headers"]:
             if raw_name.lower() == REQUEST_ID_HEADER.encode():
-                request_id = raw_value.decode("latin-1")
+                header_arrived = True
+                # A blank value counts as absent, not as an id. The requirement exists to
+                # prove the caller came through an entry path that attaches one (see the
+                # class docstring), and `X-Request-ID:` with nothing after it satisfies a
+                # presence check while carrying no correlation key at all — the log line
+                # would record `""` and the response would echo an empty header, so the
+                # check was defeated by one character. `.strip()` because a value of
+                # spaces states the same non-fact; HTTP parsers already drop the
+                # surrounding whitespace, so this only catches what survives them.
+                request_id = raw_value.decode("latin-1").strip() or None
                 break
 
         state = scope.setdefault("state", {})
@@ -94,8 +109,13 @@ class RequestIdMiddleware:
                     # Which header was missing goes to the log, not necessarily to the
                     # caller: this rejection happens before authentication, so a service
                     # may well choose to answer it mute (see `missing_header_error`).
+                    # "blank" and "missing" are separated here because they point at
+                    # different faults — a proxy that sets the header from an unset
+                    # variable versus a caller that never had one — and the body, being
+                    # mute, is no place to tell them apart.
+                    reason = "blank" if header_arrived else "missing"
                     self._on_rejected(
-                        scope, outcome=error.code, detail=f"missing {REQUEST_ID_HEADER}"
+                        scope, outcome=error.code, detail=f"{reason} {REQUEST_ID_HEADER}"
                     )
                 await send_platform_error(scope, receive, send, status=self._status, error=error)
                 return
