@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from application.exceptions import MalformedRequestError
 from interface.http.api_base import API_BASE_URL
 from interface.http.edge import HEALTH_PATH
 from interface.http.errors import ERROR_CONTRACT
@@ -88,11 +89,22 @@ class TestWhatACallerMayReceive:
             if "const" in code
         }
 
-        # Including the one identity with no class behind it: an out-of-contract answer
-        # is still an answer a caller receives, and its body needs a schema like any
-        # other. Written out, because there is nothing to derive it from — which is also
-        # why nothing but this test would catch it going missing.
-        expected = {error.__name__ for error in ERROR_CONTRACT} | {"InternalError"}
+        # Two additions to `ERROR_CONTRACT`, each for the same reason: nothing derives
+        # them, so nothing but this line would notice them leaving the document.
+        #
+        # `MalformedRequestError` has no row in the table because `RequestIdMiddleware`
+        # answers with it before routing (see `error_schemas`), yet a caller does receive
+        # it — drop its model from the three unions and, without this, every test still
+        # passes while the document stops describing a 422 the service really returns.
+        #
+        # `InternalError` is written out because it is the one identity with no class
+        # behind it; an out-of-contract answer is still an answer, and its body needs a
+        # schema like any other.
+        expected = (
+            {error.__name__ for error in ERROR_CONTRACT}
+            | {MalformedRequestError.__name__}
+            | {"InternalError"}
+        )
         assert expected <= described
 
     def test_the_422_body_is_this_services_shape_not_fastapis(self) -> None:
