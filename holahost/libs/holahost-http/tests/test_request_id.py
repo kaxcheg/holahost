@@ -33,6 +33,24 @@ def test_absence_is_recorded_and_never_synthesized() -> None:
     assert "X-Request-ID" not in response.headers
 
 
+def test_a_blank_header_is_recorded_as_an_absence() -> None:
+    """`X-Request-ID:` with no value is not an id — it is the absence, spelled longer."""
+    response = TestClient(build_app()).get("/echo", headers={"X-Request-ID": ""})
+    assert response.json() == {"request_id": None, "timed": True}
+    assert "X-Request-ID" not in response.headers
+
+
+def test_a_whitespace_only_header_is_recorded_as_an_absence() -> None:
+    response = TestClient(build_app()).get("/echo", headers={"X-Request-ID": "   "})
+    assert response.json()["request_id"] is None
+
+
+def test_surrounding_whitespace_is_not_part_of_the_id() -> None:
+    response = TestClient(build_app()).get("/echo", headers={"X-Request-ID": " abc-123 "})
+    assert response.json()["request_id"] == "abc-123"
+    assert response.headers["X-Request-ID"] == "abc-123"
+
+
 def test_header_is_matched_case_insensitively() -> None:
     response = TestClient(build_app()).get("/echo", headers={"x-request-id": "lower"})
     assert response.json()["request_id"] == "lower"
@@ -93,6 +111,34 @@ class TestRequiredHeader:
             "message": "invalid payload: X-Request-ID",
             "details": {"field": "X-Request-ID"},
         }
+
+    def test_a_blank_header_is_refused_like_an_absent_one(self) -> None:
+        # The gate used to be `if request_id is None`, which a header sent with an empty
+        # value walked straight through: presence satisfied, correlation key gone.
+        response = TestClient(build_guarded_app()).get("/echo", headers={"X-Request-ID": ""})
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "MalformedRequestError"
+
+    def test_a_whitespace_only_header_is_refused_too(self) -> None:
+        response = TestClient(build_guarded_app()).get("/echo", headers={"X-Request-ID": " "})
+        assert response.status_code == 422
+
+    def test_the_log_separates_a_blank_header_from_a_missing_one(self) -> None:
+        """Different faults — a proxy setting the header from an unset variable, versus a
+        caller that never had one — and the mute body cannot tell them apart."""
+        recorded: list[tuple[str, str | None]] = []
+
+        def on_rejected(scope: Scope, *, outcome: str, detail: str | None = None) -> None:
+            recorded.append((outcome, detail))
+
+        client = TestClient(build_guarded_app(on_rejected=on_rejected))
+        client.get("/echo", headers={"X-Request-ID": ""})
+        client.get("/echo")
+
+        assert recorded == [
+            ("MalformedRequestError", "blank x-request-id"),
+            ("MalformedRequestError", "missing x-request-id"),
+        ]
 
     def test_exempt_path_is_served_without_the_header(self) -> None:
         assert TestClient(build_guarded_app()).get("/health").status_code == 200
