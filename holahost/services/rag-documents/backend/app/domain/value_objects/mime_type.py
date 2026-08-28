@@ -22,7 +22,7 @@ class MimeType:
 
     Determined by content-sniffing, not the client-supplied header (spec §3.8) — but a
     violation still means "the client uploaded an unsupported file" (US-R01: 415
-    ERR_UNSUPPORTED_MEDIA_TYPE), so this raises `DomainValidationError`, not a plain
+    UnsupportedMediaTypeError), so this raises `DomainValidationError`, not a plain
     `ValueError`.
 
     :param value: The sniffed MIME type string.

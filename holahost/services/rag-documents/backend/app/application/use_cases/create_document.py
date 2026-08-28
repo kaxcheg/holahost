@@ -18,13 +18,12 @@ from application.ports.embedding import EmbeddingModel
 from application.ports.ingestion import FileParser, TextChunker
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
-from application.use_cases._internal_errors import wrap_value_error
 from domain.entities.chunk import Chunk
 from domain.entities.document import MAX_CHUNKS_PER_DOCUMENT, Document
-from domain.exceptions import DomainValidationError
+from domain.exceptions import ChunkCountExceededError, DomainValidationError
 from domain.value_objects.chunk_index import ChunkIndex
 from domain.value_objects.document_id import DocumentId
-from domain.value_objects.document_name import DocumentName
+from domain.value_objects.document_name import MAX_DOCUMENT_NAME_LENGTH, DocumentName
 from domain.value_objects.mime_type import ALLOWED_MIME_TYPES, MimeType
 from domain.value_objects.owner_subject import OwnerSubject
 
@@ -39,12 +38,14 @@ class CreateDocumentUseCase:
     documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
 
-    @wrap_value_error
     def execute(self, cmd: CreateDocumentCmd) -> DocumentView:
         """Run the create pipeline and persist the result.
 
-        :raises ApplicationError: wraps a bare ``ValueError`` from a VO/entity
-            construction — an internal invariant violation, never client-fixable.
+        :raises DomainValidationError: with `field` unset — a VO/entity invariant no
+            caller input could have violated. Passed through deliberately: the
+            interface layer answers `500` with the reason in the log alone
+            (`interface/http/errors.py`). The `field`-carrying ones are caught and
+            translated below, each at the construction that can raise it.
         :raises UnsupportedMediaTypeError: `cmd.mime_type` is not supported, or (from
             `FileParser` directly) the file's sniffed content does not match it.
         :raises InvalidPayloadError: `cmd.name` is empty, too long, or has control chars.
@@ -69,7 +70,9 @@ class CreateDocumentUseCase:
         try:
             name = DocumentName(cmd.name)
         except DomainValidationError as e:
-            raise InvalidPayloadError(field=e.field or "name") from e
+            raise InvalidPayloadError(
+                field=e.field or "name", limit=MAX_DOCUMENT_NAME_LENGTH
+            ) from e
 
         if len(cmd.content) > MAX_UPLOAD_SIZE:
             raise UploadTooLargeError(limit=MAX_UPLOAD_SIZE, actual=len(cmd.content))
@@ -97,11 +100,17 @@ class CreateDocumentUseCase:
 
         try:
             document = Document.create(document_id, owner, name, mime_type, new_chunks)
-        except DomainValidationError:
+        except ChunkCountExceededError as e:
             # Backstop: the check above already enforces len(chunks) <= MAX_CHUNKS_PER_DOCUMENT,
             # so this should be unreachable — kept because Document.create's own contract
             # declares it a possible client-facing raise (domain/entities/document.py).
-            raise TooManyChunksError(limit=MAX_CHUNKS_PER_DOCUMENT, actual=len(chunks)) from None
+            #
+            # The narrow type is the point. `Document.create` raises `DomainValidationError`
+            # for two further invariants that are nobody's client's fault ("at least one
+            # chunk", "all chunks belong to this document"); catching the base here would
+            # answer those with 422 TooManyChunksError — `actual=0`, no less — dressing an
+            # internal defect up as the caller's mistake. They stay uncaught and surface as 500.
+            raise TooManyChunksError(limit=MAX_CHUNKS_PER_DOCUMENT, actual=len(chunks)) from e
 
         documents_repo = self.documents_repo_factory(owner)
         with self.uow:

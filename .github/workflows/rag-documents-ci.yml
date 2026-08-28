@@ -30,6 +30,13 @@ jobs:
         with:
           fetch-depth: 0 # full history — needed for the diff-based path filter below
 
+      # The filter covers the pipeline itself, not just the code it builds. Matching only
+      # the service and the libraries left a PR that touches nothing but
+      # .github/actions/ssm-migrate-deploy (the script that runs migrations and swaps the
+      # container on staging and prod), one of these workflow files, .pre-commit-config.yaml
+      # or .tool-versions (the single source of the Python version the Dockerfile and every
+      # action read) reporting green having built nothing and run no test — on exactly the
+      # code where a silent break costs the most.
       - name: Detect rag-documents changes
         id: filter
         run: |
@@ -37,7 +44,7 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
-          if git diff --name-only "$base" HEAD | grep -qE '^holahost/(services/rag-documents|libs/holahost-(auth|http))/'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/rag-documents|libs/holahost-(auth|http))/|\.github/(actions/|workflows/rag-documents-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"

@@ -1,12 +1,14 @@
 # Metrics sourced from the REAL op_completed structured-log event
 # (backend/app/interface/http/router.py::_log_success, errors.py::_log_failure), not spec prose —
 # covers every §8.7 metrics-table row that has actual supporting log data, plus adoption/business
-# metrics not in §8.7 at all. Two §8.7 rows do NOT have supporting data at all: `stage_ms`
-# (parse/chunk/embed/persist breakdown) and `top_score` are both in config/logging.py's field
-# ALLOWLIST but never populated by any caller — confirmed via repo-wide grep, not assumed. No
-# CloudWatch filter can recover data the app never logs; that needs an application-layer change,
-# out of this ticket's infra/CI-CD scope (flagged, not fixed here — see
-# .build-state/.../clarifications.md).
+# metrics not in §8.7 at all. `stage_ms` and `top_score` are now among them: an earlier revision
+# of this file recorded that both were "never populated by any caller", which had stopped being
+# true — `_log_success` passes `stage_ms=timer.as_dict()` on create/replace and
+# `top_score=result.hits[0].score` on search, and `_StageTimer` exists for no other purpose. Both
+# are read below, which is what §8.7's "разбивка ingest по стадиям" and "распределение top_score"
+# rows asked for: without the first, the ingest p95 alarm fires with no way to tell a slow parse
+# from a slow embed or a slow persist, and without the second, SIMILARITY_THRESHOLD (§3.7, "калибруется
+# замером") has nothing to be calibrated against.
 #
 # `route` has TWO DIFFERENT FORMATS depending on outcome — found by reading the real code, not
 # assumed:
@@ -18,13 +20,18 @@
 #   The resolved-path prefix never appears in success-path logging, so its mere presence reliably
 #   identifies "this was a failed request" without needing to also check `outcome`.
 #
-# outcome ∈ {"success", "ERR_INTERNAL", "ERR_RATE_LIMIT", "ERR_INVALID_PAYLOAD", "401", "503",
-#            str(status_code)} — a mix of ERR_* application codes and bare numeric-status strings.
-# Clean enough to match specific known values (ERR_RATE_LIMIT, 401/403, the 5xx set below) but NOT
-# clean enough for a general "all 4xx" filter — no shared prefix across the non-numeric ERR_*
-# codes — so §8.7's "доля неуспешных по классам" row is only half-covered here (5xx). A raw
-# numeric status_code field logged unconditionally would close this cleanly — also flagged, not
-# fixed here (same scope boundary as stage_ms/top_score).
+# outcome ∈ {"success", "InternalError", "RateLimitExceededError", "InvalidPayloadError", "401",
+#            "503", str(status_code)} — a mix of error identities (each one an exception class's
+# own name, §7.6) and bare numeric-status strings. Clean enough to match specific known values
+# (RateLimitExceededError, 401/403, the 5xx set below) but NOT clean enough for a general "all 4xx"
+# filter — the identities share no prefix — so §8.7's "доля неуспешных по классам" row is only
+# half-covered here (5xx). A raw numeric status_code field logged unconditionally would close this
+# cleanly — flagged, not fixed here (same scope boundary as stage_ms/top_score).
+#
+# These literals are the service's contract, copied: an error class renamed in the code and not
+# here silently stops matching, and `treat_missing_data = "notBreaching"` then reads the dead
+# metric as health. `tests/unit/interface/http/test_openapi.py` pins the vocabulary; keeping these
+# in step with it is a manual step on any rename.
 #
 # p50/p90/p95/p99 etc. for duration are NOT separate metrics/filters — IngestDurationMs and
 # SearchDurationMs already carry every raw data point; any percentile is computed from them at
@@ -41,7 +48,7 @@
 resource "aws_cloudwatch_log_metric_filter" "http_5xx" {
   name           = "rag-documents-${var.env}-5xx"
   log_group_name = aws_cloudwatch_log_group.app.name
-  pattern        = "{ $.event = \"op_completed\" && ($.outcome = \"ERR_INTERNAL\" || $.outcome = \"5*\") }"
+  pattern        = "{ $.event = \"op_completed\" && ($.outcome = \"InternalError\" || $.outcome = \"5*\") }"
 
   metric_transformation {
     name      = "Http5xxCount"
@@ -120,6 +127,48 @@ resource "aws_cloudwatch_metric_alarm" "search_p95" {
   treat_missing_data  = "notBreaching"
 }
 
+# ---- §8.7: ingest stage breakdown (stage_ms) ---------------------------------------------------
+# One metric per stage rather than one filter with four transformations: a metric filter's value
+# is a single JSON selector, so the stages are four series by construction. Nested selectors
+# (`$.stage_ms.parse`) are what `_log_success` actually emits — `_StageTimer.as_dict()` writes the
+# four keys as one object, and `record_remainder` guarantees they sum to `duration_ms`, so the four
+# series can be read against IngestDurationMs directly.
+#
+# Same pattern as ingest_duration above, and for the same reason: `stage_ms` is populated on
+# create/replace only (GET/DELETE pass None, search never has one), and only on success.
+
+resource "aws_cloudwatch_log_metric_filter" "ingest_stage_ms" {
+  for_each = toset(["parse", "chunk", "embed", "persist"])
+
+  name           = "rag-documents-${var.env}-ingest-stage-${each.key}"
+  log_group_name = aws_cloudwatch_log_group.app.name
+  pattern        = "{ $.event = \"op_completed\" && $.outcome = \"success\" && ($.route = \"POST /documents\" || $.route = \"PUT /documents/{id}\") }"
+
+  metric_transformation {
+    name      = "IngestStageMs${title(each.key)}"
+    namespace = "RagDocuments/${var.env}"
+    value     = "$.stage_ms.${each.key}"
+  }
+}
+
+# ---- §8.7: top_score distribution --------------------------------------------------------------
+# Gated on `$.hits > 0`, not on the presence of `top_score`: `_log_success` sets
+# `top_score=result.hits[0].score if result.hits else None`, so the two conditions are the same
+# condition — and `hits` is an ordinary number the filter syntax handles without relying on how a
+# JSON null interacts with an existence match.
+
+resource "aws_cloudwatch_log_metric_filter" "search_top_score" {
+  name           = "rag-documents-${var.env}-search-top-score"
+  log_group_name = aws_cloudwatch_log_group.app.name
+  pattern        = "{ $.event = \"op_completed\" && $.outcome = \"success\" && $.route = \"POST /documents/{id}/search\" && $.hits > 0 }"
+
+  metric_transformation {
+    name      = "SearchTopScore"
+    namespace = "RagDocuments/${var.env}"
+    value     = "$.top_score"
+  }
+}
+
 # ---- Volume / adoption (business-facing, not in §8.7 — legible to a non-developer) -----------
 
 resource "aws_cloudwatch_log_metric_filter" "document_created" {
@@ -180,7 +229,7 @@ resource "aws_cloudwatch_log_metric_filter" "ingest_chunk_count" {
 resource "aws_cloudwatch_log_metric_filter" "rate_limit_failures" {
   name           = "rag-documents-${var.env}-rate-limit-failures"
   log_group_name = aws_cloudwatch_log_group.app.name
-  pattern        = "{ $.event = \"op_completed\" && $.outcome = \"ERR_RATE_LIMIT\" }"
+  pattern        = "{ $.event = \"op_completed\" && $.outcome = \"RateLimitExceededError\" }"
 
   metric_transformation {
     name      = "RateLimitFailureCount"

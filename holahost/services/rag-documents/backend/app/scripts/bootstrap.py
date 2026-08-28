@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import os
 import time
+from typing import cast
 
 from fastapi import FastAPI
 from sqlalchemy import Engine, text
 
 from config.logging import configure_logging, log_event
+from domain.value_objects.embedding import EMBEDDING_DIM
+from infrastructure.embedding.fastembed_embedding_model import FastembedEmbeddingModel
 from interface.http.app import create_app
 from interface.http.dependencies import get_embedding_model, get_engine, get_settings
 
@@ -79,6 +82,37 @@ def _assert_rls_is_enforced(engine: Engine) -> None:
         )
 
 
+def _assert_embedding_dimension_matches(model_name: str, actual_dim: int) -> None:
+    """Refuse to serve traffic on a model whose vectors do not fit the schema (§3.7).
+
+    `EMBEDDING_MODEL` is environment configuration — a different value per `.env` is a
+    supported thing to do — while `EMBEDDING_DIM` is a hardcoded domain constant that
+    also fixes the `vector(384)` column and `Embedding`'s own invariant. Nothing tied
+    those two together, so pointing the setting at, say, `all-mpnet-base-v2` (768) left
+    a process that started cleanly and answered `GET /health` with 200, while every
+    single ingest and search failed: `Embedding.__post_init__` raises, `embed_texts`'
+    `except Exception` turns it into `EmbeddingFailedError`, and nothing catches that —
+    500 `InternalError`, on 100% of traffic, until someone reads a log. `RecursiveTextChunker`
+    already fails fast at composition time for the same class of misconfiguration
+    (`chunk_window > max_input_tokens`); this is the same guard for the dimension.
+
+    It does NOT cover the other half of a model swap: a *different* model of the same
+    384 dimensions passes this check, and its vectors are simply not comparable to the
+    ones already stored — searches would return confident nonsense rather than errors.
+    Nothing here can detect that; it needs the model identity recorded alongside the
+    vectors and a re-embed on change, which the schema has no column for today.
+    """
+    if actual_dim != EMBEDDING_DIM:
+        raise RuntimeError(
+            f"refusing to start: EMBEDDING_MODEL={model_name!r} produces {actual_dim}-dimensional "
+            f"vectors, but this service stores and searches {EMBEDDING_DIM}-dimensional ones "
+            "(domain.value_objects.embedding.EMBEDDING_DIM, and the vector column derived from "
+            "it). Every ingest and every search would fail. Point EMBEDDING_MODEL back at a "
+            f"{EMBEDDING_DIM}-dimensional model, or migrate the column and the constant together "
+            "and re-embed everything already stored."
+        )
+
+
 def bootstrap() -> FastAPI:
     _fetch_password_if_needed()
     configure_logging()
@@ -88,7 +122,12 @@ def bootstrap() -> FastAPI:
     # get_engine() builds the one process-wide connection pool; the guard then spends one
     # query on it proving this deployment's role cannot bypass RLS (see the docstring).
     _assert_rls_is_enforced(get_engine())
-    get_embedding_model()  # eager load — §3.1: model must be ready before serving traffic
+    # Eager load — §3.1: the model must be ready before traffic arrives. `cast`, not an
+    # isinstance check, same as `dependencies.get_chunker`: `dimension()` is an extra
+    # method of the one adapter this getter ever constructs, deliberately not part of
+    # the `EmbeddingModel` port (§8.0).
+    model = cast(FastembedEmbeddingModel, get_embedding_model())
+    _assert_embedding_dimension_matches(get_settings().embedding_model, model.dimension())
     load_ms = (time.monotonic() - start) * 1000
 
     app = create_app()

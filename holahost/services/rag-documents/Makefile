@@ -2,23 +2,29 @@
 .PHONY: help lint format typecheck test test-int lint-imports \
         dev-up dev-down dev-down-v dev-logs \
         migrate-dev migrate-staging migrate-prod \
-        ci-local hooks-install
+        ci-local ci-image ci-tf hooks-install
 
 BE := backend
 REPO_ROOT := ../../..
 DEV_ENV_FILE := infra/envs/dev/.env
 # Single source of truth for the image's Python version, same as the Dockerfile/CI use
-# (.tool-versions). `DEV_` prefix: only `dev-up`'s own explicit `docker build` below ever reads
-# it — nothing on the staging/prod side needs a Python version at all any more (docker-compose.yml
-# has no `build:` section), so a generic `PYTHON_VERSION` name would overstate its scope.
-DEV_PYTHON_VERSION := $(shell awk '$$1=="python"{print $$2}' $(REPO_ROOT)/.tool-versions)
+# (.tool-versions). Read by the two targets that build an image — `dev-up` and `ci-image` — and
+# by nothing else: nothing on the staging/prod side needs a Python version at all any more
+# (docker-compose.yml has no `build:` section). Not exported: GNU Make exports only variables
+# that came from its own environment or the command line, never ones defined here, so a
+# `docker compose` child still sees it unset, which is what docker-compose.yml expects.
+PYTHON_VERSION := $(shell awk '$$1=="python"{print $$2}' $(REPO_ROOT)/.tool-versions)
 # Not derived from a file — this is the dev literal itself (docker-compose.yml's header comment
-# explains why `rag-documents:dev` specifically makes the build/pull fallback work). `DEV_` prefix,
-# same reasoning as `DEV_PYTHON_VERSION` above: this is only ever the *default* value handed to
+# explains why `rag-documents:dev` specifically makes the build/pull fallback work). `DEV_` prefix
+# because the scope really is dev-only: this is only ever the *default* value handed to
 # the `IMAGE` env var dev commands export — migrate-staging/migrate-prod below never reference it
 # at all, they rely entirely on a command-line `IMAGE=<digest>` override instead (see their own
 # comment) — a generic `IMAGE` name here would suggest it's the one shared source, which it isn't.
 DEV_IMAGE := rag-documents:dev
+# What `ci-image` builds and measures — the same tag and the same ceiling CI uses, so the number
+# a developer sees locally is the number that gates the PR.
+CI_IMAGE := rag-documents:ci
+MAX_IMAGE_MB := 900
 # One prefix instead of repeating four parts on six recipes. `-f docker-compose.dev.yml` is the
 # dev-only overlay that publishes the app port to the host (see that file) — it is never synced to
 # an instance, which is what keeps 0.0.0.0:8080 off staging/prod. `--env-file` supplies Compose's
@@ -40,9 +46,9 @@ DEV_COMPOSE := IMAGE=$(DEV_IMAGE) \
 # per-command, not an implicit blanket `export` a reader has to scroll up to find. `--env-file` on
 # a missing path fails loud with its own clear error ("couldn't find env file: ...", verified
 # live) — no need for `-include`'s softer missing-file tolerance, since nothing here runs at
-# Make-parse time any more. `PYTHON_VERSION` only feeds `dev-up`'s own explicit `docker build`
-# below — `docker-compose.yml` has no `build:` section at all (see its own header comment), so no
-# other recipe needs it, and staging/prod don't either any more (the `PYTHON_VERSION=unused`
+# Make-parse time any more. `PYTHON_VERSION` feeds only the two `docker build`
+# recipes (`dev-up`, `ci-image`) — `docker-compose.yml` has no `build:` section at all (see its own
+# header comment), so no compose recipe needs it, and staging/prod don't either any more (the `PYTHON_VERSION=unused`
 # placeholder that used to be required on every staging/prod command is gone along with the
 # `build:` section that made it necessary).
 
@@ -93,7 +99,7 @@ openapi-check: ## fail if docs/openapi.json is stale (CI parity)
 # service's `depends_on: condition: service_healthy` — verified from a completely clean slate.
 dev-up: ## build, migrate, then start the local stack (creates the backbone network if missing)
 	docker network create backbone 2>/dev/null || true
-	docker build --build-arg PYTHON_VERSION=$(DEV_PYTHON_VERSION) -f Dockerfile -t $(DEV_IMAGE) $(REPO_ROOT)
+	docker build --build-arg PYTHON_VERSION=$(PYTHON_VERSION) -f Dockerfile -t $(DEV_IMAGE) $(REPO_ROOT)
 	$(MAKE) migrate-dev
 	$(DEV_COMPOSE) up -d
 dev-down: ## stop the dev stack
@@ -188,6 +194,29 @@ migrate-prod: ## run by the promote-prod pipeline via SSM; manual use: make migr
 # root — the hooks' file paths and discovery are repo-root-relative.
 hooks-install: ## install git hooks (repo-root pre-commit config)
 	cd $(REPO_ROOT) && pre-commit install
-ci-local: ## local parity with the ci pipeline (pre-commit + full test suite)
+# Three targets, not one, and the split is the honest part. `ci-local` used to promise "local
+# parity with the ci pipeline" while running only pre-commit and pytest — so a renamed route or a
+# response field that quietly became optional passed locally and failed the PR on `openapi-check`,
+# the one check most likely to catch exactly that. What CI runs and these three cover between them:
+# pre-commit, unit + integration tests, openapi-check (ci-local); docker build and §12's size
+# budget (ci-image); terraform validate on all three roots (ci-tf). What is deliberately NOT
+# covered: `terraform plan`, which needs the platform AWS account and a role that does not exist
+# yet, and is gated on `vars.AWS_ACCOUNT_ID` in CI for the same reason.
+ci-local: ## pre-commit + the full test suite + the OpenAPI contract check (no Docker/Terraform)
 	cd $(REPO_ROOT) && pre-commit run --all-files
 	cd $(BE) && poetry run pytest
+	$(MAKE) openapi-check
+ci-image: ## the CI checks that need Docker: build the image, then §12's size budget
+	docker build --build-arg PYTHON_VERSION=$(PYTHON_VERSION) -f Dockerfile -t $(CI_IMAGE) $(REPO_ROOT)
+	@size_mb=$$(( $$(docker image inspect $(CI_IMAGE) --format '{{.Size}}') / 1000000 )); \
+	echo "$(CI_IMAGE) is $${size_mb} MB (ceiling $(MAX_IMAGE_MB) MB)"; \
+	if [ "$$size_mb" -gt "$(MAX_IMAGE_MB)" ]; then \
+		echo "image grew past the §12 budget — check .dockerignore and new dependencies"; \
+		exit 1; \
+	fi
+# `-backend=false`: validate needs no state and no credentials, which is exactly why CI can run it
+# on a fork PR. Same three roots, same order.
+ci-tf: ## the CI checks that need Terraform: validate common + both env roots
+	cd infra/common && terraform init -backend=false && terraform validate
+	cd infra/envs/staging && terraform init -backend=false && terraform validate
+	cd infra/envs/prod && terraform init -backend=false && terraform validate

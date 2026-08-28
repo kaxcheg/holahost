@@ -18,6 +18,21 @@ from domain.value_objects.owner_subject import OwnerSubject
 _DEFAULT_OWNER = OwnerSubject("user-123")  # matches every test command's owner in this suite
 
 
+def _require_open_unit_of_work(port: str) -> None:
+    """Fail loudly on a port call made outside an open ``UnitOfWork`` (§8.0).
+
+    The rule these fakes exist to protect: "каждый вызов `DocumentsRepo`/`VectorSearch`
+    обязан идти внутри явного `with uow:`". Nothing enforced it, so a use case that
+    dropped its `with self.uow:` passed the entire unit suite and would have failed
+    only against a real connection.
+    """
+    if not FakeUnitOfWork.any_open():
+        raise AssertionError(
+            f"{port} call outside an open UnitOfWork — §8.0 requires every call to run "
+            "inside an explicit `with uow:`"
+        )
+
+
 class FakeFileParser:
     """Returns a preset list of fragments, or raises a preset exception."""
 
@@ -70,25 +85,37 @@ class FakeDocumentsRepo(DocumentsRepo):
     adapter — defaults to ``_DEFAULT_OWNER`` since every command in this test suite
     uses that owner, so most call sites never need to pass one explicitly.
 
-    Also implements ``DocumentsRepoFactory`` via ``__call__``: an instance can be
-    passed directly wherever a use case expects a factory (``owner`` is already
-    bound, so the call just returns ``self``), no separate factory needed in tests.
+    Also implements ``DocumentsRepoFactory`` via ``__call__``, which **rebinds** the
+    owner exactly as the real factory does by constructing a repo for it. Returning
+    ``self`` while ignoring the argument made the whole owner-scoping contract
+    untestable: a use case that asked the factory for the wrong subject got a repo
+    scoped to the right one anyway, so §8.0's isolation rule held only in comments.
     """
 
     def __init__(
-        self, documents: list[Document] | None = None, *, owner: OwnerSubject = _DEFAULT_OWNER
+        self,
+        documents: list[Document] | None = None,
+        *,
+        owner: OwnerSubject = _DEFAULT_OWNER,
+        uow: FakeUnitOfWork | None = None,
     ) -> None:
-        super().__init__(uow=FakeUnitOfWork(), owner=owner)
+        super().__init__(uow=uow or FakeUnitOfWork(), owner=owner)
         self._by_id: dict[DocumentId, Document] = {d.id: d for d in (documents or [])}
         self.added: list[Document] = []
         self.updated: list[Document] = []
         self.deleted: list[DocumentId] = []
+        self.factory_owners: list[OwnerSubject] = []
 
     def __call__(self, owner: OwnerSubject) -> DocumentsRepo:
+        self.factory_owners.append(owner)
+        self._owner = owner
         return self
 
     def _bind_owner(self) -> None:
-        pass  # no real RLS to simulate — filtering below is against self._owner directly
+        # No real RLS to simulate — filtering below is against self._owner directly.
+        # What this does enforce is the other half of the contract: §8.0 requires every
+        # repository call to run inside an explicit `with uow:`, and nothing checked it.
+        _require_open_unit_of_work("DocumentsRepo")
 
     def _add_impl(self, document: Document) -> None:
         assert document.owner == self._owner, "add() called with mismatched owner"
@@ -112,25 +139,43 @@ class FakeDocumentsRepo(DocumentsRepo):
 
 
 class FakeVectorSearch(VectorSearch):
-    """Returns a preset list of hits regardless of the query. Owner bound at
-    construction like ``FakeDocumentsRepo``; also usable directly as a
-    ``VectorSearchFactory`` via ``__call__``."""
+    """Returns a preset list of hits for the owner they were registered under, and
+    nothing for anyone else. Owner bound at construction and rebound by ``__call__``,
+    exactly like ``FakeDocumentsRepo`` and for the same reason: hits returned
+    regardless of ``owner`` made the isolation contract (US-R06, A-13) unfalsifiable.
+
+    Records every call, so a test can pin what the use case actually asked for —
+    ``document_id``, ``k`` and ``threshold`` were all ignored as well."""
 
     def __init__(
-        self, hits: list[SearchHit] | None = None, *, owner: OwnerSubject = _DEFAULT_OWNER
+        self,
+        hits: list[SearchHit] | None = None,
+        *,
+        owner: OwnerSubject = _DEFAULT_OWNER,
+        uow: FakeUnitOfWork | None = None,
     ) -> None:
-        super().__init__(uow=FakeUnitOfWork(), owner=owner)
+        super().__init__(uow=uow or FakeUnitOfWork(), owner=owner)
         self._hits = hits if hits is not None else []
+        self._hits_owner = owner
+        self.factory_owners: list[OwnerSubject] = []
+        self.calls: list[tuple[DocumentId, int, float]] = []
 
     def __call__(self, owner: OwnerSubject) -> VectorSearch:
+        self.factory_owners.append(owner)
+        self._owner = owner
         return self
 
     def _bind_owner(self) -> None:
-        pass
+        _require_open_unit_of_work("VectorSearch")
 
     def _top_k_impl(
         self, document_id: DocumentId, query: Embedding, k: int, threshold: float
     ) -> list[SearchHit]:
+        self.calls.append((document_id, k, threshold))
+        if self._owner != self._hits_owner:
+            # What RLS does in production: another subject's chunks are simply not
+            # visible, and an empty result is a valid, non-error outcome (§8.0).
+            return []
         return self._hits
 
 
@@ -149,13 +194,28 @@ class FakeRateLimiter:
 
 
 class FakeUnitOfWork:
-    """A real context manager: records commits/rollbacks, does not swallow exceptions."""
+    """A real context manager: records commits/rollbacks, does not swallow exceptions.
+
+    Also tracks, class-wide, how many of these are currently open — which is what
+    ``_require_open_unit_of_work`` reads. Class-wide rather than per instance because
+    §8.0's rule is "no repository call outside a transaction", not "inside this
+    particular object": a unit test has exactly one unit of work in play, and keying
+    the check on identity would mean threading it through all ~40 fake constructions
+    to assert something none of them is actually about.
+    """
+
+    _open = 0
 
     def __init__(self) -> None:
         self.commits = 0
         self.rollbacks = 0
 
+    @classmethod
+    def any_open(cls) -> bool:
+        return cls._open > 0
+
     def __enter__(self) -> FakeUnitOfWork:
+        FakeUnitOfWork._open += 1
         return self
 
     def __exit__(
@@ -164,6 +224,7 @@ class FakeUnitOfWork:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        FakeUnitOfWork._open -= 1
         if exc_type is None:
             self.commits += 1
         else:

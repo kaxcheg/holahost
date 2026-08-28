@@ -23,7 +23,7 @@ def sniff_mime_type(content: bytes, filename: str | None) -> str:
     :return: A MIME type string. Not guaranteed to be a member of
         `domain.value_objects.mime_type.ALLOWED_MIME_TYPES` — an unrecognized binary
         format deliberately returns a type outside that whitelist so `MimeType`'s own
-        check rejects it (415 `ERR_UNSUPPORTED_MEDIA_TYPE`), rather than silently
+        check rejects it (415 `UnsupportedMediaTypeError`), rather than silently
         defaulting to text and failing later with a confusing parse error.
     """
     if content.startswith(_PDF_MAGIC):

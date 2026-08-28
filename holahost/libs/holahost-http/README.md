@@ -36,16 +36,22 @@ which is what makes them a library rather than a pattern to re-derive.
 
 ## What it does not provide
 
-**The error taxonomy.** Which codes exist and which status each maps to is a service's
+**The error taxonomy.** Which errors exist and which status each maps to is a service's
 own contract. This library defines the envelope's *shape* and the base class a service's
-error hierarchy inherits (`code` + `details_dict()`), plus the two codes its own
-middleware emit — `ERR_PAYLOAD_TOO_LARGE` and `ERR_RATE_LIMIT`. A service keeps its own
-`ApplicationError` hierarchy and inherits `PlatformError` from it.
+error hierarchy inherits (`code` + `details_dict()`), plus the two errors its own
+middleware raise — `PayloadTooLargeError` and `RateLimitExceededError`. A service keeps
+its own `ApplicationError` hierarchy and inherits `PlatformError` from it.
 
-**HTTP status on the exception.** `PlatformError` carries none. The same code can be two
-statuses depending on where it was raised — `ERR_PAYLOAD_TOO_LARGE` is 413 for a body
-refused unread and 422 for parsed content that turned out too large — so status is
-decided where the response is written, not stored on the error.
+**An error's identity is its class name**, verbatim: `code` is a property returning
+`type(self).__name__`, declared nowhere and transformed into nothing. Two halves of one
+contract — identity and the shape of `details` — then live on one class, and a value read
+out of a log greps straight back to the code that produced it. Renaming an error class is
+a change to the wire contract, and should be reviewed as one.
+
+**HTTP status on the exception.** `PlatformError` carries none. Where an error is raised
+decides its status — a body refused unread is 413, parsed content that turned out too
+large is 422 — so status is decided where the response is written, not stored on the
+error.
 
 **The `X-Request-ID` rejection's code.** The *rule* — every real entry path attaches the
 header, so its absence means a misconfigured caller — is platform-wide and lives here.
@@ -82,12 +88,23 @@ through as `max_bytes` therefore rejects a file of exactly that size, with a 413
 depends on how many bytes of boundary the client happened to send:
 
 ```python
-MAX_REQUEST_BODY_SIZE = body_cap_for_upload(MAX_UPLOAD_SIZE)
+Middleware(
+    BodySizeLimitMiddleware,
+    max_bytes=body_cap_for_upload(MAX_UPLOAD_SIZE),  # what the edge enforces
+    reported_limit=MAX_UPLOAD_SIZE,                  # what a 413 advertises
+)
 ```
 
 The result is an outer bound for the edge, not a replacement for the service's exact check
 on the file it extracted — that check is what a caller is told it exceeded, this one only
 decides how much gets read before anyone can look.
+
+That is also why the two arguments differ. `max_bytes` is an internal transport number;
+without `reported_limit` a 413 from here advertised it, which is *above* the limit the
+service enforces on the file — so a client that trimmed to the advertised number got past
+this middleware and was refused again by the service's own check, with the same status and
+code and a different `limit`. `reported_limit` defaults to `max_bytes`, which is correct
+for a service that caps a body it does not otherwise check.
 
 ## Rate-limit ceilings
 

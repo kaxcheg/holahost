@@ -26,6 +26,7 @@ from application.limits import MAX_PARSED_TEXT_LENGTH, MAX_UPLOAD_SIZE
 from application.ports.ingestion import TextFragment
 from application.use_cases.create_document import CreateDocumentUseCase
 from domain.entities.document import MAX_CHUNKS_PER_DOCUMENT
+from domain.exceptions import ChunkCountExceededError, DomainValidationError
 from domain.value_objects.page_number import PageNumber
 
 _CMD = CreateDocumentCmd(
@@ -110,3 +111,26 @@ class TestCreateDocumentUseCase:
         with pytest.raises(UnsupportedMediaTypeError):
             _uc(documents_repo=documents_repo).execute(cmd)
         assert documents_repo.added == []
+
+
+class TestInternalDefectsAreNotDressedUpAsClientErrors:
+    """The `Document.create` backstop catches `ChunkCountExceededError`, not the
+    `DomainValidationError` base it derives from: the base also covers two invariants
+    that are nobody's client's fault, and answering those with `422 TooManyChunksError`
+    — `actual=0`, no less — would tell the caller to fix something it never sent."""
+
+    def test_a_chunker_returning_nothing_is_not_a_too_many_chunks_error(self) -> None:
+        with pytest.raises(DomainValidationError) as exc:
+            _uc(chunks=[]).execute(_CMD)
+
+        assert not isinstance(exc.value, ChunkCountExceededError)
+        assert exc.value.field is None
+        assert "at least one chunk" in str(exc.value)
+
+    def test_the_client_facing_half_still_becomes_422(self) -> None:
+        too_many = [
+            TextFragment(text=f"chunk {i}", page=PageNumber(1))
+            for i in range(MAX_CHUNKS_PER_DOCUMENT + 1)
+        ]
+        with pytest.raises(TooManyChunksError):
+            _uc(chunks=too_many).execute(_CMD)

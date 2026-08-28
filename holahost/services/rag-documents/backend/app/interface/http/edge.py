@@ -16,6 +16,7 @@ directly, so it must not drag in the application layer to answer "what is my bas
 
 from __future__ import annotations
 
+import logging
 import time
 
 from holahost_http import body_cap_for_upload
@@ -48,6 +49,21 @@ RATE_LIMIT_WINDOW_SECONDS = 3600
 # cannot drift — see `holahost_http.body_cap_for_upload` for why the slack is needed.
 MAX_REQUEST_BODY_SIZE = body_cap_for_upload(MAX_UPLOAD_SIZE)
 
+REPORTED_UPLOAD_LIMIT = MAX_UPLOAD_SIZE
+"""The `limit` a 413 from either size gate advertises (§7.6, US-R01).
+
+The middleware enforces `MAX_REQUEST_BODY_SIZE` and `CreateDocumentUseCase` enforces
+`MAX_UPLOAD_SIZE`; both are a "too large" refusal a caller has to act on, so both have to
+name the same number or the advice contradicts itself. It is the file limit, not the
+derived body cap: the cap is an internal transport number, and a caller told to trim to
+it landed just above the application's own check and was refused a second time with a
+different `limit`.
+
+Re-exported here rather than imported straight from `application.limits` by `app.py`,
+for the same reason everything else in this module is: what the edge is parameterised
+with is stated in one place, and `app.py` holds only the wiring.
+"""
+
 
 def bucket_for(method: str, path: str) -> str | None:
     """Which rate-limit bucket a request falls into, or `None` for unlimited (§8.1 step 3).
@@ -75,7 +91,7 @@ def log_rejection(scope: Scope, *, outcome: str, detail: str | None = None) -> N
 
     Middleware answers without ever entering a handler, so nothing downstream would log
     these — and they are exactly the outcomes §8.7's metric filters count
-    (`ERR_RATE_LIMIT`, `401`). Reads what earlier middleware left in the scope: the
+    (`RateLimitExceededError`, `401`). Reads what earlier middleware left in the scope: the
     request id and timer are always there (request-id middleware is outermost), the token
     only once authentication has succeeded, which is why an auth failure logs no
     `client_id`.
@@ -85,14 +101,20 @@ def log_rejection(scope: Scope, *, outcome: str, detail: str | None = None) -> N
     token = state.get("token")
     log_event(
         "op_completed",
+        # WARNING, flat: every outcome this can be handed is the caller's own doing —
+        # a missing header (422), bad credentials (401), an over-quota caller (429), an
+        # over-sized body (413). None of them is the service failing, and none reaches
+        # 5xx. The status itself never arrives here: `RejectionLogger`'s signature is
+        # the library's, and it passes only `outcome` and `detail`.
+        level=logging.WARNING,
         route=f"{scope['method']} {scope['path']}",
         outcome=outcome,
         duration_ms=(time.monotonic() - start) * 1000 if start is not None else 0.0,
         request_id=state.get("request_id"),
         client_id=getattr(token, "client_id", None),
         sub=getattr(token, "subject", None),
-        error_code=outcome if detail is not None else None,
-        error_message_sanitized=detail,
+        # No `error_code`: it only ever held `outcome` again — see `errors._log_failure`.
+        error_reason=detail,
     )
 
 
@@ -117,6 +139,7 @@ __all__ = [
     "MISSING_REQUEST_ID_ERROR",
     "RATE_LIMIT_WINDOW_SECONDS",
     "READ_BUCKET",
+    "REPORTED_UPLOAD_LIMIT",
     "bucket_for",
     "log_rejection",
 ]

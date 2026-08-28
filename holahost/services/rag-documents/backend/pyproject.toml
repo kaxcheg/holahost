@@ -29,6 +29,14 @@ pgvector = ">=0.3,<1.0"
 fastembed = ">=0.4,<1.0"
 numpy = ">=2.4,<3"
 langchain-text-splitters = ">=0.3,<1.0"
+# Imported directly by infrastructure/ingestion/recursive_text_chunker.py
+# (`langchain_core.documents.Document`), so it is declared here rather than relied on
+# as langchain-text-splitters' transitive dependency: the day the splitter stops
+# pulling it — or moves the module — `poetry lock` resolves cleanly and the container
+# fails at import time inside `bootstrap()`, instead of failing in CI's resolution.
+# Range mirrors what langchain-text-splitters itself accepts, so declaring it changes
+# nothing about what gets resolved today.
+langchain-core = ">=0.3.75,<2.0"
 pymupdf = ">=1.24,<2"
 python-docx = "^1.1"
 boto3 = "^1.35"

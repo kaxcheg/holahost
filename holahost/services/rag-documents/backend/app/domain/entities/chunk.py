@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.exceptions import DomainValidationError
 from domain.value_objects.chunk_id import ChunkId
 from domain.value_objects.chunk_index import ChunkIndex
 from domain.value_objects.document_id import DocumentId
@@ -45,10 +46,10 @@ class Chunk:
     page: PageNumber
 
     def __post_init__(self) -> None:
-        # Parser/chunker output, not client input directly — internal defect
-        # if empty, so plain ValueError.
+        # Parser/chunker output, not client input directly — internal defect if
+        # empty, so `field` stays None.
         if not self.text.strip():
-            raise ValueError("Chunk text must not be empty")
+            raise DomainValidationError("Chunk text must not be empty")
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Chunk):
@@ -69,7 +70,8 @@ class Chunk:
     ) -> Chunk:
         """Create a new chunk with a fresh id.
 
-        :raises ValueError: `text` is empty after `strip`.
+        :raises DomainValidationError: `text` is empty after `strip` — with `field`
+            unset, an internal defect (see `domain/exceptions.py`).
         """
         return cls(
             id=ChunkId.new(),

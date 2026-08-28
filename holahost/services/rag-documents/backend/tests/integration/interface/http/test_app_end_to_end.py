@@ -79,9 +79,9 @@ def test_missing_request_id_returns_422_against_the_real_app(
 
     assert response.status_code == 422
     body = response.json()
-    assert body["error"]["code"] == "ERR_INVALID_PAYLOAD"
-    # Mute: the one ERR_INVALID_PAYLOAD answered before authentication, so it names
-    # nothing a caller could use to get past the check. The cause goes to the log.
+    assert body["error"]["code"] == "MalformedRequestError"
+    # Mute: the one error answered before authentication, so it names nothing a caller
+    # could use to get past the check. The cause goes to the log.
     assert body["error"]["details"] == {}
     assert "X-Request-ID" not in response.text
 
