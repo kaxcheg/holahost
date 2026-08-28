@@ -45,6 +45,31 @@
         "title": "Body_replace_document_api_rag_documents_documents__document_id__put",
         "type": "object"
       },
+      "DocumentParseErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "DocumentParseError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/NoDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "DocumentParseErrorBody",
+        "type": "object"
+      },
       "DocumentResponse": {
         "description": "The one document representation shared by create, replace, and read (§7.2).",
         "properties": {
@@ -86,17 +111,44 @@
         "title": "DocumentResponse",
         "type": "object"
       },
-      "HTTPValidationError": {
+      "EmptyDocumentDetails": {
+        "additionalProperties": false,
         "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "title": "Detail",
-            "type": "array"
+          "min_chars": {
+            "description": "Characters that had to be extracted, and were not.",
+            "title": "Min Chars",
+            "type": "integer"
           }
         },
-        "title": "HTTPValidationError",
+        "required": [
+          "min_chars"
+        ],
+        "title": "EmptyDocumentDetails",
+        "type": "object"
+      },
+      "EmptyDocumentErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "EmptyDocumentError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/EmptyDocumentDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "EmptyDocumentErrorBody",
         "type": "object"
       },
       "HealthResponse": {
@@ -110,6 +162,278 @@
           "status"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "IngestErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "discriminator": {
+              "mapping": {
+                "DocumentParseError": "#/components/schemas/DocumentParseErrorBody",
+                "EmptyDocumentError": "#/components/schemas/EmptyDocumentErrorBody",
+                "InvalidPayloadError": "#/components/schemas/InvalidPayloadErrorBody",
+                "MalformedRequestError": "#/components/schemas/MalformedRequestErrorBody",
+                "ParsedTextTooLargeError": "#/components/schemas/ParsedTextTooLargeErrorBody",
+                "TooManyChunksError": "#/components/schemas/TooManyChunksErrorBody"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InvalidPayloadErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/MalformedRequestErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentParseErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/ParsedTextTooLargeErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/EmptyDocumentErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/TooManyChunksErrorBody"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "IngestErrorResponse",
+        "type": "object"
+      },
+      "InternalErrorBody": {
+        "additionalProperties": false,
+        "description": "The one out-of-contract answer. Anything this service did not publish — an\nunmapped exception, a driver failure, a defect — comes back as exactly this, with an\nempty `details` and a fixed message: the cause reaches the log, never the caller.",
+        "properties": {
+          "code": {
+            "const": "InternalError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/NoDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "InternalErrorBody",
+        "type": "object"
+      },
+      "InternalErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/InternalErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "InternalErrorResponse",
+        "type": "object"
+      },
+      "InvalidPayloadDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "description": "Which request field failed validation.",
+            "title": "Field",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That field's length limit, or null if it has none.",
+            "title": "Limit"
+          }
+        },
+        "required": [
+          "field",
+          "limit"
+        ],
+        "title": "InvalidPayloadDetails",
+        "type": "object"
+      },
+      "InvalidPayloadErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "InvalidPayloadError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/InvalidPayloadDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "InvalidPayloadErrorBody",
+        "type": "object"
+      },
+      "MalformedRequestErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "MalformedRequestError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/NoDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "MalformedRequestErrorBody",
+        "type": "object"
+      },
+      "NoDetails": {
+        "additionalProperties": false,
+        "description": "An error whose identity is the whole message — nothing to parameterise.",
+        "properties": {},
+        "title": "NoDetails",
+        "type": "object"
+      },
+      "NotFoundErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "NotFoundError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/NoDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "NotFoundErrorBody",
+        "type": "object"
+      },
+      "NotFoundErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/NotFoundErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "NotFoundErrorResponse",
+        "type": "object"
+      },
+      "ParsedTextTooLargeErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "ParsedTextTooLargeError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/SizeDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "ParsedTextTooLargeErrorBody",
+        "type": "object"
+      },
+      "ReadErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/MalformedRequestErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ReadErrorResponse",
+        "type": "object"
+      },
+      "SearchErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "discriminator": {
+              "mapping": {
+                "InvalidPayloadError": "#/components/schemas/InvalidPayloadErrorBody",
+                "MalformedRequestError": "#/components/schemas/MalformedRequestErrorBody"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InvalidPayloadErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/MalformedRequestErrorBody"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "SearchErrorResponse",
         "type": "object"
       },
       "SearchHitResponse": {
@@ -177,42 +501,157 @@
         "title": "SearchResponse",
         "type": "object"
       },
-      "ValidationError": {
+      "SizeDetails": {
+        "additionalProperties": false,
+        "description": "Shared by every error that reports \"you exceeded a size\", each of which is its own\nerror with its own limit — the shape is the same, the meaning of `limit` is not.",
         "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "title": "Location",
-            "type": "array"
+          "actual": {
+            "title": "Actual",
+            "type": "integer"
           },
-          "msg": {
-            "title": "Message",
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "actual"
+        ],
+        "title": "SizeDetails",
+        "type": "object"
+      },
+      "TooManyChunksErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "TooManyChunksError",
+            "title": "Code",
             "type": "string"
           },
-          "type": {
-            "title": "Error Type",
+          "details": {
+            "$ref": "#/components/schemas/SizeDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
             "type": "string"
           }
         },
         "required": [
-          "loc",
-          "msg",
-          "type"
+          "code",
+          "message",
+          "details"
         ],
-        "title": "ValidationError",
+        "title": "TooManyChunksErrorBody",
         "type": "object"
+      },
+      "UnsupportedMediaTypeDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "description": "MIME types this service accepts.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "allowed"
+        ],
+        "title": "UnsupportedMediaTypeDetails",
+        "type": "object"
+      },
+      "UnsupportedMediaTypeErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "UnsupportedMediaTypeError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/UnsupportedMediaTypeDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "UnsupportedMediaTypeErrorBody",
+        "type": "object"
+      },
+      "UnsupportedMediaTypeErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/UnsupportedMediaTypeErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "UnsupportedMediaTypeErrorResponse",
+        "type": "object"
+      },
+      "UploadTooLargeErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "UploadTooLargeError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/SizeDetails"
+          },
+          "message": {
+            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "UploadTooLargeErrorBody",
+        "type": "object"
+      },
+      "UploadTooLargeErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/UploadTooLargeErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "UploadTooLargeErrorResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "Platform-issued JWT, validated against the configured JWKS. Its `sub` is the owner every document is scoped to — another subject's document is answered 404, never 403.",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
   "info": {
+    "description": "Ingestion and semantic search over a subject's own documents.\n\nErrors answer `{\"error\": {\"code\", \"message\", \"details\"}}`. Branch on `code`: it is the\nerror's identity and it tags `details`, whose shape depends on it. `message` is for a\nperson reading a log — do not parse it, and compose what you show a user from `code` and\n`details`. The HTTP status is a projection of the identity, not a separate fact.\n\nOnly this service's own errors are described below. What the shared edge answers with —\n`401`/`503` for authentication, `429` over the rate limit, `413` for a request body past\nthe transport cap — belongs to the platform contract and is the same for every service\nbehind it.\n",
     "title": "rag-documents",
     "version": "0.1.0"
   },
@@ -242,17 +681,52 @@
             },
             "description": "Successful Response"
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadTooLargeErrorResponse"
+                }
+              }
+            },
+            "description": "File over MAX_UPLOAD_SIZE."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedMediaTypeErrorResponse"
+                }
+              }
+            },
+            "description": "MIME type outside the whitelist."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/IngestErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The upload could not be accepted."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalErrorResponse"
+                }
+              }
+            },
+            "description": "Out of contract — see the log."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Document",
         "tags": [
           "documents"
@@ -278,17 +752,42 @@
           "204": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundErrorResponse"
+                }
+              }
+            },
+            "description": "No such document for this owner."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ReadErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transport contract was violated."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalErrorResponse"
+                }
+              }
+            },
+            "description": "Out of contract — see the log."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Document",
         "tags": [
           "documents"
@@ -319,17 +818,42 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundErrorResponse"
+                }
+              }
+            },
+            "description": "No such document for this owner."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ReadErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transport contract was violated."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalErrorResponse"
+                }
+              }
+            },
+            "description": "Out of contract — see the log."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Document",
         "tags": [
           "documents"
@@ -370,17 +894,62 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundErrorResponse"
+                }
+              }
+            },
+            "description": "No such document for this owner."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadTooLargeErrorResponse"
+                }
+              }
+            },
+            "description": "File over MAX_UPLOAD_SIZE."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedMediaTypeErrorResponse"
+                }
+              }
+            },
+            "description": "MIME type outside the whitelist."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/IngestErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The upload could not be accepted."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalErrorResponse"
+                }
+              }
+            },
+            "description": "Out of contract — see the log."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Replace Document",
         "tags": [
           "documents"
@@ -423,17 +992,42 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundErrorResponse"
+                }
+              }
+            },
+            "description": "No such document for this owner."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/SearchErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The query could not be accepted."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalErrorResponse"
+                }
+              }
+            },
+            "description": "Out of contract — see the log."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Search Document",
         "tags": [
           "documents"

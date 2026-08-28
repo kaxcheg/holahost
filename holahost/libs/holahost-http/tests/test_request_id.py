@@ -39,9 +39,10 @@ def test_header_is_matched_case_insensitively() -> None:
 
 
 class MalformedRequestError(PlatformError):
-    """Stands in for a consuming service's own "you sent a bad request" error."""
+    """Stands in for a consuming service's own "you sent a bad request" error.
 
-    code = "ERR_INVALID_PAYLOAD"
+    Declares no `code`, like the real thing: the identity is this class's own name.
+    """
 
     def __init__(self, field: str) -> None:
         super().__init__(f"invalid payload: {field}")
@@ -88,7 +89,7 @@ class TestRequiredHeader:
         response = TestClient(build_guarded_app()).get("/echo")
         assert response.status_code == 422
         assert response.json()["error"] == {
-            "code": "ERR_INVALID_PAYLOAD",
+            "code": "MalformedRequestError",
             "message": "invalid payload: X-Request-ID",
             "details": {"field": "X-Request-ID"},
         }
@@ -104,7 +105,7 @@ class TestRequiredHeader:
             recorded.append((outcome, detail))
 
         TestClient(build_guarded_app(on_rejected=on_rejected)).get("/echo")
-        assert recorded == [("ERR_INVALID_PAYLOAD", "missing x-request-id")]
+        assert recorded == [("MalformedRequestError", "missing x-request-id")]
 
     def test_status_is_the_caller_choice(self) -> None:
         app = _guarded(

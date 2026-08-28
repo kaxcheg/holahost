@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from application.ports.uow import UnitOfWork
+from domain.exceptions import DomainValidationError
 from domain.value_objects.chunk_id import ChunkId
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.embedding import Embedding
@@ -28,10 +29,10 @@ class SimilarityScore:
     value: float
 
     def __post_init__(self) -> None:
-        # Search-time computed, not client input — out-of-range is an
-        # internal defect, so plain ValueError.
+        # Search-time computed, not client input — out-of-range is an internal
+        # defect, so `field` stays None.
         if not (-1.0 <= self.value <= 1.0):
-            raise ValueError("SimilarityScore must be in range [-1, 1]")
+            raise DomainValidationError("SimilarityScore must be in range [-1, 1]")
 
 
 @dataclass(frozen=True, slots=True)

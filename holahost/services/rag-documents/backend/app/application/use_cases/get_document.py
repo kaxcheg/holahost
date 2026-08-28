@@ -8,7 +8,6 @@ from application.dto.documents import DocumentView, GetDocumentCmd
 from application.exceptions import NotFoundError
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
-from application.use_cases._internal_errors import wrap_value_error
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.owner_subject import OwnerSubject
 
@@ -20,13 +19,15 @@ class GetDocumentUseCase:
     documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
 
-    @wrap_value_error
     def execute(self, cmd: GetDocumentCmd) -> DocumentView:
         """Read the document's current view.
 
-        :raises ApplicationError: wraps a bare ``ValueError`` (e.g. a malformed
-            ``document_id`` that should have already been rejected by interface-layer
-            shape validation) — an internal defect, never client-fixable.
+        :raises DomainValidationError: with `field` unset — a VO invariant no caller
+            input could have violated (e.g. a malformed ``document_id`` that
+            interface-layer shape validation should already have rejected). Passed
+            through deliberately: nothing here can turn an internal defect into a
+            client-fixable answer, and the interface layer answers `500` with the
+            reason in the log alone (`interface/http/errors.py`).
         :raises NotFoundError: the document does not exist, or belongs to another owner.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: conscious pass-through — a plain read, not

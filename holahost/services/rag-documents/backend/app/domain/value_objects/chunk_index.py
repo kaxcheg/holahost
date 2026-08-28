@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.exceptions import DomainValidationError
+
 
 @dataclass(frozen=True, slots=True)
 class ChunkIndex:
@@ -21,6 +23,6 @@ class ChunkIndex:
 
     def __post_init__(self) -> None:
         # Chunker-computed, not client input — a negative value is an
-        # internal defect, so this stays a plain ValueError.
+        # internal defect, so `field` stays None.
         if self.value < 0:
-            raise ValueError("ChunkIndex must not be negative")
+            raise DomainValidationError("ChunkIndex must not be negative")

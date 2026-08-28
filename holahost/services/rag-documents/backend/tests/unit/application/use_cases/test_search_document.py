@@ -36,12 +36,14 @@ def _uc(
     top_k: int = SEARCH_TOP_K,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     max_query_length: int = MAX_QUERY_LENGTH,
+    uow: FakeUnitOfWork | None = None,
+    embedder: FakeEmbeddingModel | None = None,
 ) -> SearchDocumentUseCase:
     return SearchDocumentUseCase(
         documents_repo_factory=documents_repo,
-        embedder=FakeEmbeddingModel(make_embedding()),
+        embedder=embedder or FakeEmbeddingModel(make_embedding()),
         vector_search_factory=vector_search or FakeVectorSearch(),
-        uow=FakeUnitOfWork(),
+        uow=uow or FakeUnitOfWork(),
         top_k=top_k,
         similarity_threshold=similarity_threshold,
         max_query_length=max_query_length,
@@ -88,7 +90,9 @@ class TestSearchDocumentUseCase:
         with pytest.raises(InvalidPayloadError) as exc:
             _uc(FakeDocumentsRepo([existing])).execute(cmd)
         assert exc.value.field == "query"
-        assert exc.value.limit is None
+        # Present even here, where nothing was exceeded: US-R09 wants one `details`
+        # field set per class, and the applicable limit is a fact worth answering with.
+        assert exc.value.limit == MAX_QUERY_LENGTH
 
     def test_rejects_query_over_max_length(self) -> None:
         existing = make_document(owner="user-123")
@@ -122,6 +126,54 @@ class TestSearchDocumentUseCase:
         ).execute(cmd)
 
         assert captured == {"k": 11, "threshold": 0.99}
+
+
+class TestOneTransactionOneSnapshot:
+    """The ownership check and the search share a transaction — see the use case's
+    `:raises NotFoundError:`. Two transactions cost two pool checkouts and two
+    `_bind_owner()` round trips per search, and left a document deleted between them
+    answering `200 {"chunks": []}` instead of `404`."""
+
+    def test_both_reads_run_in_one_transaction(self) -> None:
+        existing = make_document(owner="user-123")
+        uow = FakeUnitOfWork()
+        cmd = SearchCmd(document_id=str(existing.id), owner="user-123", query="q")
+
+        _uc(FakeDocumentsRepo([existing]), uow=uow).execute(cmd)
+
+        assert (uow.commits, uow.rollbacks) == (1, 0)
+
+    def test_missing_document_rolls_the_transaction_back(self) -> None:
+        uow = FakeUnitOfWork()
+        cmd = SearchCmd(document_id=str(uuid.uuid4()), owner="user-123", query="q")
+
+        with pytest.raises(NotFoundError):
+            _uc(FakeDocumentsRepo(), uow=uow).execute(cmd)
+
+        assert (uow.commits, uow.rollbacks) == (0, 1)
+
+
+class TestQueryIsJudgedBeforeAnyWork:
+    def test_invalid_query_never_reaches_the_embedder_or_storage(self) -> None:
+        existing = make_document(owner="user-123")
+        embedder = FakeEmbeddingModel(make_embedding())
+        uow = FakeUnitOfWork()
+        cmd = SearchCmd(document_id=str(existing.id), owner="user-123", query="")
+
+        with pytest.raises(InvalidPayloadError):
+            _uc(FakeDocumentsRepo([existing]), uow=uow, embedder=embedder).execute(cmd)
+
+        assert embedder.calls == 0
+        assert (uow.commits, uow.rollbacks) == (0, 0)
+
+    def test_invalid_query_wins_over_a_missing_document(self) -> None:
+        # Deliberate: the query is the caller's own input and is judged without asking
+        # storage anything, so it is answered first. Discloses nothing either way — a
+        # 422 says as little about whether the id exists as the 404 would.
+        cmd = SearchCmd(document_id=str(uuid.uuid4()), owner="user-123", query="   ")
+
+        with pytest.raises(InvalidPayloadError):
+            _uc(FakeDocumentsRepo()).execute(cmd)
 
 
 class TestSearchParametersAreInjected:

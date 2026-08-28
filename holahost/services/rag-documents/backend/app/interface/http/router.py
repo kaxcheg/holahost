@@ -8,7 +8,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Security, UploadFile
+from fastapi.security import HTTPBearer
 from holahost_auth import TokenContext, current_token
 
 from application.dto.documents import (
@@ -41,13 +42,48 @@ from interface.http.dependencies import (
     get_uow,
     get_vector_search_factory,
 )
+from interface.http.error_schemas import (
+    INGEST_RESPONSES,
+    READ_RESPONSES,
+    REPLACE_RESPONSES,
+    SEARCH_RESPONSES,
+)
 from interface.http.mime_sniffer import sniff_mime_type
 from interface.http.schemas import DocumentResponse, SearchRequest, SearchResponse
+
+_bearer = HTTPBearer(
+    scheme_name="bearerAuth",
+    bearerFormat="JWT",
+    # Declares the requirement, never enforces it. `HolahostAuthMiddleware` answered
+    # long before any dependency runs (§8.1 step 2), so an enforcing dependency here
+    # would be a second gate behind the first, in the wrong order and with its own body.
+    # `auto_error=False` keeps this to what it is for: telling the generated schema that
+    # these routes take a bearer token, which FastAPI cannot learn from middleware.
+    auto_error=False,
+    description=(
+        "Platform-issued JWT, validated against the configured JWKS. Its `sub` is the "
+        "owner every document is scoped to — another subject's document is answered "
+        "404, never 403."
+    ),
+)
+
 
 # Relative to the service's own base path, which `interface/http/app.py` applies once for
 # every router (see `api_base.py`) — a router does not get to choose the segment it is
 # published under.
-router = APIRouter(prefix="/documents", tags=["documents"])
+#
+# The bearer dependency is a declaration, not behaviour: everything FastAPI's generator
+# knows about an operation comes from its signature, so a requirement the middleware
+# enforces has to be stated here or it is absent from `docs/openapi.json` entirely.
+#
+# `X-Request-ID` is required just as strictly and is deliberately *not* declared. Two
+# reasons, and either would do. It is not the caller's to send: both intended entry paths
+# attach it unconditionally, which is exactly what the token is not — that one a caller
+# obtains and presents itself, so it belongs in the document and this does not. And
+# publishing it would undo `MalformedRequestError`'s muteness: that error withholds which
+# header was missing precisely because a request without it came by a path it was not
+# meant to, and a document naming the header hands that caller the one hint it needs.
+router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Security(_bearer)])
 
 
 class _StageTimer:
@@ -130,6 +166,28 @@ class _TimedEmbedder:
         return self._inner.embed_query(text)
 
 
+def _read_upload(file: UploadFile) -> bytes:
+    """Read the whole upload, then release the parser's own copy of it.
+
+    Sync read — endpoints stay sync `def` per ADR A-9, so `await file.read()` is not
+    available and `file.file` is the way in.
+
+    The release is the point, and it is about *when*. `FileParser` takes `bytes`, so the
+    copy is unavoidable; what is avoidable is holding the original until the request ends.
+    Starlette spools each part past 1 MiB to an anonymous temp file, and FastAPI's form
+    cleanup closes it only after the handler has returned — which is on the far side of
+    parsing, chunking, embedding and the write, i.e. seconds. Until then the descriptor
+    and its blocks are pinned for no reason, once per in-flight upload across a 40-wide
+    thread pool. Closing here hands them back as soon as the bytes have been copied.
+
+    Safe to close early: nothing downstream touches `file.file` again, and the cleanup's
+    own close is a no-op on an already-closed file.
+    """
+    content = file.file.read()
+    file.file.close()
+    return content
+
+
 def _log_success(
     request: Request,
     token: TokenContext,
@@ -162,7 +220,7 @@ def _log_success(
     )
 
 
-@router.post("", status_code=201, response_model=DocumentResponse)
+@router.post("", status_code=201, response_model=DocumentResponse, responses=INGEST_RESPONSES)
 def create_document(
     request: Request,
     file: Annotated[UploadFile, File()],
@@ -174,7 +232,7 @@ def create_document(
     chunker: Annotated[TextChunker, Depends(get_chunker)],
     embedder: Annotated[EmbeddingModel, Depends(get_embedding_model)],
 ) -> DocumentResponse:
-    content = file.file.read()  # sync read — endpoints stay sync `def` per ADR A-9
+    content = _read_upload(file)
     mime_type = sniff_mime_type(content, file.filename)
     timer = _StageTimer()
     use_case = CreateDocumentUseCase(
@@ -200,7 +258,7 @@ def create_document(
     return DocumentResponse.from_view(view)
 
 
-@router.put("/{document_id}", response_model=DocumentResponse)
+@router.put("/{document_id}", response_model=DocumentResponse, responses=REPLACE_RESPONSES)
 def replace_document(
     request: Request,
     document_id: uuid.UUID,
@@ -213,7 +271,7 @@ def replace_document(
     embedder: Annotated[EmbeddingModel, Depends(get_embedding_model)],
     name: Annotated[str | None, Form()] = None,
 ) -> DocumentResponse:
-    content = file.file.read()
+    content = _read_upload(file)
     mime_type = sniff_mime_type(content, file.filename)
     timer = _StageTimer()
     use_case = ReplaceDocumentUseCase(
@@ -245,7 +303,7 @@ def replace_document(
     return DocumentResponse.from_view(view)
 
 
-@router.post("/{document_id}/search", response_model=SearchResponse)
+@router.post("/{document_id}/search", response_model=SearchResponse, responses=SEARCH_RESPONSES)
 def search_document(
     request: Request,
     document_id: uuid.UUID,
@@ -288,7 +346,7 @@ def search_document(
     return SearchResponse.from_result(result)
 
 
-@router.get("/{document_id}", response_model=DocumentResponse)
+@router.get("/{document_id}", response_model=DocumentResponse, responses=READ_RESPONSES)
 def get_document(
     request: Request,
     document_id: uuid.UUID,
@@ -302,7 +360,7 @@ def get_document(
     return DocumentResponse.from_view(view)
 
 
-@router.delete("/{document_id}", status_code=204, response_model=None)
+@router.delete("/{document_id}", status_code=204, response_model=None, responses=READ_RESPONSES)
 def delete_document(
     request: Request,
     document_id: uuid.UUID,

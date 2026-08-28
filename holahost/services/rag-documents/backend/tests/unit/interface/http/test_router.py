@@ -2,7 +2,10 @@
 every port dependency overridden by a fake — no real DB, model, or JWT involved.
 """
 
-from fastapi import FastAPI
+from tempfile import SpooledTemporaryFile
+from typing import BinaryIO, cast
+
+from fastapi import FastAPI, UploadFile
 from fastapi.testclient import TestClient
 from holahost_auth import TokenContext, current_token
 from holahost_http import RequestIdMiddleware
@@ -27,6 +30,7 @@ from interface.http.dependencies import (
     get_vector_search_factory,
 )
 from interface.http.errors import register_error_handlers
+from interface.http.router import _read_upload
 from interface.http.router import router as documents_router
 
 # Matches FakeDocumentsRepo/FakeVectorSearch's own default owner ("user-123") so tests
@@ -89,7 +93,7 @@ class TestCreateDocument:
         )
 
         assert response.status_code == 422
-        assert response.json()["error"]["code"] == "ERR_INVALID_PAYLOAD"
+        assert response.json()["error"]["code"] == "InvalidPayloadError"
 
 
 class TestGetDocument:
@@ -129,3 +133,37 @@ class TestReplaceDocument:
         )
 
         assert response.status_code == 404
+
+
+class TestReadUpload:
+    """§3.8 holds the whole upload in memory, so the endpoint must not keep two copies
+    of it — see `_read_upload`.
+
+    The `cast`: `SpooledTemporaryFile` is exactly what Starlette's own multipart parser
+    hands `UploadFile`, but typeshed does not declare it as a `BinaryIO`, so the real
+    production shape needs spelling out for mypy rather than substituting a stand-in
+    that would not exercise the close behaviour under test.
+    """
+
+    def test_returns_the_bytes_and_releases_the_parsers_copy(self) -> None:
+        with SpooledTemporaryFile(max_size=1024 * 1024) as spool:
+            spool.write(b"guidebook bytes")
+            spool.seek(0)
+
+            content = _read_upload(UploadFile(file=cast(BinaryIO, spool), filename="guide.txt"))
+
+            assert content == b"guidebook bytes"
+            assert spool.closed
+
+    def test_the_frameworks_own_second_close_is_harmless(self) -> None:
+        # FastAPI closes the form's files again when the request ends; that must stay a
+        # no-op rather than an error raised after the response was already produced.
+        with SpooledTemporaryFile(max_size=1024 * 1024) as spool:
+            spool.write(b"x")
+            spool.seek(0)
+            upload = UploadFile(file=cast(BinaryIO, spool), filename="guide.txt")
+
+            _read_upload(upload)
+            upload.file.close()
+
+            assert spool.closed

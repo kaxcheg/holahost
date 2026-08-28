@@ -10,10 +10,9 @@ only what every Holahost service must agree on to look like one platform:
 - the two errors this library's own middleware raise, and therefore owns.
 
 ``PlatformError`` deliberately carries no HTTP status. Status is a protocol fact
-decided at the point a response is written: the same ``ERR_PAYLOAD_TOO_LARGE`` is a
-413 when the raw body is rejected unread and a 422 when the parsed content turns out
-too large. A ``status`` attribute on the exception would force those two facts into
-one value.
+decided at the point a response is written: a body rejected unread is a 413, parsed
+content that turned out too large is a 422, and two errors may well share one status.
+A ``status`` attribute on the exception would force that decision onto the error.
 """
 
 from __future__ import annotations
@@ -28,11 +27,36 @@ from starlette.types import Receive, Scope, Send
 class PlatformError(Exception):
     """Base for any exception that becomes an error envelope.
 
-    A service's own error base class inherits this and keeps its own codes:
-    subclassing buys the envelope builder, not a taxonomy.
+    A service's own error base class inherits this and keeps its own taxonomy:
+    subclassing buys the envelope builder, not a set of errors.
     """
 
-    code: str = "ERR_INTERNAL"
+    @property
+    def code(self) -> str:
+        """This error's identity on the wire — its class name, verbatim.
+
+        Not declared beside the class, and not transformed either. An error's identity
+        and the shape of its ``details`` are two halves of one contract, and
+        ``details_dict()`` already lives on the class, so a ``code`` string declared next
+        to it splits that contract across two places kept equal by hand. It buys nothing:
+        nothing here or in any service dispatches on ``code``, it is purely an output
+        value (status comes from the interface layer's own type -> status table).
+
+        Verbatim rather than mapped to a screaming-snake ``ERR_*`` form, which is what
+        this used to do. The mapping added no information and cost the one thing that
+        matters when reading a log: the value in the log could no longer be grepped back
+        to the class that produced it, because the string existed nowhere in the source.
+        It also needed a documented caveat for consecutive capitals (``HTTPError``).
+
+        A class rename is therefore a contract change. That is the point, not a
+        drawback: it surfaces as a diff in the service's published schema and fails CI,
+        rather than passing as a silent refactor.
+
+        Accessible on the class as ``SomeError.__name__`` wherever an instance is not at
+        hand — an interface layer answering an unpublished subclass *as* its published
+        ancestor needs exactly that, and now needs no helper for it.
+        """
+        return type(self).__name__
 
     def details_dict(self) -> Mapping[str, object]:
         """Wire-format ``details`` payload for this error. Empty by default."""
@@ -42,14 +66,13 @@ class PlatformError(Exception):
 class PayloadTooLargeError(PlatformError):
     """The request body exceeds the cap enforced by ``BodySizeLimitMiddleware``.
 
-    ``actual`` is present only when the size was known before reading — i.e. the
-    caller sent a ``Content-Length``. Under ``Transfer-Encoding: chunked`` the true
-    size is never learned (the point of the middleware is to stop reading), so the
-    field is omitted rather than reported as the partial count, which would be a
-    lower bound dressed up as a measurement.
+    ``actual`` is ``None`` when the size was not known before reading — under
+    ``Transfer-Encoding: chunked`` the true size is never learned (the point of the
+    middleware is to stop reading), and reporting the partial count would dress a lower
+    bound up as a measurement. It is still *present* in ``details``: one identity, one
+    set of keys, so a consumer reading ``details.actual`` never has to discover which
+    transport the caller happened to use.
     """
-
-    code = "ERR_PAYLOAD_TOO_LARGE"
 
     def __init__(self, limit: int, actual: int | None = None) -> None:
         super().__init__("request body too large")
@@ -57,10 +80,7 @@ class PayloadTooLargeError(PlatformError):
         self.actual = actual
 
     def details_dict(self) -> Mapping[str, object]:
-        details: dict[str, object] = {"limit": self.limit}
-        if self.actual is not None:
-            details["actual"] = self.actual
-        return details
+        return {"limit": self.limit, "actual": self.actual}
 
 
 class RateLimitExceededError(PlatformError):
@@ -70,8 +90,6 @@ class RateLimitExceededError(PlatformError):
         retry_after: Seconds to wait before retrying — surfaced by the middleware as
             the mandatory ``Retry-After`` response header.
     """
-
-    code = "ERR_RATE_LIMIT"
 
     def __init__(self, retry_after: int) -> None:
         super().__init__("rate limit exceeded")

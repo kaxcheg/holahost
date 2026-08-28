@@ -87,7 +87,7 @@ def test_request_over_the_ceiling_is_429_with_retry_after() -> None:
     response = client.post("/documents")
     assert response.status_code == 429
     assert int(response.headers["Retry-After"]) > 0
-    assert response.json()["error"]["code"] == "ERR_RATE_LIMIT"
+    assert response.json()["error"]["code"] == "RateLimitExceededError"
 
 
 def test_buckets_are_counted_separately() -> None:

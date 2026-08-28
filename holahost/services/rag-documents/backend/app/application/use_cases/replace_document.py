@@ -19,14 +19,13 @@ from application.ports.embedding import EmbeddingModel
 from application.ports.ingestion import FileParser, TextChunker
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
-from application.use_cases._internal_errors import wrap_value_error
 from application.use_cases._retry import retry_on_concurrent_update
 from domain.entities.chunk import Chunk
 from domain.entities.document import MAX_CHUNKS_PER_DOCUMENT, Document
-from domain.exceptions import DomainValidationError
+from domain.exceptions import ChunkCountExceededError, DomainValidationError
 from domain.value_objects.chunk_index import ChunkIndex
 from domain.value_objects.document_id import DocumentId
-from domain.value_objects.document_name import DocumentName
+from domain.value_objects.document_name import MAX_DOCUMENT_NAME_LENGTH, DocumentName
 from domain.value_objects.mime_type import ALLOWED_MIME_TYPES, MimeType
 from domain.value_objects.owner_subject import OwnerSubject
 
@@ -41,12 +40,14 @@ class ReplaceDocumentUseCase:
     documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
 
-    @wrap_value_error
     def execute(self, cmd: ReplaceDocumentCmd) -> DocumentView:
         """Run the replace pipeline and persist the result under the same id.
 
-        :raises ApplicationError: wraps a bare ``ValueError`` from a VO/entity
-            construction — an internal invariant violation, never client-fixable.
+        :raises DomainValidationError: with `field` unset — a VO/entity invariant no
+            caller input could have violated. Passed through deliberately: the
+            interface layer answers `500` with the reason in the log alone
+            (`interface/http/errors.py`). The `field`-carrying ones are caught and
+            translated below, each at the construction that can raise it.
         :raises NotFoundError: the document does not exist, belongs to another owner,
             or (from the locked recheck) was deleted concurrently after the initial
             unlocked check passed.
@@ -94,7 +95,9 @@ class ReplaceDocumentUseCase:
             try:
                 new_name = DocumentName(cmd.name)
             except DomainValidationError as e:
-                raise InvalidPayloadError(field=e.field or "name") from e
+                raise InvalidPayloadError(
+                    field=e.field or "name", limit=MAX_DOCUMENT_NAME_LENGTH
+                ) from e
 
         if len(cmd.content) > MAX_UPLOAD_SIZE:
             raise UploadTooLargeError(limit=MAX_UPLOAD_SIZE, actual=len(cmd.content))
@@ -129,10 +132,13 @@ class ReplaceDocumentUseCase:
                     document.rename(new_name)
                 try:
                     document.replace_content(mime_type, new_chunks)
-                except DomainValidationError:
+                except ChunkCountExceededError as e:
+                    # The narrow type, not the base — same reasoning as `create_document`:
+                    # `replace_content`'s other two invariants are internal defects, and
+                    # 422 TooManyChunksError is the wrong answer for either of them.
                     raise TooManyChunksError(
                         limit=MAX_CHUNKS_PER_DOCUMENT, actual=len(chunks)
-                    ) from None
+                    ) from e
                 documents_repo.update(document)
                 return document
 

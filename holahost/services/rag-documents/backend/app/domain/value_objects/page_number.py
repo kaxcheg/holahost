@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.exceptions import DomainValidationError
+
 
 @dataclass(frozen=True, slots=True)
 class PageNumber:
@@ -16,6 +18,6 @@ class PageNumber:
 
     def __post_init__(self) -> None:
         # Parser-computed, not client input — an out-of-range value is an
-        # internal defect (parser bug), so this stays a plain ValueError.
+        # internal defect (parser bug), so `field` stays None.
         if self.value is not None and self.value < 1:
-            raise ValueError("PageNumber must be at least 1 when set")
+            raise DomainValidationError("PageNumber must be at least 1 when set")

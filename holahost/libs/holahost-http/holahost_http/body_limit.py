@@ -73,8 +73,20 @@ class BodySizeLimitMiddleware:
     boundaries and part headers. It is therefore a coarse outer bound, not a
     replacement for the service's own exact check on the file it extracted.
 
+    Which is why ``reported_limit`` exists. ``max_bytes`` is an internal transport
+    number the caller was never meant to see: a service whose own limit is 8 MiB caps
+    the body at 8 MiB + framing, so a rejection here advertised a ``limit`` slightly
+    *above* the one the service enforces on the file. A client that trimmed to exactly
+    the advertised number got past this middleware and was refused again by the
+    service's own check — same status, same code, a different ``limit``. Pass the
+    service's file limit as ``reported_limit`` and both gates name one number.
+
     Args:
         max_bytes: Largest request body accepted, in bytes.
+        reported_limit: The limit to put in the error's ``details.limit`` — the
+            service's own file-size limit, where that is what the caller is expected
+            to act on. Defaults to ``max_bytes``, correct for a service that caps a
+            body it does not otherwise check.
         on_rejected: Optional callback used to log a rejection (see
             ``RejectionLogger``).
     """
@@ -84,10 +96,12 @@ class BodySizeLimitMiddleware:
         app: ASGIApp,
         *,
         max_bytes: int,
+        reported_limit: int | None = None,
         on_rejected: RejectionLogger | None = None,
     ) -> None:
         self.app = app
         self._max_bytes = max_bytes
+        self._reported_limit = max_bytes if reported_limit is None else reported_limit
         self._on_rejected = on_rejected
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -97,8 +111,12 @@ class BodySizeLimitMiddleware:
 
         declared = self._declared_length(scope)
         if declared is not None and declared > self._max_bytes:
+            # `declared` is the whole body, framing included, so against a
+            # `reported_limit` that measures the file it is an upper bound rather than
+            # an exact measurement — still the honest answer to "how much did I send",
+            # and still strictly above the limit whenever this branch is reached.
             await self._reject(
-                scope, receive, send, PayloadTooLargeError(self._max_bytes, declared)
+                scope, receive, send, PayloadTooLargeError(self._reported_limit, declared)
             )
             return
 
@@ -127,7 +145,7 @@ class BodySizeLimitMiddleware:
                 # The app already committed a status line; the connection cannot carry
                 # a 413 any more. Nothing left to do but let the failure surface.
                 raise
-            await self._reject(scope, receive, send, PayloadTooLargeError(self._max_bytes))
+            await self._reject(scope, receive, send, PayloadTooLargeError(self._reported_limit))
 
     def _declared_length(self, scope: Scope) -> int | None:
         for raw_name, raw_value in scope["headers"]:

@@ -10,7 +10,6 @@ from application.ports.embedding import EmbeddingModel
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.ports.vector import VectorSearchFactory
-from application.use_cases._internal_errors import wrap_value_error
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.owner_subject import OwnerSubject
 
@@ -36,18 +35,28 @@ class SearchDocumentUseCase:
     similarity_threshold: float
     max_query_length: int
 
-    @wrap_value_error
     def execute(self, cmd: SearchCmd) -> SearchResult:
         """Search `cmd.document_id` for chunks relevant to `cmd.query`.
 
         An empty result is a valid outcome (no chunk cleared `similarity_threshold`),
         not an error.
 
-        :raises ApplicationError: wraps a bare ``ValueError`` (e.g. a malformed
-            ``document_id`` that should have already been rejected by interface-layer
-            shape validation) — an internal defect, never client-fixable.
+        :raises DomainValidationError: with `field` unset — a VO invariant no caller
+            input could have violated (e.g. a malformed ``document_id`` that
+            interface-layer shape validation should already have rejected). Passed
+            through deliberately: nothing here can turn an internal defect into a
+            client-fixable answer, and the interface layer answers `500` with the
+            reason in the log alone (`interface/http/errors.py`).
         :raises NotFoundError: the document does not exist, or belongs to another owner.
+            Checked in the same transaction — and so the same snapshot — as the search
+            itself: run as two transactions, a document deleted between them answered
+            `200 {"chunks": []}`, which is the documented "nothing cleared the threshold"
+            signal, leaving the caller unable to tell that apart from the `404` §7.1
+            promises for that id.
         :raises InvalidPayloadError: `cmd.query` is empty or exceeds `max_query_length`.
+            Checked before any database work: the query is the caller's own input and
+            needs nothing from storage to judge, so failing it early also spares the
+            round trip.
         :raises EmbeddingFailedError: conscious pass-through.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: conscious pass-through — a plain read, not
@@ -56,29 +65,35 @@ class SearchDocumentUseCase:
         """
         owner = OwnerSubject(cmd.owner)
         document_id = DocumentId.from_str(cmd.document_id)
-        documents_repo = self.documents_repo_factory(owner)
-        vector_search = self.vector_search_factory(owner)
 
-        # No lock: search accepts a possibly stale-but-consistent result during a
-        # concurrent replace/delete, trading it for not blocking the hot search path.
-        # Still runs inside a transaction — every DocumentsRepo call does (§8.0).
-        with self.uow:
-            document = documents_repo.get(document_id)
-            if document is None:
-                raise NotFoundError
-
-        if not cmd.query.strip():
-            raise InvalidPayloadError(field="query")
-        if len(cmd.query) > self.max_query_length:
+        # Ahead of everything else: this needs no model and no connection to decide.
+        if not cmd.query.strip() or len(cmd.query) > self.max_query_length:
             raise InvalidPayloadError(field="query", limit=self.max_query_length)
 
         # Embedding runs outside any transaction, same reasoning as the ingest
-        # pipeline (§8.2/§8.3): CPU-bound work must not hold a pooled connection.
+        # pipeline (§8.2/§8.3): CPU-bound work must not hold a pooled connection. It
+        # runs *before* the ownership check, which costs an embedding for a document
+        # that turns out not to exist — bounded by the read rate limit, and the price
+        # of the ownership check and the search sharing one transaction below.
         query_embedding = self.embedder.embed_query(cmd.query)
 
-        # No lock: search accepts a possibly stale-but-consistent result. A separate,
-        # short transaction — reusing self.uow sequentially is safe (§8.0).
+        documents_repo = self.documents_repo_factory(owner)
+        vector_search = self.vector_search_factory(owner)
+
+        # One transaction for both reads, not two. Two cost two pool checkouts and two
+        # `_bind_owner()` round trips each search, against §3.7's 500 ms p95 budget on a
+        # pool of 5 — and, worse, put the ownership check and the search in different
+        # snapshots, so a document deleted between them came back as an empty result
+        # instead of a 404 (see `:raises NotFoundError:`).
+        #
+        # No lock: search accepts a possibly stale-but-consistent result during a
+        # concurrent replace, trading it for not blocking the hot search path. The
+        # ownership pre-check exists only to tell 404 apart from "nothing matched" —
+        # `top_k` is owner-scoped by RLS either way (§8.0), so it can never serve
+        # another subject's chunks whatever this check answers.
         with self.uow:
+            if documents_repo.get(document_id) is None:
+                raise NotFoundError
             hits = vector_search.top_k(
                 document_id, query_embedding, self.top_k, self.similarity_threshold
             )

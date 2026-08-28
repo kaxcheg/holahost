@@ -1,5 +1,5 @@
 name: Smoke check
-description: Retries GET <url> until it returns 2xx, or fails after retries * interval-seconds.
+description: Retries GET <url> until it returns 2xx, or gives up after retries * interval-seconds.
 inputs:
   url:
     required: true
@@ -13,9 +13,28 @@ runs:
   using: composite
   steps:
     - shell: bash
+      # Inputs reach the script as environment variables rather than being interpolated
+      # into it, so nothing in a value is ever read as shell.
+      env:
+        URL: ${{ inputs.url }}
+        RETRIES: ${{ inputs.retries }}
+        INTERVAL: ${{ inputs.interval-seconds }}
       run: |
-        for i in $(seq 1 ${{ inputs.retries }}); do
-          if curl -sf "${{ inputs.url }}"; then exit 0; fi
-          sleep ${{ inputs.interval-seconds }}
+        set -euo pipefail
+        # --connect-timeout/--max-time are what make the budget an actual upper bound.
+        # Without them every attempt inherits curl's own ~300 s defaults, so a gateway
+        # that accepts the TCP connection and then never answers — an instance up
+        # without its `backbone` network, a half-started container — turned the nominal
+        # 30 x 20 s = 10 minute wait into ~2.7 hours, until GitHub's job limit killed
+        # it. The failure line printed "600 seconds" the whole time, which is the other
+        # half of the fix: it now reports what actually elapsed.
+        start=$SECONDS
+        budget=$(( RETRIES * INTERVAL ))
+        deadline=$(( start + budget ))
+        while true; do
+          if curl -sf --connect-timeout 5 --max-time "$INTERVAL" "$URL"; then exit 0; fi
+          [ "$SECONDS" -lt "$deadline" ] || break
+          sleep "$INTERVAL"
         done
-        echo "Smoke check failed after $((${{ inputs.retries }} * ${{ inputs.interval-seconds }})) seconds" && exit 1
+        echo "Smoke check failed after $(( SECONDS - start )) seconds (budget ${budget}s)"
+        exit 1

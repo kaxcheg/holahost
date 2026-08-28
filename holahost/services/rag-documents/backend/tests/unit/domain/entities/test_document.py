@@ -47,7 +47,7 @@ class TestDocument:
 
     def test_create_rejects_too_many_chunks(self) -> None:
         # Reachable in practice: only knowable after chunking completes
-        # (US-R01: 422 ERR_TOO_MANY_CHUNKS) — a real client-triggerable path.
+        # (US-R01: 422 TooManyChunksError) — a real client-triggerable path.
         doc_id = DocumentId.new()
         with pytest.raises(DomainValidationError, match="chunk") as exc:
             Document.create(

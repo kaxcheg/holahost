@@ -4,13 +4,29 @@ Covers what routes raise. Rate limiting, body size and the request-id requiremen
 refused before routing now and never reach these handlers — see `test_middleware.py`.
 """
 
+import json
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from holahost_http import RequestIdMiddleware
 from pydantic import BaseModel
 
-from application.exceptions import NotFoundError, TooManyChunksError, UploadTooLargeError
+from application.exceptions import (
+    ApplicationError,
+    NotFoundError,
+    TooManyChunksError,
+    UploadTooLargeError,
+)
+from config.logging import configure_logging
+from domain.exceptions import DomainValidationError
 from interface.http.errors import register_error_handlers
+
+_INTERNAL_INVARIANT_MESSAGE = "Embedding must be L2-normalized (got norm=0.9993)"
+
+
+class _DerivedNotFoundError(NotFoundError):
+    """A subclass nobody put in the table — it must still map to its base's status."""
 
 
 class _Body(BaseModel):
@@ -34,6 +50,26 @@ def _build_app() -> FastAPI:
     def not_found() -> None:
         raise NotFoundError
 
+    @app.get("/derived-not-found")
+    def derived_not_found() -> None:
+        raise _DerivedNotFoundError
+
+    @app.get("/unmapped")
+    def unmapped() -> None:
+        # No production code constructs one; the handler must still not leak it.
+        raise ApplicationError(_INTERNAL_INVARIANT_MESSAGE)
+
+    @app.get("/domain-invariant")
+    def domain_invariant() -> None:
+        # What a VO/entity raises when an invariant no caller could have violated
+        # is broken — `field` unset, so nothing upstream translated it.
+        raise DomainValidationError(_INTERNAL_INVARIANT_MESSAGE)
+
+    @app.get("/untranslated-field-error")
+    def untranslated_field_error() -> None:
+        # The other half: client-fixable, but the use case forgot to translate it.
+        raise DomainValidationError("DocumentName must not be empty", field="name")
+
     @app.post("/validated")
     def validated(body: _Body) -> None:
         return None
@@ -53,7 +89,7 @@ class TestApplicationErrorMapping:
 
         assert response.status_code == 413
         body = response.json()
-        assert body["error"]["code"] == "ERR_PAYLOAD_TOO_LARGE"
+        assert body["error"]["code"] == "UploadTooLargeError"
         assert body["error"]["details"] == {"limit": 100, "actual": 200}
 
     def test_too_many_chunks_maps_to_422_despite_same_code_family(self) -> None:
@@ -62,7 +98,7 @@ class TestApplicationErrorMapping:
         response = client.get("/too-many-chunks")
 
         assert response.status_code == 422
-        assert response.json()["error"]["code"] == "ERR_TOO_MANY_CHUNKS"
+        assert response.json()["error"]["code"] == "TooManyChunksError"
 
     def test_not_found_maps_to_404_with_no_details(self) -> None:
         client = TestClient(_build_app(), raise_server_exceptions=False)
@@ -71,10 +107,91 @@ class TestApplicationErrorMapping:
 
         assert response.status_code == 404
         assert response.json()["error"] == {
-            "code": "ERR_NOT_FOUND",
+            "code": "NotFoundError",
             "message": "document not found",
             "details": {},
         }
+
+    def test_an_unpublished_subclass_is_answered_as_its_published_ancestor(self) -> None:
+        # Two regressions in one. Exact-type `dict.get(type(exc))` answered 500 for
+        # every subclass not literally in the table, with nothing to reveal it — so the
+        # lookup walks the MRO. But the walk must also take the *identity* from the
+        # matched ancestor: a subclass added later has no entry in docs/openapi.json,
+        # and answering with its own name (`_DerivedNotFoundError`) would put
+        # an identity on the wire that the published schema does not describe.
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        response = client.get("/derived-not-found")
+
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "NotFoundError"
+
+
+class TestUnmappedApplicationErrorIsInternal:
+    """§7.6/US-R09: a 500 body carries no internal detail; the reason goes to the log."""
+
+    def test_body_carries_no_internal_detail(self) -> None:
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        response = client.get("/unmapped")
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["error"] == {
+            "code": "InternalError",
+            "message": "internal error",
+            "details": {},
+        }
+        assert "norm=" not in response.text
+
+    def test_reason_reaches_the_log(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # The other half of the inversion: the old handler put the message in the body
+        # and logged `error_reason=None`, so the cause survived nowhere.
+        configure_logging()
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        client.get("/unmapped")
+
+        assert _INTERNAL_INVARIANT_MESSAGE in capsys.readouterr().out
+
+
+class TestDomainValidationErrorIsInternal:
+    """Replaces what the `wrap_value_error` decorator used to do, explicitly and in one
+    place — see `handle_domain_validation_error`."""
+
+    def test_invariant_violation_maps_to_500_without_leaking(self) -> None:
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        response = client.get("/domain-invariant")
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["error"] == {
+            "code": "InternalError",
+            "message": "internal error",
+            "details": {},
+        }
+        assert "norm=" not in response.text
+
+    def test_reason_reaches_the_log(self, capsys: pytest.CaptureFixture[str]) -> None:
+        configure_logging()
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        client.get("/domain-invariant")
+
+        assert _INTERNAL_INVARIANT_MESSAGE in capsys.readouterr().out
+
+    def test_an_untranslated_field_error_is_also_500_not_a_guessed_4xx(self) -> None:
+        # A `field`-carrying one that reached this layer means the use case that owed it
+        # a §7.6 error did not produce one. That is a defect, not a client mistake, and
+        # the handler must not invent a 422 out of the field name.
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        response = client.get("/untranslated-field-error")
+
+        assert response.status_code == 500
+        assert response.json()["error"]["details"] == {}
+        assert "name" not in response.json()["error"]["message"]
 
 
 class TestValidationErrorMapping:
@@ -84,7 +201,12 @@ class TestValidationErrorMapping:
         response = client.post("/validated", json={})
 
         assert response.status_code == 422
-        assert response.json()["error"]["code"] == "ERR_INVALID_PAYLOAD"
+        body = response.json()
+        assert body["error"]["code"] == "InvalidPayloadError"
+        # US-R09: one code, one `details` field set — `limit` is present (null) rather
+        # than absent, so a consumer reading it never has to know which raise site
+        # answered.
+        assert body["error"]["details"] == {"field": "x", "limit": None}
 
 
 class TestUnexpectedExceptionMapping:
@@ -95,7 +217,7 @@ class TestUnexpectedExceptionMapping:
 
         assert response.status_code == 500
         body = response.json()
-        assert body["error"]["code"] == "ERR_INTERNAL"
+        assert body["error"]["code"] == "InternalError"
         assert "RuntimeError" not in body["error"]["message"]
         assert "unexpected" not in str(body)
 
@@ -111,3 +233,53 @@ class TestUnexpectedExceptionMapping:
         response = client.get("/boom", headers={"X-Request-ID": "req-500"})
 
         assert response.headers["X-Request-ID"] == "req-500"
+
+
+class TestLogLevelFollowsTheOutcome:
+    """Regression: every event went out at `INFO`, including a 500 — while the formatter
+    writes a `level` field on every line, so it promised a distinction it never made."""
+
+    @staticmethod
+    def _level(captured: str) -> str:
+        # The handler writes one JSON object per line straight to stdout (§3.4); the
+        # request under test is the last one.
+        return str(json.loads(captured.strip().splitlines()[-1])["level"])
+
+    def test_a_5xx_is_logged_at_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        configure_logging()
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        client.get("/boom")
+
+        assert self._level(capsys.readouterr().out) == "ERROR"
+
+    def test_a_domain_invariant_violation_is_logged_at_error(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging()
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        client.get("/domain-invariant")
+
+        assert self._level(capsys.readouterr().out) == "ERROR"
+
+    def test_a_4xx_is_logged_at_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # The caller's mistake, not the service's — visible, but not an alarm.
+        configure_logging()
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        client.get("/not-found")
+
+        assert self._level(capsys.readouterr().out) == "WARNING"
+
+    def test_the_status_drives_it_not_the_outcome_string(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `handle_http_exception` logs a bare numeric outcome ("404"), so the level has
+        # to come from the status it is answering with, not from parsing that string.
+        configure_logging()
+        client = TestClient(_build_app(), raise_server_exceptions=False)
+
+        client.get("/no-such-route")
+
+        assert self._level(capsys.readouterr().out) == "WARNING"

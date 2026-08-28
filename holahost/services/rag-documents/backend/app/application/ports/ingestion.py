@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from domain.exceptions import DomainValidationError
 from domain.value_objects.mime_type import MimeType
 from domain.value_objects.page_number import PageNumber
 
@@ -27,10 +28,10 @@ class TextFragment:
     page: PageNumber
 
     def __post_init__(self) -> None:
-        # Parser/chunker output, not client input directly — internal defect
-        # if empty, so plain ValueError.
+        # Parser/chunker output, not client input directly — internal defect if
+        # empty, so `field` stays None.
         if not self.text.strip():
-            raise ValueError("TextFragment text must not be empty")
+            raise DomainValidationError("TextFragment text must not be empty")
 
 
 class FileParser(Protocol):

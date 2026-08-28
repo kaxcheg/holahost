@@ -6,8 +6,10 @@ reason any of this is middleware at all — that none of them waits for the requ
 to be read first.
 """
 
+import json
 from collections.abc import Iterator
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from holahost_auth import TokenContext
@@ -20,11 +22,14 @@ from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 from tests._support.fakes import FakeRateLimiter
 
+from application.limits import MAX_UPLOAD_SIZE
+from config.logging import configure_logging
 from interface.http.api_base import API_BASE_URL
 from interface.http.edge import (
     HEALTH_PATH,
     MAX_REQUEST_BODY_SIZE,
     MISSING_REQUEST_ID_ERROR,
+    REPORTED_UPLOAD_LIMIT,
     bucket_for,
     log_rejection,
 )
@@ -83,6 +88,7 @@ def build_app(
             Middleware(
                 BodySizeLimitMiddleware,
                 max_bytes=MAX_REQUEST_BODY_SIZE,
+                reported_limit=REPORTED_UPLOAD_LIMIT,
                 on_rejected=log_rejection,
             ),
             Middleware(StubAuthMiddleware, accepts=accepts_auth),
@@ -132,9 +138,9 @@ class TestRequestIdRequired:
 
         assert response.status_code == 422
         body = response.json()
-        assert body["error"]["code"] == "ERR_INVALID_PAYLOAD"
-        # Mute on purpose: this is the one ERR_INVALID_PAYLOAD answered before auth, and
-        # naming the header would tell an unintended caller how to get past the check.
+        assert body["error"]["code"] == "MalformedRequestError"
+        # Mute on purpose: this is the one error answered before auth, and naming the
+        # header would tell an unintended caller how to get past the check.
         assert body["error"]["details"] == {}
         assert "X-Request-ID" not in response.text
 
@@ -145,7 +151,7 @@ class TestRequestIdRequired:
         response = TestClient(app).post(_DOCUMENTS, files={"file": ("a.txt", b"x")})
 
         assert response.status_code == 422
-        assert response.json()["error"]["code"] == "ERR_INVALID_PAYLOAD"
+        assert response.json()["error"]["code"] == "MalformedRequestError"
 
     def test_health_is_exempt(self) -> None:
         app, _ = build_app()
@@ -163,7 +169,14 @@ class TestBodyIsNotReadBeforeTheChecks:
 
         assert response.status_code == 413
         assert read_sizes == []
-        assert response.json()["error"]["code"] == "ERR_PAYLOAD_TOO_LARGE"
+        body = response.json()
+        assert body["error"]["code"] == "PayloadTooLargeError"
+        # The number a caller can act on is the service's own file limit, not the
+        # derived transport cap: `UploadTooLargeError` — the other raise site of this
+        # very code — reports exactly this, and a client that trimmed to the cap
+        # instead got past the middleware only to be refused again by that check.
+        assert body["error"]["details"]["limit"] == MAX_UPLOAD_SIZE
+        assert REPORTED_UPLOAD_LIMIT == MAX_UPLOAD_SIZE < MAX_REQUEST_BODY_SIZE
 
     def test_anonymous_upload_is_refused_without_being_read(self) -> None:
         """The regression this whole layer exists for: a 50 MiB POST with no
@@ -191,7 +204,7 @@ class TestBodyIsNotReadBeforeTheChecks:
 
         assert response.status_code == 429
         assert response.headers["Retry-After"] == "30"
-        assert response.json()["error"]["code"] == "ERR_RATE_LIMIT"
+        assert response.json()["error"]["code"] == "RateLimitExceededError"
         assert read_sizes == []
 
 
@@ -209,3 +222,19 @@ class TestRateLimitWiring:
         TestClient(app).get(HEALTH_PATH)
 
         assert limiter.calls == []
+
+
+class TestRejectionsAreLoggedAtWarning:
+    """Every outcome `log_rejection` can be handed is the caller's own doing — none of
+    them is the service failing, and none of them is `INFO`, which is what every event
+    used to be regardless of what happened."""
+
+    def test_a_refused_request_logs_at_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        configure_logging()
+        app, _ = build_app()
+
+        TestClient(app).post(_DOCUMENTS, files={"file": ("a.txt", b"x")})
+
+        line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert line["level"] == "WARNING"
+        assert line["outcome"] == "MalformedRequestError"

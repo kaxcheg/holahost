@@ -45,6 +45,7 @@ class FastembedEmbeddingModel:
                 "ignore", message=".*now uses mean pooling.*", category=UserWarning
             )
             self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+        self._dimension: int | None = None
         # Measured once, not assumed: what this tokenizer adds around any input. Encoding
         # the empty string yields exactly the special tokens and nothing else (verified:
         # 2 for this model — `<s>`/`</s>`). Reading it off the tokenizer keeps the two
@@ -90,6 +91,26 @@ class FastembedEmbeddingModel:
                 text, add_special_tokens=False
             ).ids
         )
+
+    def dimension(self) -> int:
+        """How many components a vector from this model has, measured once, not assumed.
+
+        Measured — one `embed` of the empty string — rather than read off fastembed's
+        model registry: the registry's own shape has moved across the versions this
+        project's constraint admits, and what the schema has to agree with is what
+        `embed()` actually returns, not what a table says it should.
+
+        Exposed for the same reason as `max_input_tokens`: so the composition root can
+        refuse to start when the configured `EMBEDDING_MODEL` does not produce the
+        `EMBEDDING_DIM`-length vectors the rest of the service is built around — the
+        `vector(384)` column, `Embedding`'s own invariant — instead of loading happily,
+        answering `GET /health` with 200, and turning every ingest and every search into
+        a 500 for the life of the deployment.
+        """
+        if self._dimension is None:
+            [vector] = list(self._model.embed([""]))
+            self._dimension = int(np.asarray(vector).size)
+        return self._dimension
 
     def max_input_tokens(self) -> int:
         """How many tokens of *content* this model accepts before it truncates the rest.

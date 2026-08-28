@@ -58,6 +58,18 @@ def test_max_input_tokens_is_positive(embedder: FastembedEmbeddingModel) -> None
     assert embedder.max_input_tokens() > 0
 
 
+def test_dimension_matches_what_the_schema_stores(embedder: FastembedEmbeddingModel) -> None:
+    """The premise `scripts.bootstrap._assert_embedding_dimension_matches` checks at
+    startup: the configured model really does produce `EMBEDDING_DIM`-length vectors,
+    which is what the `vector(384)` column and `Embedding`'s invariant are built on."""
+    assert embedder.dimension() == EMBEDDING_DIM
+
+
+def test_dimension_agrees_with_an_actual_embedding(embedder: FastembedEmbeddingModel) -> None:
+    # It is measured, not declared — so it has to keep agreeing with `embed_query`.
+    assert embedder.dimension() == len(embedder.embed_query("anything").value)
+
+
 def test_count_tokens_is_capped_at_max_input_tokens_for_over_length_text(
     embedder: FastembedEmbeddingModel,
 ) -> None:

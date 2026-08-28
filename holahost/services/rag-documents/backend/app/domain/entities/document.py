@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from domain.entities.chunk import Chunk
-from domain.exceptions import DomainValidationError
+from domain.exceptions import ChunkCountExceededError, DomainValidationError
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.document_name import DocumentName
 from domain.value_objects.mime_type import MimeType
@@ -76,14 +76,16 @@ class Document:
         `chunks` with it before calling this — the same order `create_document`/
         `replace_document` already use for the id-then-chunks dependency.
 
-        :raises ValueError: `chunks` is empty, or contains a chunk whose
-            `document_id` does not match `id` — should be structurally unreachable
-            (empty documents are rejected earlier, at the parsing stage, US-R01;
-            mismatched `document_id` would be a caller defect), so this signals an
-            internal defect.
-        :raises DomainValidationError: more than `MAX_CHUNKS_PER_DOCUMENT` chunks
-            — only knowable after chunking completes, a real client-facing path
-            (US-R01: 422 ERR_TOO_MANY_CHUNKS).
+        :raises ChunkCountExceededError: more than `MAX_CHUNKS_PER_DOCUMENT` chunks.
+            Only knowable after chunking completes, and the one client-facing invariant
+            here (US-R01: 422 `TooManyChunksError`) — which is why it has a type of its
+            own: a caller translating it must select it, not catch the base.
+        :raises DomainValidationError: with `field` unset — `chunks` is empty, or
+            contains a chunk whose `document_id` does not match `id`. Structurally
+            unreachable (empty documents are rejected earlier, at the parsing stage,
+            US-R01; a mismatched `document_id` would be a caller defect), and so an
+            internal defect if it does happen: nothing translates it, it surfaces as
+            `500`.
         """
         _validate_chunks(id, chunks)
         now = datetime.now(tz=UTC)
@@ -131,8 +133,8 @@ class Document:
         """Replace the document's content — new mime type and the full new chunk
         set — and bump `updated_at` (US-R02).
 
-        :raises ValueError: see `create`.
-        :raises DomainValidationError: see `create`.
+        :raises ChunkCountExceededError: see `create`.
+        :raises DomainValidationError: see `create` — the two unset-`field` ones.
         """
         _validate_chunks(self.id, chunks)
         self.mime_type = mime_type
@@ -143,10 +145,8 @@ class Document:
 
 def _validate_chunks(document_id: DocumentId, chunks: list[Chunk]) -> None:
     if not chunks:
-        raise ValueError("Document must have at least one chunk")
+        raise DomainValidationError("Document must have at least one chunk")
     if len(chunks) > MAX_CHUNKS_PER_DOCUMENT:
-        raise DomainValidationError(
-            f"Document chunk_count exceeds {MAX_CHUNKS_PER_DOCUMENT}", field="chunk_count"
-        )
+        raise ChunkCountExceededError(MAX_CHUNKS_PER_DOCUMENT)
     if any(chunk.document_id != document_id for chunk in chunks):
-        raise ValueError("All chunks must belong to this document")
+        raise DomainValidationError("All chunks must belong to this document")

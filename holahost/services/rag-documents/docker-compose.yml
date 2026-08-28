@@ -136,8 +136,9 @@ services:
     # On staging/prod the only intended way in is the platform gateway, reached over the external
     # `backbone` network above; a published 0.0.0.0:8080 on the instance is a second, unguarded
     # door past it — and past what the gateway adds, notably the `X-Request-ID` that
-    # `interface/http/dependencies.py::require_request_id` treats as proof the caller came through
-    # the intended path. This file is deployed verbatim to the instance (see the header), so a
+    # `holahost_http.RequestIdMiddleware` (parameterised in `interface/http/edge.py`) treats as
+    # proof the caller came through the intended path. This file is deployed verbatim to the
+    # instance (see the header), so a
     # `ports:` key here, however defaulted, is published there too: neither staging's nor prod's
     # committed .env sets HOST_PORT, so the `:-8080` fallback is exactly what they would get.
     # Without this the service logs to the container's stdout and stop there. Nothing
