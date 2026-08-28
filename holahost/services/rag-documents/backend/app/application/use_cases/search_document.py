@@ -18,13 +18,10 @@ from domain.value_objects.owner_subject import OwnerSubject
 class SearchDocumentUseCase:
     """UC-R3: embed the query and return its top-K most similar chunks.
 
-    The three search parameters are injected, not read from module constants: §3.7 makes
-    them environment configuration (`SEARCH_TOP_K`, `SIMILARITY_THRESHOLD`,
-    `MAX_QUERY_LENGTH`), and the threshold in particular is explicitly provisional —
-    "calibrated on real guidebooks later". Constants made those settings unreadable:
-    every one of them had zero readers while this use case used a literal, so turning the
-    knob in `.env` changed nothing at all. Wired from `Settings` in the composition root,
-    which is also the only layer allowed to know `Settings` exists.
+    The three search parameters are injected rather than read from module constants: §3.7
+    makes them environment configuration, and the threshold is explicitly provisional
+    ("calibrated on real guidebooks later"). They are wired from `Settings` in the
+    composition root, the only layer allowed to know `Settings` exists.
     """
 
     documents_repo_factory: DocumentsRepoFactory
@@ -42,21 +39,15 @@ class SearchDocumentUseCase:
         not an error.
 
         :raises DomainValidationError: with `field` unset — a VO invariant no caller
-            input could have violated (e.g. a malformed ``document_id`` that
-            interface-layer shape validation should already have rejected). Passed
-            through deliberately: nothing here can turn an internal defect into a
-            client-fixable answer, and the interface layer answers `500` with the
-            reason in the log alone (`interface/http/errors.py`).
+            input could have violated. Passed through deliberately: nothing here can turn
+            an internal defect into a client-fixable answer, and the interface layer
+            answers `500` with the reason in the log alone.
         :raises NotFoundError: the document does not exist, or belongs to another owner.
-            Checked in the same transaction — and so the same snapshot — as the search
-            itself: run as two transactions, a document deleted between them answered
-            `200 {"chunks": []}`, which is the documented "nothing cleared the threshold"
-            signal, leaving the caller unable to tell that apart from the `404` §7.1
-            promises for that id.
+            Checked in the same transaction, and so the same snapshot, as the search: run
+            separately, a document deleted in between answers `200 {"chunks": []}` — the
+            "nothing cleared the threshold" signal — instead of the `404` §7.1 promises.
         :raises InvalidPayloadError: `cmd.query` is empty or exceeds `max_query_length`.
-            Checked before any database work: the query is the caller's own input and
-            needs nothing from storage to judge, so failing it early also spares the
-            round trip.
+            Checked before any database work: judging it needs nothing from storage.
         :raises EmbeddingFailedError: conscious pass-through.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: conscious pass-through — a plain read, not
@@ -70,27 +61,22 @@ class SearchDocumentUseCase:
         if not cmd.query.strip() or len(cmd.query) > self.max_query_length:
             raise InvalidPayloadError(field="query", limit=self.max_query_length)
 
-        # Embedding runs outside any transaction, same reasoning as the ingest
-        # pipeline (§8.2/§8.3): CPU-bound work must not hold a pooled connection. It
-        # runs *before* the ownership check, which costs an embedding for a document
-        # that turns out not to exist — bounded by the read rate limit, and the price
-        # of the ownership check and the search sharing one transaction below.
+        # Outside any transaction, as in the ingest pipeline (§8.2/§8.3): CPU-bound work
+        # must not hold a pooled connection. It runs before the ownership check, so a
+        # missing document costs one embedding — bounded by the read rate limit, and the
+        # price of the check and the search sharing one transaction below.
         query_embedding = self.embedder.embed_query(cmd.query)
 
         documents_repo = self.documents_repo_factory(owner)
         vector_search = self.vector_search_factory(owner)
 
-        # One transaction for both reads, not two. Two cost two pool checkouts and two
-        # `_bind_owner()` round trips each search, against §3.7's 500 ms p95 budget on a
-        # pool of 5 — and, worse, put the ownership check and the search in different
-        # snapshots, so a document deleted between them came back as an empty result
-        # instead of a 404 (see `:raises NotFoundError:`).
+        # One transaction for both reads: two would cost two pool checkouts and two
+        # `_bind_owner()` round trips per search against §3.7's 500 ms budget, and would
+        # put the check and the search in different snapshots (see `:raises NotFoundError:`).
         #
-        # No lock: search accepts a possibly stale-but-consistent result during a
-        # concurrent replace, trading it for not blocking the hot search path. The
-        # ownership pre-check exists only to tell 404 apart from "nothing matched" —
-        # `top_k` is owner-scoped by RLS either way (§8.0), so it can never serve
-        # another subject's chunks whatever this check answers.
+        # No lock: search accepts a stale-but-consistent result during a concurrent
+        # replace rather than blocking the hot path. The ownership pre-check only tells
+        # 404 apart from "nothing matched" — RLS scopes `top_k` either way (§8.0).
         with self.uow:
             if documents_repo.get(document_id) is None:
                 raise NotFoundError

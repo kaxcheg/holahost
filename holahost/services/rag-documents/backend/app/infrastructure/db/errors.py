@@ -17,21 +17,17 @@ from application.ports.exceptions import (
     StorageUnavailableError,
 )
 
-# Class 40 (Transaction Rollback): the transaction is already gone by the time this is
-# caught — retrying the whole `with uow:` block from scratch is the correct response.
-# QueryCanceled also covers a lock-wait `statement_timeout` cancellation — CLAUDE.md's
-# own project convention lists an "expired lock-wait timeout" explicitly as a
-# ConcurrentUpdateError case.
+# Class 40 (Transaction Rollback): the transaction is already gone, so retrying the whole
+# `with uow:` block is the correct response. QueryCanceled covers a lock-wait timeout
+# cancellation, which CLAUDE.md's port convention lists as a ConcurrentUpdateError case.
 _CONCURRENCY_ERRORS: tuple[type[Exception], ...] = (
     psycopg.errors.SerializationFailure,
     psycopg.errors.DeadlockDetected,
     psycopg.errors.QueryCanceled,
 )
-# Class 23 (Integrity Constraint Violation): the entity invariants or the row lock
-# should have prevented this — a defect, never retried. InsufficientPrivilege also
-# covers a Postgres RLS WITH CHECK failure on INSERT/UPDATE (§8.0) — reachable only
-# if a caller's owner-consistency assert was somehow bypassed, so it belongs in the
-# same "should have been prevented earlier" bucket as the other three.
+# Class 23 (Integrity Constraint Violation): entity invariants or the row lock should
+# have prevented this — a defect, never retried. InsufficientPrivilege covers an RLS
+# WITH CHECK failure (§8.0), which belongs in the same bucket.
 _INTEGRITY_ERRORS: tuple[type[Exception], ...] = (
     psycopg.errors.UniqueViolation,
     psycopg.errors.ForeignKeyViolation,
@@ -55,9 +51,8 @@ def translate_db_errors() -> Iterator[None]:
     try:
         yield
     except DBAPIError as e:
-        # DBAPIError covers execution-time AND connection-time driver failures alike
-        # (verified empirically: a bad-port connect() raises OperationalError, itself
-        # a DBAPIError subclass) — but NOT everything SQLAlchemy can raise; see below.
+        # DBAPIError covers execution-time and connection-time driver failures alike, but
+        # not everything SQLAlchemy raises — see below.
         orig = e.orig
         if isinstance(orig, _CONCURRENCY_ERRORS):
             raise ConcurrentUpdateError from e
@@ -65,10 +60,7 @@ def translate_db_errors() -> Iterator[None]:
             raise IntegrityError from e
         raise StorageUnavailableError from e
     except SQLAlchemyError as e:
-        # Catch-all for everything DBAPIError does NOT cover: pool checkout timeout
-        # (`exc.TimeoutError`) and pool-internal connection-invalidation signals
-        # (`exc.DisconnectionError`/`InvalidatePoolError`) both live outside
-        # DBAPIError's hierarchy — direct `SQLAlchemyError` subclasses instead
-        # (verified: `issubclass(DisconnectionError, DBAPIError)` is False). None of
-        # these carry a `.orig` to classify further; all mean "storage layer failed".
+        # Catch-all for what DBAPIError does not cover: pool checkout timeout and
+        # connection-invalidation signals are direct `SQLAlchemyError` subclasses. None
+        # carry a `.orig` to classify further; all mean "storage layer failed".
         raise StorageUnavailableError from e

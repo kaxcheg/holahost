@@ -54,11 +54,10 @@ from interface.http.schemas import DocumentResponse, SearchRequest, SearchRespon
 _bearer = HTTPBearer(
     scheme_name="bearerAuth",
     bearerFormat="JWT",
-    # Declares the requirement, never enforces it. `HolahostAuthMiddleware` answered
-    # long before any dependency runs (§8.1 step 2), so an enforcing dependency here
-    # would be a second gate behind the first, in the wrong order and with its own body.
-    # `auto_error=False` keeps this to what it is for: telling the generated schema that
-    # these routes take a bearer token, which FastAPI cannot learn from middleware.
+    # Declares the requirement, never enforces it: `HolahostAuthMiddleware` answered long
+    # before any dependency runs (§8.1 step 2). `auto_error=False` keeps this to telling
+    # the generated schema that these routes take a bearer token, which FastAPI cannot
+    # learn from middleware.
     auto_error=False,
     description=(
         "Platform-issued JWT, validated against the configured JWKS. Its `sub` is the "
@@ -68,36 +67,27 @@ _bearer = HTTPBearer(
 )
 
 
-# Relative to the service's own base path, which `interface/http/app.py` applies once for
-# every router (see `api_base.py`) — a router does not get to choose the segment it is
-# published under.
+# Prefix is relative to the service's base path, applied once for every router by
+# `interface/http/app.py`. The bearer dependency is a declaration, not behaviour: the
+# schema generator reads only the route signature, so a middleware-enforced requirement
+# has to be stated here or it is absent from `docs/openapi.json`.
 #
-# The bearer dependency is a declaration, not behaviour: everything FastAPI's generator
-# knows about an operation comes from its signature, so a requirement the middleware
-# enforces has to be stated here or it is absent from `docs/openapi.json` entirely.
-#
-# `X-Request-ID` is required just as strictly and is deliberately *not* declared. Two
-# reasons, and either would do. It is not the caller's to send: both intended entry paths
-# attach it unconditionally, which is exactly what the token is not — that one a caller
-# obtains and presents itself, so it belongs in the document and this does not. And
-# publishing it would undo `MalformedRequestError`'s muteness: that error withholds which
-# header was missing precisely because a request without it came by a path it was not
-# meant to, and a document naming the header hands that caller the one hint it needs.
+# `X-Request-ID` is required just as strictly and deliberately *not* declared: it is not
+# the caller's to send (both entry paths attach it), and publishing it would undo
+# `MalformedRequestError`'s muteness by naming the header a caller on the wrong path needs.
 router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Security(_bearer)])
 
 
 class _StageTimer:
     """Per-stage wall clock for one ingest, for `op_completed.stage_ms` (§8.7).
 
-    Both ingest use cases run the same four stages and each has its own failure mode —
-    a slow parse (a big scanned PDF), a slow embed (model contention), a slow persist
-    (lock wait). One `duration_ms` for the whole request cannot tell them apart, which
-    is also why the calibration questions left open in the spec (service rate-limit
-    ceilings, whether search deserves its own bucket) have nothing to answer them with.
+    Both ingest use cases run the same four stages, each with its own failure mode — a
+    slow parse (a big scanned PDF), a slow embed (model contention), a slow persist (lock
+    wait) — which one `duration_ms` for the whole request cannot tell apart.
 
-    Measured here, in the interface layer, rather than inside the use cases: the stages
-    are ports the use case calls, so timing them is observation of the composition, not
-    business logic the application layer should carry.
+    Measured in the interface layer rather than inside the use cases: the stages are ports
+    the use case calls, so timing them observes the composition rather than the business
+    logic.
     """
 
     def __init__(self) -> None:
@@ -117,11 +107,11 @@ class _StageTimer:
     def record_remainder(self, total_seconds: float) -> None:
         """Book whatever the timed stages did not account for as `persist`.
 
-        The database work happens inside the use case's own transactions, which the
-        composition root has no port to wrap — so it is measured by subtraction. Named
-        `persist` because that is what dominates it; it also carries the ownership
-        pre-check read and the use case's own arithmetic, both negligible beside a lock
-        wait or a bulk insert. Recorded last so the four numbers sum to `duration_ms`.
+        The database work happens inside the use case's transactions, which the
+        composition root has no port to wrap, so it is measured by subtraction. It also
+        carries the ownership pre-check and the use case's arithmetic, both negligible
+        beside a lock wait or a bulk insert. Recorded last, so the four numbers sum to
+        `duration_ms`.
         """
         accounted = sum(self._stages.values())
         self._stages["persist"] = round(max(total_seconds * 1000 - accounted, 0.0), 3)
@@ -169,16 +159,12 @@ class _TimedEmbedder:
 def _read_upload(file: UploadFile) -> bytes:
     """Read the whole upload, then release the parser's own copy of it.
 
-    Sync read — endpoints stay sync `def` per ADR A-9, so `await file.read()` is not
-    available and `file.file` is the way in.
+    Sync read — endpoints stay sync `def` per ADR A-9, so `file.file` is the way in.
 
-    The release is the point, and it is about *when*. `FileParser` takes `bytes`, so the
-    copy is unavoidable; what is avoidable is holding the original until the request ends.
-    Starlette spools each part past 1 MiB to an anonymous temp file, and FastAPI's form
-    cleanup closes it only after the handler has returned — which is on the far side of
-    parsing, chunking, embedding and the write, i.e. seconds. Until then the descriptor
-    and its blocks are pinned for no reason, once per in-flight upload across a 40-wide
-    thread pool. Closing here hands them back as soon as the bytes have been copied.
+    The release is about *when*: `FileParser` takes `bytes`, so the copy is unavoidable,
+    but FastAPI's form cleanup closes the spool only after the handler returns — on the
+    far side of parsing, chunking, embedding and the write. Until then a descriptor and
+    its blocks are pinned per in-flight upload for nothing.
 
     Safe to close early: nothing downstream touches `file.file` again, and the cleanup's
     own close is a no-op on an already-closed file.
@@ -199,10 +185,8 @@ def _log_success(
     stage_ms: dict[str, float] | None = None,
     top_score: float | None = None,
 ) -> None:
-    # Literal keyword arguments throughout — not a `**dict` splat: log_event's
-    # `level: int = ...` keyword-only param ahead of `**fields: object` makes mypy
-    # conservatively reject any splatted `dict[str, object]` (it can't prove the dict
-    # excludes a "level" key), even though no caller here ever means to set it.
+    # Literal keyword arguments, not a `**dict` splat: mypy rejects splatting a
+    # `dict[str, object]` past `log_event`'s keyword-only `level: int`.
     start = request.state.start_time
     log_event(
         "op_completed",
@@ -316,8 +300,7 @@ def search_document(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SearchResponse:
     # §3.7's three search knobs reach the use case from here and nowhere else: the
-    # application layer must not import `Settings`, and reading them off module constants
-    # instead — as this did — left the settings themselves with no readers at all.
+    # application layer must not import `Settings`.
     use_case = SearchDocumentUseCase(
         documents_repo_factory,
         embedder,
@@ -336,11 +319,9 @@ def search_document(
         "POST /documents/{id}/search",
         document_id=str(document_id),
         hits=len(result.hits),
-        # The best match's score, not an average: the question a search log has to answer
-        # is "did the top hit actually clear the bar" — that is what `SIMILARITY_THRESHOLD`
-        # gets calibrated against, and it is the number a user's "found nothing useful"
-        # complaint has to be checked against. `None` on an empty result, which is itself
-        # the signal that nothing cleared the threshold.
+        # The best match, not an average: what a search log has to answer is whether the
+        # top hit cleared the bar, which is what `SIMILARITY_THRESHOLD` is calibrated
+        # against. `None` on an empty result — itself the signal that nothing cleared it.
         top_score=result.hits[0].score if result.hits else None,
     )
     return SearchResponse.from_result(result)

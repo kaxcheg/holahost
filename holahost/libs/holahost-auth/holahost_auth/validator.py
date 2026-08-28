@@ -17,11 +17,9 @@ def authenticate(
 ) -> TokenContext:
     """Validate a JWT from a raw `Authorization` header value, fully offline.
 
-    Implements holahost_frame.md's numbered validation procedure: scheme
-    check, parse, `alg` pinning, signature by `kid` (PyJWKClient's built-in
-    single re-fetch on an unknown `kid`), standard claims, `TokenContext`
-    population. The only possible network call is the JWKS re-fetch inside
-    `jwks_client` — `auth` itself is never called.
+    Implements holahost_frame.md's validation procedure: scheme check, parse,
+    `alg` pinning, signature by `kid`, standard claims, `TokenContext`. The
+    only possible network call is the JWKS re-fetch inside `jwks_client`.
 
     :param authorization_header: Raw `Authorization` header value, or `None`.
     :param config: This service's fixed validation configuration.
@@ -44,16 +42,14 @@ def authenticate(
     except jwt.PyJWKClientConnectionError as exc:
         raise JwksUnavailableError(f"JWKS endpoint unreachable: {exc}") from exc
     except json.JSONDecodeError as exc:
-        # PyJWKClient.fetch_data() only catches URLError/TimeoutError around
-        # its json.load() call — a non-JSON response body (e.g. an HTML
-        # proxy error page) raises this uncaught, straight out of the
-        # library. Same failure class as a connection error: the endpoint
-        # is up but malfunctioning, not a statement about this token.
+        # PyJWKClient.fetch_data() guards only URLError/TimeoutError, so a
+        # non-JSON body (an HTML proxy error page) surfaces here. Same class
+        # as a connection failure: the endpoint malfunctions, the token is
+        # not at fault.
         raise JwksUnavailableError(f"JWKS endpoint returned invalid JSON: {exc}") from exc
     except (jwt.PyJWKClientError, jwt.InvalidTokenError) as exc:
-        # PyJWKClient parses the token's header internally before doing the
-        # kid lookup, so a structurally invalid token (e.g. "not enough
-        # segments") raises InvalidTokenError here, not PyJWKClientError.
+        # PyJWKClient parses the header before the kid lookup, so a
+        # structurally invalid token raises InvalidTokenError here.
         raise AuthenticationError(f"no matching JWKS signing key: {exc}") from exc
 
     try:
@@ -91,11 +87,10 @@ def _validated_roles(claims: dict[str, object]) -> tuple[str, ...]:
 def _validated_act(claims: dict[str, object]) -> str | None:
     """Extract and shape-check the optional `act` claim (RFC 8693 delegation).
 
-    Absent `act` means "not delegated" (`None`). A *present but malformed*
-    `act` (not `{"sub": <non-empty str>}`) is rejected rather than silently
-    treated as "not delegated" — failing open here would let a tampered or
-    truncated delegation marker slip past the confused-deputy check that
-    depends on it downstream (frame spec, point 6).
+    Absent `act` means "not delegated" (`None`). A present but malformed one
+    (not `{"sub": <non-empty str>}`) is rejected rather than read as "not
+    delegated": failing open would let a tampered delegation marker past the
+    confused-deputy check downstream (frame spec, point 6).
 
     :raises AuthenticationError: `act` is present but malformed.
     """

@@ -110,7 +110,7 @@ dev-logs: ## follow stack logs
 	$(DEV_COMPOSE) logs -f
 
 # python -m, not bare `alembic`: the console script's shebang breaks once relocated into the
-# runtime image (see .build-state/R-25-.../clarifications.md) — same fix as the Dockerfile's CMD.
+# runtime image — same fix as the Dockerfile's CMD.
 # Both steps override the container's CMD (bypassing scripts.bootstrap), and both are ELEVATED:
 # migrations/env.py and scripts/provision_app_role.py each build their DSN from
 # POSTGRES_SUPERUSER/POSTGRES_SUPERUSER_PASSWORD, not the app's own credentials (see their
@@ -136,8 +136,8 @@ migrate-dev: ## alembic upgrade head + provision the app role, against the compo
 # IMAGE=<digest>. `docker compose run`, not a bare `docker run`: auto-joins the compose project's
 # own network (no manual `--network` needed) and, via `postgres`'s own `depends_on: condition:
 # service_healthy`, creates+waits for `postgres` automatically if it isn't already running —
-# verified live from a clean slate (no network/containers/volumes at all), see
-# .build-state/R-25-.../clarifications.md. `--env-file` supplies POSTGRES_USER/POSTGRES_DB/
+# verified live from a clean slate (no network/containers/volumes at all).
+# `--env-file` supplies POSTGRES_USER/POSTGRES_DB/
 # EMBEDDING_CACHE_DIR/ENV straight from the instance's synced .env for Compose's own interpolation
 # (`postgres`'s block reads USER/DB via its own `env_file:` key instead, a separate mechanism —
 # see docker-compose.yml). Two secrets, not one, and neither is ever in a .env file:
@@ -190,7 +190,7 @@ migrate-prod: ## run by the promote-prod pipeline via SSM; manual use: make migr
 # activated venv leaks that venv's VIRTUAL_ENV into those subprocess calls, breaking poetry's venv
 # resolution for every OTHER package's hook run (found for real: holahost-auth's own `poetry run
 # mypy` started failing on missing test-only deps that its own venv actually has, only when
-# invoked this way — see .build-state/R-25-.../clarifications.md). Must run from the true repo
+# invoked this way). Must run from the true repo
 # root — the hooks' file paths and discovery are repo-root-relative.
 hooks-install: ## install git hooks (repo-root pre-commit config)
 	cd $(REPO_ROOT) && pre-commit install

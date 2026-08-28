@@ -21,33 +21,24 @@ from interface.http.dependencies import get_embedding_model, get_engine, get_set
 def _fetch_password_if_needed() -> None:
     """Set `POSTGRES_PASSWORD` from Secrets Manager, before `Settings` is built (§3.8).
 
-    Dev: no-op — `.env` (`env_file`) already sets `POSTGRES_PASSWORD` directly. Staging/
-    prod: fetched here, fresh, on every process start.
+    Dev: no-op — `.env` sets `POSTGRES_PASSWORD` directly. Staging/prod: fetched fresh on
+    every process start.
 
-    A restart alone is NOT enough to complete a rotation, and this fetch must not be read as
-    implying otherwise: it only changes which password the *client* offers. The password the
-    Postgres role actually accepts is set by `scripts/provision_app_role.py`, which the deploy
-    runs as the bootstrap superuser — the `postgres` image applies `POSTGRES_PASSWORD` at initdb
-    and never again, and `pgdata` outlives every restart. Rotating the secret and restarting
-    without redeploying therefore fails authentication on every connection. The runbook's
-    rotation step is "put-secret-value, then redeploy" for exactly this reason.
+    A restart alone does not complete a rotation: this only changes which password the
+    *client* offers. What the role accepts is set by `scripts/provision_app_role.py`,
+    which the deploy runs as the bootstrap superuser (the `postgres` image applies
+    `POSTGRES_PASSWORD` at initdb and never again, and `pgdata` outlives restarts). Hence
+    the runbook's "put-secret-value, then redeploy".
 
-    Only the password: `Settings` itself now assembles the actual connection URL from
-    `postgres_user`/`postgres_password`/`postgres_db`/`postgres_host`/`postgres_port`
-    (a `@computed_field`, `PostgresDsn`-built) — not this module's job any more. USER/DB
-    come from `infra/envs/<env>/.env` (`env_file`) the same way PASSWORD does for dev,
-    same file `docker-compose.yml`'s own `postgres` service init already reads.
+    Only the password: `Settings` assembles the connection URL from its own fields.
     """
     env = os.environ.get("ENV", "dev")
     if env == "dev":
         return
     import boto3  # lazy: dev never reaches this branch, so it never pays for the import
 
-    # Explicit region, no ambient discovery — AWS_REGION is read directly, not through
-    # Settings: it's needed before Settings can even be constructed. Secret id is
-    # service-scoped (`holahost/{env}/rag-documents/db-password`, unlike
-    # `~/repos/lead-capture`'s flat `holahost/{env}/{name}`, which predates a second
-    # service existing).
+    # AWS_REGION read directly rather than through Settings: needed before Settings can
+    # be constructed. The secret id is service-scoped.
     client = boto3.session.Session().client("secretsmanager", region_name=os.environ["AWS_REGION"])
     secret = client.get_secret_value(SecretId=f"holahost/{env}/rag-documents/db-password")
     os.environ["POSTGRES_PASSWORD"] = secret["SecretString"]
@@ -56,17 +47,14 @@ def _fetch_password_if_needed() -> None:
 def _assert_rls_is_enforced(engine: Engine) -> None:
     """Refuse to serve traffic on a connection that bypasses row-level security (§8.0).
 
-    Owner isolation here has exactly one enforcement point — the RLS policies in
-    `migrations/versions/20260809_1200_*.py`. No repository filters by owner in its own SQL
-    (`SqlAlchemyDocumentsRepo`/`PgvectorSearch` both say so), so if the connecting role is a
-    superuser or carries BYPASSRLS, every `get`, `search`, `replace` and `delete` silently
-    serves and mutates other owners' rows, with nothing failing anywhere to reveal it.
+    Owner isolation has exactly one enforcement point: the RLS policies applied by the
+    migrations. No repository filters by owner in its own SQL, so a connecting role that
+    is a superuser or carries BYPASSRLS silently serves and mutates other owners' rows.
 
-    That failure mode is invisible by construction, which is why it is checked here rather than
-    trusted: the integration suite proves isolation under a deliberately unprivileged role
-    (`tests/integration/conftest.py`), so a deployment that connects as something else is not
-    covered by any test that passes. One query at startup converts a silent, total loss of
-    isolation into a process that refuses to start.
+    Checked rather than trusted because that failure mode is invisible by construction —
+    the integration suite proves isolation under a deliberately unprivileged role, so a
+    deployment connecting as something else is covered by no passing test. One query at
+    startup turns a total loss of isolation into a process that refuses to start.
     """
     with engine.connect() as conn:
         bypasses = conn.execute(
@@ -85,22 +73,16 @@ def _assert_rls_is_enforced(engine: Engine) -> None:
 def _assert_embedding_dimension_matches(model_name: str, actual_dim: int) -> None:
     """Refuse to serve traffic on a model whose vectors do not fit the schema (§3.7).
 
-    `EMBEDDING_MODEL` is environment configuration — a different value per `.env` is a
-    supported thing to do — while `EMBEDDING_DIM` is a hardcoded domain constant that
-    also fixes the `vector(384)` column and `Embedding`'s own invariant. Nothing tied
-    those two together, so pointing the setting at, say, `all-mpnet-base-v2` (768) left
-    a process that started cleanly and answered `GET /health` with 200, while every
-    single ingest and search failed: `Embedding.__post_init__` raises, `embed_texts`'
-    `except Exception` turns it into `EmbeddingFailedError`, and nothing catches that —
-    500 `InternalError`, on 100% of traffic, until someone reads a log. `RecursiveTextChunker`
-    already fails fast at composition time for the same class of misconfiguration
-    (`chunk_window > max_input_tokens`); this is the same guard for the dimension.
+    `EMBEDDING_MODEL` is per-environment configuration, while `EMBEDDING_DIM` is a domain
+    constant that also fixes the `vector(384)` column and `Embedding`'s invariant. Without
+    this guard, pointing the setting at a 768-dimensional model starts cleanly, answers
+    `GET /health` with 200, and turns every ingest and search into a 500. The chunker
+    fails fast on the analogous `chunk_window > max_input_tokens`.
 
-    It does NOT cover the other half of a model swap: a *different* model of the same
-    384 dimensions passes this check, and its vectors are simply not comparable to the
-    ones already stored — searches would return confident nonsense rather than errors.
-    Nothing here can detect that; it needs the model identity recorded alongside the
-    vectors and a re-embed on change, which the schema has no column for today.
+    It does NOT cover the other half of a model swap: a different model of the same 384
+    dimensions passes, and its vectors are not comparable to those already stored —
+    searches return confident nonsense rather than errors. Detecting that needs the model
+    identity stored alongside the vectors, which the schema has no column for.
     """
     if actual_dim != EMBEDDING_DIM:
         raise RuntimeError(
@@ -119,13 +101,11 @@ def bootstrap() -> FastAPI:
 
     start = time.monotonic()
     get_settings()  # fail fast on missing/invalid config before touching anything else
-    # get_engine() builds the one process-wide connection pool; the guard then spends one
-    # query on it proving this deployment's role cannot bypass RLS (see the docstring).
+    # get_engine() builds the one process-wide pool; the guard spends one query on it.
     _assert_rls_is_enforced(get_engine())
-    # Eager load — §3.1: the model must be ready before traffic arrives. `cast`, not an
-    # isinstance check, same as `dependencies.get_chunker`: `dimension()` is an extra
-    # method of the one adapter this getter ever constructs, deliberately not part of
-    # the `EmbeddingModel` port (§8.0).
+    # Eager load (§3.1: the model is ready before traffic arrives). `cast` rather than an
+    # isinstance check: `dimension()` is an extra method of the one adapter this getter
+    # constructs, deliberately outside the `EmbeddingModel` port (§8.0).
     model = cast(FastembedEmbeddingModel, get_embedding_model())
     _assert_embedding_dimension_matches(get_settings().embedding_model, model.dimension())
     load_ms = (time.monotonic() - start) * 1000

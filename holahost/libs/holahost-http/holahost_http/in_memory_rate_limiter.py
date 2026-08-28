@@ -26,17 +26,13 @@ class InMemoryRateLimiter:
     Windows are epoch-floor-aligned (``epoch - epoch % window_seconds``) so every key
     resets on the same wall-clock boundaries.
 
-    **Bounded on purpose.** The key is derived from caller identity, so an unbounded
-    map grows with the number of distinct callers ever seen and never shrinks:
-    expiring a window rewrites that key's counter, it does not remove the key, and the
-    keys that would need removing are exactly the ones nobody is asking about any
-    more. Sweeping on a timer would be a second mechanism guessing at the same fact.
-    Instead the map is an LRU with a hard ceiling: the least recently consulted key is
-    evicted when a new one arrives at capacity. Evicting a key forgives whatever it had
-    counted, which is the right trade — the alternative is unbounded growth driven by
-    whoever sends the most distinct identities, i.e. exactly the caller a limiter
-    exists to contain. Size the ceiling above the plausible number of concurrently
-    active callers and eviction stays a theoretical event for legitimate traffic.
+    **Bounded on purpose.** Keys are caller identities, and expiring a window rewrites a
+    key's counter rather than removing it, so an unbounded map grows with every distinct
+    caller ever seen. The map is therefore an LRU with a hard ceiling. Eviction forgives
+    whatever that key had counted — the alternative is unbounded growth driven by whoever
+    sends the most distinct identities, which is the caller a limiter exists to contain.
+    Sized above the plausible number of concurrently active callers, eviction stays
+    theoretical for legitimate traffic.
 
     Args:
         cap_by_bucket: Ceiling per ``(bucket, is_service)`` pair — requests per window.

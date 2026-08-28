@@ -13,32 +13,26 @@ from holahost_auth.exceptions import AuthenticationError, JwksUnavailableError
 from holahost_auth.jwks import build_jwks_client
 from holahost_auth.validator import authenticate
 
-# The suppression below is for ruff's hardcoded-password heuristic, which fires on the
-# constant's name. This is a dict key, and it is exported API — `request.state.token` is
-# what every consuming route reads. Renaming it to dodge a false positive would leave the
-# constant lying about its own value.
+# noqa: ruff's hardcoded-password heuristic fires on the name. This is a dict key, and an
+# exported one — `request.state.token` is what consuming routes read.
 TOKEN_SCOPE_KEY = "token"  # noqa: S105
 
 
 class HolahostAuthMiddleware:
     """Validates the bearer token before the request reaches routing.
 
-    Placing this ahead of routing is not a preference. A framework resolves the
-    request body while building the endpoint's arguments, which happens *before* it
-    resolves that endpoint's dependencies — so authentication expressed as a
-    dependency runs after an upload has already been read in full. Every
-    unauthenticated caller then gets to spend the service's bandwidth and memory
-    before being told 401.
+    Ahead of routing because a framework resolves the request body while building the
+    endpoint's arguments, before its dependencies run — so authentication written as a
+    dependency lets every unauthenticated caller spend the service's bandwidth and memory
+    on a full upload before being told 401.
 
-    Stores the validated ``TokenContext`` at ``scope["state"]["token"]``, which is
-    what ``request.state.token`` reads, so handlers receive it the usual way (see
-    ``current_token``) and later middleware — rate limiting — can read it too.
+    Stores the validated ``TokenContext`` at ``scope["state"]["token"]``, which is what
+    ``request.state.token`` reads, so handlers (see ``current_token``) and later
+    middleware such as rate limiting both see it.
 
-    Failures are answered here, not raised: an exception thrown from middleware flies
-    past the app's own exception handlers (they are bound inside the middleware stack)
-    and becomes a 500. Neither body carries a reason — 401 discloses nothing that would
-    help someone probe for one (the cause is logged, never returned), and 503 is about
-    the service's own state, not the caller's token.
+    Failures are answered here, not raised: an exception from middleware flies past the
+    app's exception handlers, bound inside the stack, and becomes a 500. Neither body
+    carries a reason — the cause is logged instead.
 
     Args:
         config: This service's validation configuration.

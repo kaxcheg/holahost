@@ -16,12 +16,9 @@ For a multipart upload that means `await request.form()` — the full read — r
 *ahead of* authentication, rate limiting, and any size check written as a `Depends`.
 A service that expresses those checks the framework-native way therefore accepts every
 byte of an oversized, unauthenticated, over-quota upload and only then refuses it.
-This was not theoretical: a 50 MiB POST with no `Authorization` header was measured
-being read in full before the 401.
 
-Nothing a service writes inside its own routes fixes that. The checks have to sit
-outside routing, which means plain ASGI middleware — the same three for every service,
-which is what makes them a library rather than a pattern to re-derive.
+Nothing written inside a route fixes that: the checks have to sit outside routing, which
+means plain ASGI middleware — the same three for every service.
 
 ## What it provides
 
@@ -42,11 +39,10 @@ error hierarchy inherits (`code` + `details_dict()`), plus the two errors its ow
 middleware raise — `PayloadTooLargeError` and `RateLimitExceededError`. A service keeps
 its own `ApplicationError` hierarchy and inherits `PlatformError` from it.
 
-**An error's identity is its class name**, verbatim: `code` is a property returning
-`type(self).__name__`, declared nowhere and transformed into nothing. Two halves of one
-contract — identity and the shape of `details` — then live on one class, and a value read
-out of a log greps straight back to the code that produced it. Renaming an error class is
-a change to the wire contract, and should be reviewed as one.
+**An error's identity is its class name**, verbatim: `code` returns
+`type(self).__name__`. Identity and the shape of `details` then live on one class, and a
+value read out of a log greps back to the code that produced it. Renaming an error class
+is a change to the wire contract, and should be reviewed as one.
 
 **HTTP status on the exception.** `PlatformError` carries none. Where an error is raised
 decides its status — a body refused unread is 413, parsed content that turned out too
@@ -99,12 +95,11 @@ The result is an outer bound for the edge, not a replacement for the service's e
 on the file it extracted — that check is what a caller is told it exceeded, this one only
 decides how much gets read before anyone can look.
 
-That is also why the two arguments differ. `max_bytes` is an internal transport number;
-without `reported_limit` a 413 from here advertised it, which is *above* the limit the
-service enforces on the file — so a client that trimmed to the advertised number got past
-this middleware and was refused again by the service's own check, with the same status and
-code and a different `limit`. `reported_limit` defaults to `max_bytes`, which is correct
-for a service that caps a body it does not otherwise check.
+Hence two arguments: `max_bytes` is the transport number, `reported_limit` is what the
+caller acts on. Advertising the transport cap sends a client that trims to it just above
+the service's own limit, to be refused a second time with a different `limit`.
+`reported_limit` defaults to `max_bytes`, correct for a service that caps a body it does
+not otherwise check.
 
 ## Rate-limit ceilings
 

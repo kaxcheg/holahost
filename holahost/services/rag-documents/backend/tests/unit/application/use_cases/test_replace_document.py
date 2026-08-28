@@ -249,10 +249,9 @@ class TestReplaceDocumentUseCase:
 class TestInvalidNameIsRejectedBeforeAnyWork:
     """An unacceptable name is a property of the request, knowable before the pipeline.
 
-    It used to be checked after parse/chunk/embed, so the most expensive path in the
-    service was paid for in full to produce a 422 the first microsecond could have
-    produced. Asserting the *ports were never called* is what pins the order — asserting
-    only the exception passes either way.
+    Checked after parse/chunk/embed, it would cost the service's most expensive path to
+    produce a 422 the first microsecond could have. Asserting the *ports were never
+    called* is what pins the order — asserting only the exception passes either way.
     """
 
     def test_pipeline_ports_are_never_touched(self) -> None:

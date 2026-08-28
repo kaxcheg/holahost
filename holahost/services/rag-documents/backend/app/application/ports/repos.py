@@ -12,17 +12,13 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 
 class DocumentsRepo(ABC):
-    """Persists and reads ``Document`` rows, together with the ``Chunk`` rows they
-    own — one repo for the aggregate (``Document`` is the root, ``Chunk`` has no
-    repo of its own, spec §4.3): a chunk is written/replaced only as part of writing
-    its document, never independently.
+    """Persists and reads ``Document`` rows together with the ``Chunk`` rows they own —
+    one repo per aggregate (§4.3), so a chunk is written only as part of its document.
 
-    ``owner`` is bound at construction, not passed per call: every concrete method
-    here is *final* in shape — it calls ``_bind_owner()`` before delegating to the
-    matching ``_*_impl`` hook, so a subclass has no way to reach storage without the
-    owner-scoping step running first (§8.0). ``_bind_owner()`` re-runs on every call
-    (not just once) because it scopes the *active transaction*, and a single repo
-    instance may be used across more than one transaction within a use case.
+    ``owner`` is bound at construction, not passed per call: every concrete method calls
+    ``_bind_owner()`` before delegating to its ``_*_impl`` hook, leaving a subclass no way
+    to reach storage unscoped (§8.0). It re-runs on every call because it scopes the
+    *active transaction*, and one repo instance may span several.
     """
 
     def __init__(self, uow: UnitOfWork, owner: OwnerSubject) -> None:
@@ -56,11 +52,8 @@ class DocumentsRepo(ABC):
 
         A document owned by a different subject is returned as ``None``, identically
         to a document that does not exist at all (US-R06, A-13). The returned
-        document's ``chunks`` is always ``None`` — no current use case needs chunk
-        contents back from a plain read, only ``chunk_count``.
-
-        Concurrency: ``lock=True`` → ``SELECT ... FOR UPDATE``, held until the
-        enclosing ``UnitOfWork`` commits or rolls back.
+        document's ``chunks`` is always ``None`` — no use case needs chunk contents
+        back from a plain read, only ``chunk_count``.
 
         Args:
             document_id: The document to read.

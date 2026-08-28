@@ -12,10 +12,8 @@ from domain.value_objects.embedding import Embedding
 
 
 def _to_embedding(vector: npt.NDArray[Any]) -> Embedding:
-    """`vector` is whichever dtype `TextEmbedding.embed`/`query_embed` yielded
-    (float64/float32/float16/int8/int64/int32, per fastembed's own return type) —
-    `Any` here, not a narrower dtype, because this function normalizes all of them
-    the same way regardless of which one arrived."""
+    """`Any` dtype because fastembed's return type spans several, and all of them are
+    normalized the same way here."""
     arr = np.asarray(vector, dtype=np.float32)
     norm = float(np.linalg.norm(arr))
     if norm > 0.0:
@@ -24,32 +22,27 @@ def _to_embedding(vector: npt.NDArray[Any]) -> Embedding:
 
 
 class FastembedEmbeddingModel:
-    """Adapter for the `EmbeddingModel` port over a single `fastembed.TextEmbedding`
-    instance, loaded once at construction and shared across the request threadpool
-    (A-9). Thread-safety is ONNX Runtime's own guarantee (`InferenceSession.Run()` is
-    documented thread-safe; the Python binding releases the GIL for it) — no lock here.
+    """Adapter for the `EmbeddingModel` port over one `fastembed.TextEmbedding`, loaded at
+    construction and shared across the request threadpool (A-9). No lock: ONNX Runtime
+    documents `InferenceSession.Run()` as thread-safe.
 
-    `count_tokens` is deliberately NOT part of the `EmbeddingModel` Protocol (the
-    application-layer port doesn't declare it); it's an extra method the composition
-    root (R-24) uses to wire `RecursiveTextChunker`'s `length_function` to this exact
-    model's own tokenizer, so the chunk-window guarantee can never drift from what the
-    model actually tokenizes.
+    `count_tokens` is not part of the port. It is an extra method the composition root
+    uses to wire `RecursiveTextChunker`'s `length_function` to this model's own tokenizer,
+    so the chunk window cannot drift from what the model actually tokenizes.
     """
 
     def __init__(self, model_name: str, cache_dir: str) -> None:
-        # Mean pooling is this model's native trained strategy — fastembed's
-        # version-change notice (CLS -> mean) is expected, not actionable; silence
-        # only that one UserWarning, nothing else.
+        # Mean pooling is this model's native strategy, so fastembed's version-change
+        # notice is expected; silence that one warning, nothing else.
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", message=".*now uses mean pooling.*", category=UserWarning
             )
             self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
         self._dimension: int | None = None
-        # Measured once, not assumed: what this tokenizer adds around any input. Encoding
-        # the empty string yields exactly the special tokens and nothing else (verified:
-        # 2 for this model — `<s>`/`</s>`). Reading it off the tokenizer keeps the two
-        # methods below correct for a model that frames its input differently.
+        # What this tokenizer frames any input with: encoding the empty string yields
+        # exactly its special tokens. Measured rather than assumed, so a model that frames
+        # input differently keeps the two methods below correct.
         self._special_token_overhead = len(
             self._model.model.tokenizer.encode("").ids  # type: ignore[attr-defined]
         )
@@ -70,22 +63,17 @@ class FastembedEmbeddingModel:
     def count_tokens(self, text: str) -> int:
         """Count the tokens `text` itself contributes, with this model's own tokenizer.
 
-        `add_special_tokens=False` is load-bearing, not a detail. This is the chunker's
-        `length_function`, so it is asked to measure *fragments* — and the tokenizer's
-        framing tokens are added once per encoded sequence, not once per fragment. Left
-        on, every fragment measured anywhere in the recursive split reports two tokens it
-        does not contain (verified: `count_tokens("") == 2`), so the splitter believes
-        each candidate is larger than it is and cuts early. The overcount compounds across
-        splits and separators, and chunks come out a fraction of `CHUNK_WINDOW_TOKENS`.
+        `add_special_tokens=False` is load-bearing: this is the chunker's
+        `length_function`, measuring *fragments*, while framing tokens are added once per
+        encoded sequence. Left on, every fragment reports tokens it does not contain, the
+        splitter cuts early, and chunks come out a fraction of `CHUNK_WINDOW_TOKENS`.
 
-        Caveat verified at runtime: the tokenizer's own truncation still applies inside
-        `.encode()`, so the count saturates at the tokenizer's raw ceiling for text longer
-        than that — it does not report the true length past it. Harmless for the splitter,
-        which only needs "is this bigger than the window", and the window is guaranteed
-        smaller than the ceiling at composition time (see `max_input_tokens`).
+        The tokenizer's truncation still applies inside `.encode()`, so the count saturates
+        at its raw ceiling. Harmless for the splitter, which only asks "bigger than the
+        window", and the window is guaranteed smaller than the ceiling at composition time
+        (see `max_input_tokens`).
         """
-        # fastembed's public type stubs omit `.model.tokenizer`; verified at runtime
-        # (~/repos/lead-capture precedent) — attr-defined ignore, not a guess.
+        # fastembed's stubs omit `.model.tokenizer`; verified at runtime.
         return len(
             self._model.model.tokenizer.encode(  # type: ignore[attr-defined]
                 text, add_special_tokens=False
@@ -93,19 +81,16 @@ class FastembedEmbeddingModel:
         )
 
     def dimension(self) -> int:
-        """How many components a vector from this model has, measured once, not assumed.
+        """How many components a vector from this model has, measured once.
 
-        Measured — one `embed` of the empty string — rather than read off fastembed's
-        model registry: the registry's own shape has moved across the versions this
-        project's constraint admits, and what the schema has to agree with is what
-        `embed()` actually returns, not what a table says it should.
+        One `embed` of the empty string rather than a lookup in fastembed's model
+        registry, whose shape has moved across the versions this project admits: what the
+        schema must agree with is what `embed()` returns.
 
-        Exposed for the same reason as `max_input_tokens`: so the composition root can
-        refuse to start when the configured `EMBEDDING_MODEL` does not produce the
-        `EMBEDDING_DIM`-length vectors the rest of the service is built around — the
-        `vector(384)` column, `Embedding`'s own invariant — instead of loading happily,
-        answering `GET /health` with 200, and turning every ingest and every search into
-        a 500 for the life of the deployment.
+        Exposed so the composition root can refuse to start when the configured model does
+        not produce the `EMBEDDING_DIM`-length vectors the `vector(384)` column and
+        `Embedding`'s invariant are built around, instead of turning every ingest and
+        search into a 500 for the life of the deployment.
         """
         if self._dimension is None:
             [vector] = list(self._model.embed([""]))
@@ -115,17 +100,14 @@ class FastembedEmbeddingModel:
     def max_input_tokens(self) -> int:
         """How many tokens of *content* this model accepts before it truncates the rest.
 
-        The tokenizer's own ceiling minus its framing tokens, and the subtraction is the
-        point: truncation applies to the finished sequence, framing included (verified —
-        over-length input comes back at exactly the ceiling either way, so with framing on
-        it holds two fewer tokens of the caller's text). Reporting the raw ceiling would
-        put a chunk measured by `count_tokens` at exactly the limit two tokens over it at
-        embed time, and the tail would be dropped — silently, since `embed()` never raises
-        for over-length input.
+        The tokenizer's ceiling minus its framing tokens, and the subtraction is the point:
+        truncation applies to the finished sequence, framing included, so reporting the raw
+        ceiling would put a chunk measured at exactly the limit over it at embed time and
+        drop the tail — silently, since `embed()` never raises for over-length input.
 
-        Exposed so the composition root can fail fast at startup when the configured chunk
-        window exceeds what the model really takes, instead of embedding truncated chunks
-        for the rest of the deployment.
+        Exposed so the composition root can fail fast when the configured chunk window
+        exceeds what the model takes, instead of embedding truncated chunks for the life of
+        the deployment.
 
         :raises RuntimeError: this model's tokenizer has no truncation configured —
             unexpected for any of fastembed's supported models (all have a fixed

@@ -1,33 +1,23 @@
 """The published shape of every error this service can answer with (§7.6).
 
-`application/exceptions` declares the errors themselves — identity (its class name) and
-`details` shape (what `details_dict()` returns). This module is the same contract
-expressed as Pydantic models, which is what puts it into `docs/openapi.json`: the
-generated schema is the artifact a consumer integrates against, and `make openapi-check`
-diffs it in CI, so renaming an error class or changing a `details` key stops being a
-silent refactor and becomes a schema change someone has to approve.
+`application/exceptions` declares the errors themselves; this module is the same contract
+as Pydantic models, which is what puts it into `docs/openapi.json` — the artifact a
+consumer integrates against, diffed in CI by `make openapi-check`, so a changed `details`
+key becomes a schema change someone has to approve.
 
-Two declarations of one contract is a cost, paid deliberately: the application layer must
-not depend on a serialization library, and the wire is the interface layer's business.
-`tests/unit/interface/http/test_error_schemas.py` closes the gap — it asserts that every
-published error validates against its own model, so the two cannot drift.
+Two declarations of one contract, paid deliberately: the application layer must not depend
+on a serialization library. `tests/unit/interface/http/test_error_schemas.py` closes the
+gap by validating every published error against its own model.
 
-The unions are discriminated on `code`, which is exactly what `code` is for: `details` is
-a tagged union whose shape depends on which error was thrown, and the identity is its
-tag. A consumer switches on `code`, then reads `details` knowing its keys. Each `Literal`
-below therefore repeats an error class's name — which is what a reader should be able to
-grep straight back to, and what `test_error_schemas` asserts stays equal to it.
+The unions are discriminated on `code`: `details` is a tagged union whose shape depends on
+the error, and the identity is its tag. A consumer switches on `code`, then reads `details`
+knowing its keys.
 
-**Only this service's own errors are here.** What the shared middleware answers with —
-`401`/`503` from `holahost-auth`, `429 RateLimitExceededError` and the transport
-`413 PayloadTooLargeError` from `holahost-http` — is the platform's contract, identical
-for every service behind the same edge, and restating it in each service's document
-would make one fact look like N. `MalformedRequestError` is the exception that proves the
-rule: `RequestIdMiddleware` delivers it, but the error is this service's own (its
-identity and its mute `details` are declared in `application/exceptions`), so it is here.
-
-`InternalError` is the one identity with no class behind it — see `errors._internal_error`
-for why there is deliberately none to derive it from.
+**Only this service's own errors are here.** The shared middleware's answers — `401`/`503`
+from `holahost-auth`, `429` and the transport `413` from `holahost-http` — are the
+platform's contract, identical behind every service, and restating them per service would
+make one fact look like N. `MalformedRequestError` is delivered by `RequestIdMiddleware`
+but declared by this service, so it belongs here.
 """
 
 from __future__ import annotations
@@ -38,9 +28,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class _Strict(BaseModel):
-    """Every model here forbids undeclared keys, which is what makes the conformance
-    test in `tests/unit/interface/http/test_error_schemas.py` able to fail: a `details`
-    that grew a key nobody published stops validating instead of quietly passing."""
+    """Forbids undeclared keys, which is what lets the conformance test fail: a `details`
+    that grew an unpublished key stops validating instead of quietly passing."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -79,11 +68,9 @@ class NoDetails(_Strict):
     """An error whose identity is the whole message — nothing to parameterise."""
 
 
-# Each model below names the error it publishes, in a comment rather than a docstring: a
-# model's docstring becomes that schema's `description` in the generated document, and
-# where the original is declared is a fact about this repository, not about the API. The
-# name in the comment is the same one the class publishes as `code`, so a reader lands on
-# the declaration in one grep.
+# Each model names the error it publishes in a comment, not a docstring: a docstring
+# becomes that schema's `description` in the generated document, and where the original is
+# declared is a fact about this repository, not about the API.
 #
 # `application.exceptions.UnsupportedMediaTypeError`.
 class UnsupportedMediaTypeErrorBody(_Strict):
@@ -102,10 +89,9 @@ class InvalidPayloadErrorBody(_Strict):
 
 
 # `application.exceptions.MalformedRequestError` — the one published error no route can
-# raise: `RequestIdMiddleware` answers with it before routing (`edge.MISSING_REQUEST_ID_ERROR`).
-# Hence both its oddities — it is in *every* group's 422, because the header is required of
-# every guarded route, and it has no row in `errors.ERROR_CONTRACT`, because its status is
-# an argument at the point the stack is assembled.
+# raise: `RequestIdMiddleware` answers with it before routing. Hence both its oddities — it
+# is in *every* group's 422, since the header is required of every guarded route, and it
+# has no row in `errors.ERROR_CONTRACT`, since its status is set where the stack is built.
 class MalformedRequestErrorBody(_Strict):
     code: Literal["MalformedRequestError"]
     message: str = _MESSAGE
@@ -154,9 +140,9 @@ class NotFoundErrorBody(_Strict):
     details: NoDetails
 
 
-# Nothing to reference: no exception class publishes this one — `errors._internal_error`
-# builds it. Its docstring is kept (and does reach the document) because unlike the
-# comments above it says something a consumer needs: what this answer means.
+# No exception class publishes this one — `errors._internal_error` builds it. Its
+# docstring stays (and reaches the document): unlike the comments above, it says something
+# a consumer needs.
 class InternalErrorBody(_Strict):
     """The one out-of-contract answer. Anything this service did not publish — an
     unmapped exception, a driver failure, a defect — comes back as exactly this, with an
@@ -201,9 +187,8 @@ InternalErrorResponse = _envelope("InternalErrorResponse", InternalErrorBody)
 _INTERNAL: dict[int | str, dict[str, Any]] = {
     500: {"model": InternalErrorResponse, "description": "Out of contract — see the log."}
 }
-"""`500` stays: it is this service's own handler answering, and a consumer needs the
-shape. The platform's own answers (`401`, `503`, `429`, and the transport `413`) do not
-appear in any of the maps below — see the module docstring."""
+"""`500` stays: this service's own handler answers it, and a consumer needs the shape.
+The platform's answers appear in none of the maps below — see the module docstring."""
 
 INGEST_RESPONSES: dict[int | str, dict[str, Any]] = {
     413: {"model": UploadTooLargeErrorResponse, "description": "File over MAX_UPLOAD_SIZE."},

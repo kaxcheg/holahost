@@ -2,12 +2,9 @@
 
 import jwt
 
-# PyJWKClient's `lifespan` is a wall-clock TTL that would otherwise trigger a
-# background re-fetch independent of whether the requested `kid` is known.
-# rag-documents' documented cache lifecycle is "process lifetime, or an
-# unknown kid" — no wall-clock expiry — so lifespan is set far beyond any
-# realistic process uptime; the only refresh trigger left is PyJWKClient's
-# own built-in retry-once-on-unknown-kid behavior.
+# `lifespan` is a wall-clock TTL that would re-fetch regardless of whether the
+# requested `kid` is known. Set beyond any realistic process uptime, so the only
+# refresh trigger left is PyJWKClient's retry-once-on-unknown-kid.
 _NO_TIME_BASED_EXPIRY_SECONDS = 10**9
 
 

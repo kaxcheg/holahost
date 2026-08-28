@@ -51,15 +51,13 @@ class SearchHit:
 
 
 class VectorSearch(ABC):
-    """Cosine-similarity search over one document's chunks — read side of Chunk
-    (``DocumentsRepo`` is the write side). CQRS-justified as its own port despite
-    ``Chunk`` having no repo of its own (§4.3): this returns a narrow projection
-    (``SearchHit``), never reconstructs the entity, so it is not "a chunk
-    repository" in the sense that would need folding into the aggregate's repo.
+    """Cosine-similarity search over one document's chunks — the read side of Chunk,
+    where ``DocumentsRepo`` is the write side. Its own port despite ``Chunk`` having no
+    repo (§4.3): it returns a narrow projection (``SearchHit``) and never reconstructs
+    the entity, so it is not a chunk repository to fold into the aggregate's.
 
-    ``owner`` is bound at construction, same reasoning and same shape as
-    ``DocumentsRepo``: ``top_k`` is concrete and calls ``_bind_owner()`` before
-    delegating to ``_top_k_impl``, so a subclass cannot reach storage unscoped.
+    ``owner`` is bound at construction, same shape as ``DocumentsRepo``: ``top_k`` calls
+    ``_bind_owner()`` before delegating, so a subclass cannot reach storage unscoped.
     """
 
     def __init__(self, uow: UnitOfWork, owner: OwnerSubject) -> None:

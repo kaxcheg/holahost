@@ -4,33 +4,20 @@ Run once per deploy, as the bootstrap superuser, *after* `alembic upgrade head` 
 the container swap — see `.github/actions/ssm-migrate-deploy/action.yml` and the Makefile's
 `migrate-*` targets, which are the only callers.
 
-Why this exists at all: owner isolation in this service is enforced solely by Postgres RLS
-(`migrations/versions/20260809_1200_*.py`, §8.0) — no repository filters by owner in its own
-SQL. A superuser bypasses RLS unconditionally, `FORCE ROW LEVEL SECURITY` included, so the
-whole guarantee rests on the application connecting as a role that is *not* one. The role the
-`postgres` container creates at initdb is a superuser by construction (that is what the image's
-`POSTGRES_USER` means), which is why docker-compose.yml keeps that bootstrap identity separate
-(`postgres`) from the identity the app authenticates as (`POSTGRES_USER` in
-`infra/envs/<env>/.env`) and this script creates the latter explicitly.
+Owner isolation is enforced solely by Postgres RLS (§8.0) — no repository filters by owner in
+its own SQL — and a superuser bypasses RLS unconditionally, `FORCE ROW LEVEL SECURITY`
+included. The whole guarantee therefore rests on the application connecting as a role that is
+not one, while the role the `postgres` container creates at initdb is a superuser by
+construction. Hence a separate identity, created here explicitly.
 
-Running every deploy rather than once, at initdb, is deliberate and covers two things at once:
-a fresh database gets the role created, and an existing one gets `ALTER ROLE ... PASSWORD`
-re-applied — which is what makes a Secrets Manager rotation actually take effect. Nothing else
-in the stack ever changes the role's password: the `postgres` image applies `POSTGRES_PASSWORD`
-at initdb only, and the `pgdata` volume outlives every restart.
+Run every deploy rather than once at initdb, which covers both cases: a fresh database gets the
+role created, an existing one gets `ALTER ROLE ... PASSWORD` re-applied — the step that makes a
+Secrets Manager rotation take effect, since nothing else in the stack changes that password.
 
-This is the one place both Postgres identities are held at once, and each comes from its own
-settings model rather than raw `os.environ` reads: `SuperuserSettings` is the connection it
-opens, `AppRoleSettings` is the role it creates. It reaches Postgres through a SQLAlchemy
-engine like every other database access in this service — an earlier direct `psycopg.connect`
-was the only consumer that needed a DSN without its driver dialect, and forced that spelling on
-all of them.
-
-Deliberately not the app's own `Settings`
-(same reasoning as `migrations/env.py`): this is a standalone entry point, and constructing
-`Settings` for a DB connection would demand every unrelated required field (JWKS, chunking,
-rate limits) it has no way to supply — `AppRoleSettings` is the subset that is genuinely this
-script's business, which is why `Settings` inherits it rather than owning it.
+The one place both Postgres identities are held at once, each from its own settings model:
+`SuperuserSettings` is the connection it opens, `AppRoleSettings` the role it creates. Not the
+app's own `Settings` (same reasoning as `migrations/env.py`): this is a standalone entry point
+and would have to supply every unrelated required field it has no business knowing.
 """
 
 from __future__ import annotations
@@ -50,22 +37,17 @@ def provision() -> None:
     role = sql.Identifier(app_user)
 
     # A plain `create_engine`, not `infrastructure.db.build_engine`: none of what that adds
-    # (a five-connection pool, pre-ping, the pgvector type registration, the UTC connect_args)
-    # applies to a handful of one-off DDL statements run once per deploy. The engine is here to
-    # own the URL — one DSN spelling for the whole service, dialect included — and the work then
-    # happens on its own driver connection.
+    # (pool, pre-ping, pgvector registration, UTC connect_args) applies to a handful of one-off
+    # DDL statements. The engine is here to own the URL — one DSN spelling for the service.
     engine = create_engine(SuperuserSettings().database_url.get_secret_value())
 
-    # psycopg's `sql` composition on the raw DBAPI connection, NOT SQLAlchemy `text()` with
-    # `String().literal_processor()`. Postgres accepts no bind parameters in utility statements
-    # (`ALTER ROLE ... PASSWORD %s` is a syntax error), so the password has to be composed into
-    # the statement text, and the two escapers are not interchangeable for that: SQLAlchemy's
-    # literal processor doubles `%` into `%%`, correct only if the result then passes through a
-    # DBAPI doing `%`-style interpolation — which psycopg skips for a statement with no
-    # parameters. The doubling is then never undone and the role silently gets the wrong
-    # password. Caught for real, not reasoned about: a rotation to `a%b` reported success and
-    # stored `a%%b`, so every subsequent connection failed to authenticate. `sql.Literal`
-    # escapes for the server, never for a paramstyle, and stores `a%b`.
+    # psycopg's `sql` composition on the raw DBAPI connection, not SQLAlchemy `text()` with
+    # `String().literal_processor()`. Postgres takes no bind parameters in utility statements
+    # (`ALTER ROLE ... PASSWORD %s` is a syntax error), so the password is composed into the
+    # statement text — and the two escapers differ there: the literal processor doubles `%`
+    # into `%%`, undone only by a DBAPI doing `%`-interpolation, which psycopg skips for a
+    # parameterless statement. A password of `a%b` would be stored as `a%%b`, failing every
+    # subsequent connection. `sql.Literal` escapes for the server, never for a paramstyle.
     raw = engine.raw_connection()
     try:
         with closing(raw.cursor()) as cur:

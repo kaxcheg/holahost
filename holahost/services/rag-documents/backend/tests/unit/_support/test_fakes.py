@@ -1,12 +1,11 @@
-"""Tests for the test fakes themselves — specifically for the two contracts they exist
-to protect and used to assert nowhere: §8.0's "every repository call runs inside an
-explicit `with uow:`", and owner scoping (US-R06, A-13).
+"""Tests for the test fakes themselves — for the two contracts they exist to protect:
+§8.0's "every repository call runs inside an explicit `with uow:`", and owner scoping
+(US-R06, A-13).
 
-Both were previously unfalsifiable. ``FakeVectorSearch`` returned its preset hits
-regardless of owner, and both fakes constructed a ``FakeUnitOfWork`` of their own —
-a different object from the one the use case under test was injected with — so a use
-case that dropped its transaction, or asked the factory for the wrong subject, passed
-the entire unit suite.
+Both are falsifiable only if the fakes enforce them. A fake that returns its preset hits
+regardless of owner, or that constructs a ``FakeUnitOfWork`` of its own instead of the one
+the use case was injected with, lets a use case drop its transaction or ask the factory
+for the wrong subject and still pass the entire unit suite.
 """
 
 from __future__ import annotations

@@ -8,34 +8,22 @@ class DomainValidationError(ValueError):
 
     The single type for every invariant violation raised by `domain/` and by the
     application-layer value types modelled on it (`SimilarityScore`, `TextFragment`).
-    A bare `ValueError` used to carry the internal-defect half of that, turned into
-    `ApplicationError` by a `wrap_value_error` decorator sitting on each use case —
-    implicit twice over: easy to leave off a new use case, and, since this class *is* a
-    `ValueError`, it also swallowed any client-fixable violation a use case had not
-    explicitly caught, answering `500` where §7.6 says `422`.
 
-    `field` says which of the two a violation is, and it is read rather than assumed:
+    `field` says which kind of violation it is, and it is read rather than assumed:
 
-    - **set** — the violation traces back to something the caller supplied. The use case
-      that knows which request field that was translates it into the matching §7.6 error
-      (`InvalidPayloadError`, `UnsupportedMediaTypeError`, `TooManyChunksError`) and
-      uses `field` to say which field, without re-deriving it (US-R01).
+    - **set** — traces back to something the caller supplied. The use case that knows
+      which request field that was translates it into the matching §7.6 error
+      (`InvalidPayloadError`, `UnsupportedMediaTypeError`, `TooManyChunksError`) and uses
+      `field` to name it without re-deriving it (US-R01).
     - **`None`** — nothing the caller sent could have caused it: a parser, chunker or
-      embedder produced a value that violates an invariant, or a pipeline stage that was
-      supposed to have guaranteed it did not. No use case translates these; the interface
-      layer answers `500 InternalError` with the reason in the log and nothing in the body
-      (`interface/http/errors.py`).
+      embedder produced a value violating an invariant, or a stage that was supposed to
+      guarantee one did not. No use case translates these; the interface layer answers
+      `500 InternalError` with the reason in the log and nothing in the body.
 
-    A **subclass** is added when a single call can raise more than one of these and the
-    caller has to tell them apart — `ChunkCountExceededError` below is the only one
-    today. Where a `try` wraps one construction that can only fail its own way
-    (`DocumentName`, `MimeType`), there is nothing to select between and the base type
-    with a `field` is the whole contract, so no subclass is warranted (CLAUDE.md: a type
-    exists exactly when the calling code reacts to it differently).
-
-    Still a `ValueError` subclass — the stdlib's own name for this fact, and with the
-    decorator gone nothing in this service catches `ValueError` any more, so the
-    inheritance no longer creates the trap it used to.
+    A **subclass** is added when one call can raise more than one of these and the caller
+    has to tell them apart — `ChunkCountExceededError` is the only one today. Where a
+    `try` wraps a construction that can fail only its own way (`DocumentName`, `MimeType`)
+    there is nothing to select between, so the base type carries the whole contract.
 
     :param message: Human-readable description of the violation. Server-side only: it
         names internal invariants, so it reaches the log and never a response body.
@@ -51,16 +39,13 @@ class DomainValidationError(ValueError):
 class ChunkCountExceededError(DomainValidationError):
     """A document was given more chunks than `MAX_CHUNKS_PER_DOCUMENT` allows.
 
-    Its own type rather than a `field` value to compare against. `Document.create` and
+    Its own type rather than a `field` value to compare against: `Document.create` and
     `replace_content` raise `DomainValidationError` for three invariants, and only this
-    one is the caller's to fix (US-R01: `422 TooManyChunksError`) — so the use case has
-    to select exactly it and let the other two through to the `500` they deserve.
-    Selecting on `field == "chunk_count"` put that decision in a string comparison: no
-    type checker can see it, and it silently stops matching the day the field is renamed
-    — at which point an internal defect starts being answered as the caller's mistake.
+    one is the caller's to fix (US-R01: `422 TooManyChunksError`), so the use case must
+    select exactly it and let the other two reach the `500` they deserve. Selecting on
+    `field == "chunk_count"` would put that in a string comparison no type checker sees.
 
-    Carries `field` anyway, per the base class's convention: it is a client-facing
-    violation, and the field is what it traces back to.
+    Carries `field` anyway, per the base class's convention.
 
     :param limit: The ceiling that was exceeded, quoted in the message.
     """
