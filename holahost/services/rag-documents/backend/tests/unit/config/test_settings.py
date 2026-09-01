@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from config.settings import Settings
+from interface.http.dependencies import get_auth_config
 
 
 def _env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
@@ -40,23 +41,9 @@ class TestSettings:
         assert settings.env == "dev"
         assert settings.chunk_window_tokens == 120
 
-    def test_loads_auth_config_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _env(monkeypatch)
-        settings = Settings()
-        assert settings.jwks_url == "https://auth.dev.holahost.internal/.well-known/jwks.json"
-        assert settings.expected_algorithm == "RS256"
-        assert settings.expected_issuer == "holahost-auth-dev"
-        assert settings.expected_audience == "rag-documents"
-
     def test_missing_required_field_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _env(monkeypatch)
         monkeypatch.delenv("POSTGRES_PASSWORD")
-        with pytest.raises(ValidationError):
-            Settings()
-
-    def test_missing_jwks_url_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _env(monkeypatch)
-        monkeypatch.delenv("JWKS_URL")
         with pytest.raises(ValidationError):
             Settings()
 
@@ -97,3 +84,31 @@ class TestSettings:
             settings.database_url.get_secret_value()
             == "postgresql+psycopg://user:p%40ss%3Aword@postgres:5432/rag_documents"
         )
+
+
+class TestTheAuthConfigTheServiceIsBuiltWith:
+    """`AuthConfig` declares and reads its own five variables (`holahost-auth`), so what is
+    left to check here is what this service is on the hook for: that its environment
+    supplies them, and that the composition root hands the middleware the right audience.
+    The shape of the object, its validators and its absent defaults are the library's."""
+
+    def test_it_reads_this_services_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _env(monkeypatch)
+
+        config = get_auth_config()
+
+        assert config.expected_audience == "rag-documents"
+        assert config.jwks_url == "https://auth.dev.holahost.internal/.well-known/jwks.json"
+        assert config.jwt_clock_skew_seconds == 30
+
+    def test_a_missing_variable_stops_the_service_starting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Reached at app-build time, which is inside `bootstrap()` — so an environment
+        # missing one of the five is a process that refuses to start rather than one that
+        # rejects every token later.
+        _env(monkeypatch)
+        monkeypatch.delenv("JWKS_URL")
+
+        with pytest.raises(ValidationError):
+            get_auth_config()

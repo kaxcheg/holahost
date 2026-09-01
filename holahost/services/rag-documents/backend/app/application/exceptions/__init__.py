@@ -15,7 +15,31 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from holahost_http import PlatformError
+from holahost_http import (
+    InvalidPayloadError,
+    MalformedRequestError,
+    NotFoundError,
+    PlatformError,
+)
+
+# Three of the errors this service throws are the platform's, not its own: every service
+# rejects a field, refuses a request that broke the transport contract, and answers for a
+# resource that is absent or another subject's — with the same identity and the same
+# `details` each time. They are re-exported here so the rest of the service goes on
+# importing every error it raises from one place, and so their rows in `ERROR_CONTRACT`
+# read like the others'.
+__all__ = [
+    "ApplicationError",
+    "DocumentParseError",
+    "EmptyDocumentError",
+    "InvalidPayloadError",
+    "MalformedRequestError",
+    "NotFoundError",
+    "ParsedTextTooLargeError",
+    "TooManyChunksError",
+    "UnsupportedMediaTypeError",
+    "UploadTooLargeError",
+]
 
 
 class ApplicationError(PlatformError):
@@ -43,36 +67,6 @@ class UnsupportedMediaTypeError(ApplicationError):
 
     def details_dict(self) -> Mapping[str, object]:
         return {"allowed": list(self.allowed)}
-
-
-class InvalidPayloadError(ApplicationError):
-    """A request field failed validation (document name, search query).
-
-    `limit` is always present, `None` included: one identity answers with one set of keys,
-    and `None` says "this field has no length limit", which a caller can read.
-    """
-
-    def __init__(self, field: str, limit: int | None = None) -> None:
-        super().__init__(f"invalid payload: {field}")
-        self.field = field
-        self.limit = limit
-
-    def details_dict(self) -> Mapping[str, object]:
-        return {"field": self.field, "limit": self.limit}
-
-
-class MalformedRequestError(ApplicationError):
-    """A request violated the transport contract, with nothing disclosed about how.
-
-    Empty `details` on purpose: this is the only error answered *before* authentication,
-    so it goes to a caller that, by construction, arrived by a path it was not meant to —
-    both real entry paths attach `X-Request-ID` unconditionally. Naming the header would
-    hand exactly that caller the hint needed to get past the check. Same discipline §7.6
-    applies to `401`: the reason is logged, never returned.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("invalid request")
 
 
 class UploadTooLargeError(ApplicationError):
@@ -138,14 +132,3 @@ class TooManyChunksError(ApplicationError):
 
     def details_dict(self) -> Mapping[str, object]:
         return {"limit": self.limit, "actual": self.actual}
-
-
-class NotFoundError(ApplicationError):
-    """The document does not exist, or belongs to another owner (US-R06, A-13).
-
-    The two cases are indistinguishable on purpose — existence of another subject's
-    document is never disclosed — which is also why `details` is empty.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("document not found")

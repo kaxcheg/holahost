@@ -37,13 +37,7 @@ app = FastAPI(
     middleware=[
         Middleware(
             HolahostAuthMiddleware,
-            config=AuthConfig(
-                jwks_url="https://auth.holahost.internal/.well-known/jwks.json",
-                expected_algorithm="RS256",
-                expected_issuer="auth",
-                expected_audience="rag-documents",
-                clock_skew_seconds=30,
-            ),
+            config=AuthConfig(),  # reads its own five variables — see Configuration
             public_paths=("/api/rag-documents/health",),
         )
     ]
@@ -80,17 +74,57 @@ is received end to end and only then answered `401`. Validating ahead of routing
 Exclusions are explicit (`public_paths`) rather than structural, because middleware wraps the whole
 app: there is no "router this isn't declared under" to opt out by.
 
-## `AuthConfig` fields
+## Configuration
 
-All fields are required; there are no library-side defaults.
+One object, not two. `AuthConfig` is both the shape of the environment and what the
+validator wants, and it loads itself:
 
-| Field | Meaning |
+```python
+# app/interface/http/dependencies.py
+from holahost_auth import AuthConfig
+
+
+def get_auth_config() -> AuthConfig:
+    return AuthConfig()
+```
+
+| Environment variable | Meaning |
 |---|---|
-| `jwks_url` | URL of the JWKS endpoint (`auth`'s `/.well-known/jwks.json`, or the dev-minter's during local development) |
-| `expected_algorithm` | The single signing algorithm this service accepts (e.g. `"RS256"`) |
-| `expected_issuer` | Expected `iss` claim value |
-| `expected_audience` | Expected `aud` entry for this service |
-| `clock_skew_seconds` | Allowed leeway when checking `exp`/`iat` |
+| `JWKS_URL` | URL of the JWKS endpoint (`auth`'s `/.well-known/jwks.json`, or the dev-minter's during local development) |
+| `EXPECTED_ALGORITHM` | The single signing algorithm this service accepts (e.g. `"RS256"`) |
+| `EXPECTED_ISSUER` | Expected `iss` claim value |
+| `EXPECTED_AUDIENCE` | Expected `aud` entry for this service |
+| `JWT_CLOCK_SKEW_SECONDS` | Allowed leeway when checking `exp`/`iat` |
+
+The field names are the variable names, lower-cased. That is the whole mapping rule, and
+having no second spelling is the point: an earlier revision had a settings class and a
+config class with a function between them, which is three declarations of one fact — and
+the function was the half that fails silently. Drop `clock_skew_seconds` from a
+hand-written mapping and the service rejects valid tokens at the `exp` boundary whenever a
+clock drifts, with nothing in a log to say why.
+
+The variables are a platform contract rather than a per-service choice: every service
+validates tokens from the same issuer against the same JWKS, and the only value that
+differs is `EXPECTED_AUDIENCE`. So they are declared here, once, and **not** mixed into a
+service's own `Settings` — a middleware handed an object that also carries a database
+password sees more than it needs to.
+
+All five are required and none has a default, empty strings included. An authentication
+parameter a service forgot to set must stop it starting, not fall back to something
+plausible. The object is frozen: nothing should move an authentication parameter under a
+middleware that holds it for the life of the process.
+
+Arguments take precedence over the environment, which is how a test builds one:
+
+```python
+AuthConfig(
+    jwks_url="https://auth.example/.well-known/jwks.json",
+    expected_algorithm="RS256",
+    expected_issuer="auth",
+    expected_audience="rag-documents",
+    jwt_clock_skew_seconds=30,
+)
+```
 
 ## Errors
 

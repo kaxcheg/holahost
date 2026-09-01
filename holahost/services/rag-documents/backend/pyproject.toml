@@ -41,12 +41,15 @@ pymupdf = ">=1.24,<2"
 python-docx = "^1.1"
 boto3 = "^1.35"
 pydantic-settings = "^2.7"
-python-json-logger = "^3.2"
 fastapi = "^0.115"
 uvicorn = {extras = ["standard"], version = "^0.34"}
 python-multipart = "^0.0.20"
+# `python-json-logger` is no longer declared here: nothing in this service imports it any
+# more — the JSON formatter moved into holahost-observability, which owns that dependency.
 holahost-auth = {path = "../../../libs/holahost-auth", develop = true}
+holahost-db = {path = "../../../libs/holahost-db", develop = true}
 holahost-http = {path = "../../../libs/holahost-http", develop = true}
+holahost-observability = {path = "../../../libs/holahost-observability", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

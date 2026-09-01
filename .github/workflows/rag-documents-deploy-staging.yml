@@ -20,9 +20,8 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v5
         with:
-          # ACCOUNT_ID/the IAM role itself don't exist yet — both depend on the platform-level
-          # AWS account + OIDC provider being provisioned, which is out of this session's scope
-          # (.build-state/.../clarifications.md scope-boundary note). Fill in once that lands.
+          # ACCOUNT_ID and the IAM role do not exist yet: both wait on the platform-level AWS
+          # account and OIDC provider. Fill in once those land.
           role-to-assume: arn:aws:iam::ACCOUNT_ID:role/github-actions-rag-documents-staging
           aws-region: ${{ env.AWS_REGION }}
 

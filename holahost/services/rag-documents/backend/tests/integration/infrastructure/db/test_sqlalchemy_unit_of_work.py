@@ -1,9 +1,15 @@
+"""The shared unit of work against a real Postgres.
+
+`holahost-db` owns the class and covers what can be checked without a database; commit,
+rollback and the re-entrancy a use case's pre-check-then-locked-write depends on are only
+observable against one, and this service is where a container is already running.
+"""
+
 from __future__ import annotations
 
 import pytest
+from holahost_db import SqlAlchemyUnitOfWork
 from sqlalchemy import text
-
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.integration
 

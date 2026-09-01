@@ -1,8 +1,7 @@
 name: rag-documents-ci
 
 # Frame spec: root .github/workflows/ holds thin trigger-stubs `<svc>-*.yml`, path-filtered to the
-# service. GitHub only scans this one repo-root directory for triggerable/reusable workflows (no
-# nested services/rag-documents/.github/workflows/ — see .build-state/.../clarifications.md), and
+# service. GitHub only scans this one repo-root directory for triggerable/reusable workflows, and
 # a top-level `on.paths` filter leaves a required check permanently pending when skipped, so the
 # path check is a job-internal step instead, with the job always completing (green) either way.
 # Repeated steps (toolchain setup) are shared composite actions under .github/actions/ — the only
@@ -30,13 +29,17 @@ jobs:
         with:
           fetch-depth: 0 # full history — needed for the diff-based path filter below
 
-      # The filter covers the pipeline itself, not just the code it builds. Matching only
-      # the service and the libraries left a PR that touches nothing but
-      # .github/actions/ssm-migrate-deploy (the script that runs migrations and swaps the
-      # container on staging and prod), one of these workflow files, .pre-commit-config.yaml
-      # or .tool-versions (the single source of the Python version the Dockerfile and every
-      # action read) reporting green having built nothing and run no test — on exactly the
-      # code where a silent break costs the most.
+      # The filter covers the pipeline itself, not only the code it builds: a PR touching
+      # just .github/actions/, a workflow file, .pre-commit-config.yaml or .tool-versions
+      # would otherwise report green having built nothing. `holahost/make` and
+      # `holahost/infra/modules` are matched for the same reason one step further out — this
+      # service's Makefile is an `include`, and its Terraform roots are calls into those
+      # modules.
+      #
+      # `holahost/templates/service` is deliberately NOT matched, and nothing below installs
+      # it: the template is a tree to copy from, and what has to pass the gates is the copy,
+      # in the service that made it. The repo-root hooks skip `templates/` for the same
+      # reason.
       - name: Detect rag-documents changes
         id: filter
         run: |
@@ -44,7 +47,7 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
-          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/rag-documents|libs/holahost-(auth|http))/|\.github/(actions/|workflows/rag-documents-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/rag-documents|libs/holahost-[a-z]+|make|infra/modules)/|\.github/(actions/|workflows/rag-documents-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -53,26 +56,29 @@ jobs:
       - uses: ./.github/actions/setup-python-toolchain
         if: steps.filter.outputs.changed == 'true'
 
-      # The repo-root .pre-commit-config.yaml's 4 local Python hooks (ruff/ruff-format/mypy/
-      # import-linter) have `pass_filenames: false` — each one unconditionally loops over *every*
-      # package under holahost/ with its own pyproject.toml (currently rag-documents/backend and
-      # holahost-auth) and runs `poetry run <tool>` inside it, regardless of which files this PR
-      # actually touched. On a developer's machine both venvs already have their deps installed
-      # from ordinary local work; a fresh CI runner has neither — `poetry run` finds an empty venv
-      # it just silently created and reports "Command not found: ruff/mypy/lint-imports" for both
-      # packages. Found for real: this is the first live run of this exact workflow file (prior
-      # rounds only got as far as YAML-syntax checks — see .build-state/.../clarifications.md),
-      # and it failed on exactly this. Installing both packages' deps before the pre-commit step
-      # (not after, and not just rag-documents' own, matching what the hooks themselves loop
-      # over) fixes it; the `poetry install` that used to live inside "Unit tests" below is now
-      # redundant there and removed.
+      # Every package the repo-root hooks loop over is installed here, before the pre-commit
+      # step. Those hooks are `pass_filenames: false` and run `poetry run <tool>` inside each
+      # package with a pyproject.toml, whatever the PR touched; a fresh runner has no venv, so
+      # `poetry run` silently creates an empty one and reports "Command not found: ruff".
       - name: Install dependencies (rag-documents backend)
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/services/rag-documents/backend
         run: poetry install
 
-      # holahost-http first: holahost-auth has a path dependency on it, so installing auth
-      # into a tree where http is absent resolves nothing.
+      # Order follows the path-dependency graph, which runs one way only:
+      # observability (no platform deps) <- http <- auth; db depends on neither.
+      # Installing a package into a tree where the one it path-depends on is absent
+      # resolves nothing.
+      - name: Install dependencies (holahost-observability)
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/libs/holahost-observability
+        run: poetry install
+
+      - name: Install dependencies (holahost-db)
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/libs/holahost-db
+        run: poetry install
+
       - name: Install dependencies (holahost-http)
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/libs/holahost-http
@@ -83,9 +89,11 @@ jobs:
         working-directory: holahost/libs/holahost-auth
         run: poetry install
 
-      - name: Library unit tests (holahost-http, holahost-auth)
+      - name: Library unit tests
         if: steps.filter.outputs.changed == 'true'
         run: |
+          (cd holahost/libs/holahost-observability && poetry run pytest -q)
+          (cd holahost/libs/holahost-db && poetry run pytest -q)
           (cd holahost/libs/holahost-http && poetry run pytest -q)
           (cd holahost/libs/holahost-auth && poetry run pytest -q)
 

@@ -2,19 +2,11 @@
 (`test_app_end_to_end.py`, `test_grounding.py`), plus the shared real-app `client` fixture both
 files build on.
 
-Deliberately does not reuse holahost-auth's own conftest fixtures (`jwks_server`/
-`make_token`/`base_claims`, `holahost/libs/holahost-auth/tests/conftest.py`): pytest's
-conftest discovery only walks ancestor directories of the test being run, and that
-file lives in a sibling package's own `tests/` tree, not this repo's. Reusing it would
-need either `pytest-httpserver` as a new dev dependency (holahost-auth's own choice)
-or fragile cross-package `pytest_plugins` wiring. A stdlib `http.server` in a
-background thread needs neither — `pyjwt`/`cryptography` are already transitively
-available here via holahost-auth's own runtime dependency.
-
-`client`/`auth_headers` originally lived in `test_app_end_to_end.py` only; moved here (R-29) once
-a second file in this directory (`test_grounding.py`) needed them too — pytest fixtures defined in
-a test module aren't visible to sibling test modules, only fixtures in `conftest.py` are shared
-across a directory.
+Does not reuse holahost-auth's own conftest fixtures: pytest's conftest discovery only
+walks ancestor directories of the test being run, and that file lives in a sibling package's
+tree. Reusing it would need `pytest-httpserver` as a new dev dependency or cross-package
+`pytest_plugins` wiring; a stdlib `http.server` in a background thread needs neither, and
+`pyjwt`/`cryptography` are already available through holahost-auth.
 """
 
 from __future__ import annotations
@@ -116,16 +108,10 @@ def client(pg_dsn: str, jwks_url: str) -> Iterator[TestClient]:
     dsn_parts = urlsplit(pg_dsn)
     assert dsn_parts.username and dsn_parts.password and dsn_parts.hostname and dsn_parts.port
 
-    # `pytest.MonkeyPatch.context()`, not a session-scoped `monkeypatch` fixture: every one of
-    # these env vars is read exactly once, at the `scripts.bootstrap` import below (Settings()
-    # is built once behind interface.http.dependencies' @lru_cache and never re-reads os.environ
-    # afterward), so nothing past that import needs them still set — a session-scoped patch
-    # would hold them until the whole `pytest` session's teardown instead, which is late enough
-    # to leak into unrelated tests collected later in the same unfiltered `pytest` run. Found for
-    # real, not guessed: a bare `pytest` run (no `-m` filter, same command `make ci-local` uses)
-    # collects this directory before `tests/unit/`, and did leak POSTGRES_HOST/PORT (this
-    # fixture's testcontainers-assigned port) into `tests/unit/config/test_settings.py`'s
-    # assertions, which expect the fixed `postgres:5432` default.
+    # `pytest.MonkeyPatch.context()`, not a session-scoped fixture: these variables are read
+    # once, at the `scripts.bootstrap` import below, and a session-scoped patch would hold
+    # them until the whole run's teardown — late enough to leak this container's random port
+    # into `tests/unit/config/test_settings.py`, which asserts the fixed `postgres:5432`.
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ENV", "dev")
         mp.setenv("POSTGRES_USER", dsn_parts.username)

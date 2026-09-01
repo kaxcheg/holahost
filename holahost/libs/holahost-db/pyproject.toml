@@ -1,0 +1,64 @@
+[project]
+name = "holahost-db"
+version = "0.1.0"
+description = "Shared Postgres access layer for Holahost services: storage error contract, unit of work, settings, provisioning."
+requires-python = ">=3.12,<4.0"
+readme = "README.md"
+
+[tool.poetry]
+packages = [{ include = "holahost_db" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+sqlalchemy = "^2.0"
+psycopg = { extras = ["binary", "pool"], version = "^3.2" }
+# Only `alembic_support` needs it, and that module is deliberately absent from the
+# package's `__init__`: importing it outside an Alembic run fails, because `alembic.context`
+# exists only while one is in progress. Every service with a schema has migrations, so
+# declaring it here rather than as an extra costs nothing real.
+alembic = "^1.14"
+pydantic-settings = "^2.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+
+[tool.importlinter]
+root_package = "holahost_db"
+# Needed for the contract below, which names packages outside this one.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+# A service's *application* layer depends on `ports` and `exceptions` — the transaction
+# boundary and the three ways storage fails are its vocabulary. Depending on them must not
+# put a storage driver within that layer's reach, so these three stay free of one. The
+# retry helper is here for the same reason: a use case is where it is called from.
+name = "The application-facing modules import no storage driver"
+type = "forbidden"
+source_modules = [
+    "holahost_db.exceptions",
+    "holahost_db.ports",
+    "holahost_db.retry",
+]
+forbidden_modules = ["sqlalchemy", "psycopg", "alembic", "pydantic_settings"]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"

@@ -19,6 +19,7 @@ from tests._support.fakes import (
     FakeUnitOfWork,
     FakeVectorSearch,
 )
+from tests._support.http import register_test_handlers
 
 from interface.http.api_base import API_BASE_URL
 from interface.http.dependencies import (
@@ -29,7 +30,6 @@ from interface.http.dependencies import (
     get_uow,
     get_vector_search_factory,
 )
-from interface.http.errors import register_error_handlers
 from interface.http.router import _read_upload
 from interface.http.router import router as documents_router
 
@@ -45,7 +45,7 @@ def _build_app() -> FastAPI:
     ahead of routing now and are covered in `test_middleware.py`; here the token is
     injected by overriding `current_token`, which is all a route sees of any of it."""
     app = FastAPI(middleware=[Middleware(RequestIdMiddleware)])
-    register_error_handlers(app)
+    register_test_handlers(app)
     app.include_router(documents_router, prefix=API_BASE_URL)
 
     fake_repo = FakeDocumentsRepo()

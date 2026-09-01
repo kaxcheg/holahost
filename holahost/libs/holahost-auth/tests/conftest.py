@@ -95,5 +95,5 @@ def config(jwks_server: JwksServerControl) -> AuthConfig:
         expected_algorithm="RS256",
         expected_issuer="auth",
         expected_audience="rag-documents",
-        clock_skew_seconds=30,
+        jwt_clock_skew_seconds=30,
     )

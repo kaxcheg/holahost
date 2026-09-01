@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from holahost_db import SqlAlchemyUnitOfWork
 
 from domain.entities.chunk import Chunk
 from domain.entities.document import Document
@@ -12,7 +13,6 @@ from domain.value_objects.mime_type import MimeType
 from domain.value_objects.owner_subject import OwnerSubject
 from domain.value_objects.page_number import PageNumber
 from infrastructure.db.sqlalchemy_documents_repo import SqlAlchemyDocumentsRepo
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 from infrastructure.vector.pgvector_search import PgvectorSearch
 
 pytestmark = pytest.mark.integration

@@ -4,6 +4,10 @@ Every `code` asserted below is the class's own name, and that is the whole point
 value a consumer branches on, and the value an operator reads out of a log, greps back to
 the class that produced it in one step. These assertions are what makes a rename fail
 loudly — it is a change to the wire contract, not a refactor.
+
+`InvalidPayloadError`, `MalformedRequestError` and `NotFoundError` are absent: they are
+the platform's, defined and tested in `holahost-http`. That this service publishes them
+is asserted where that decision lives — `test_error_schemas.py`.
 """
 
 from __future__ import annotations
@@ -12,9 +16,6 @@ from application.exceptions import (
     ApplicationError,
     DocumentParseError,
     EmptyDocumentError,
-    InvalidPayloadError,
-    MalformedRequestError,
-    NotFoundError,
     ParsedTextTooLargeError,
     TooManyChunksError,
     UnsupportedMediaTypeError,
@@ -37,30 +38,6 @@ class TestUnsupportedMediaTypeError:
         error = UnsupportedMediaTypeError(allowed=("application/pdf", "text/plain"))
         assert error.code == "UnsupportedMediaTypeError"
         assert error.details_dict() == {"allowed": ["application/pdf", "text/plain"]}
-
-
-class TestInvalidPayloadError:
-    def test_without_limit_still_carries_the_key(self) -> None:
-        # US-R09: one class, one `details` field set — `limit` is present as `None`, so
-        # `details.limit` is never a KeyError on some raise sites and a value on others.
-        error = InvalidPayloadError(field="name")
-        assert error.code == "InvalidPayloadError"
-        assert error.details_dict() == {"field": "name", "limit": None}
-
-    def test_with_limit(self) -> None:
-        error = InvalidPayloadError(field="query", limit=4000)
-        assert error.details_dict() == {"field": "query", "limit": 4000}
-
-    def test_one_identity_answers_with_one_set_of_keys(self) -> None:
-        # Both `limit` cases, since `None` is a published value and not an absent key.
-        shapes = {
-            tuple(sorted(error.details_dict()))
-            for error in (
-                InvalidPayloadError(field="name"),
-                InvalidPayloadError(field="query", limit=4000),
-            )
-        }
-        assert shapes == {("field", "limit")}
 
 
 class TestUploadTooLargeError:
@@ -102,22 +79,8 @@ class TestDocumentParseError:
         assert error.details_dict() == {}
 
 
-class TestMalformedRequestError:
-    def test_has_its_own_identity_and_stays_mute(self) -> None:
-        error = MalformedRequestError()
-        assert error.code == "MalformedRequestError"
-        assert error.details_dict() == {}
-
-
 class TestTooManyChunksError:
     def test_wire_shape(self) -> None:
         error = TooManyChunksError(limit=500, actual=501)
         assert error.code == "TooManyChunksError"
         assert error.details_dict() == {"limit": 500, "actual": 501}
-
-
-class TestNotFoundError:
-    def test_wire_shape(self) -> None:
-        error = NotFoundError()
-        assert error.code == "NotFoundError"
-        assert error.details_dict() == {}

@@ -154,7 +154,7 @@ def test_jwks_connection_failure_raises_unavailable(
         expected_algorithm="RS256",
         expected_issuer="auth",
         expected_audience="rag-documents",
-        clock_skew_seconds=30,
+        jwt_clock_skew_seconds=30,
     )
     token = make_token(kid="kid-1", claims={**base_claims, "sub": "u", "client_id": "c"})
     with pytest.raises(JwksUnavailableError):
@@ -176,7 +176,7 @@ def test_jwks_malformed_response_raises_unavailable(
         expected_algorithm="RS256",
         expected_issuer="auth",
         expected_audience="rag-documents",
-        clock_skew_seconds=30,
+        jwt_clock_skew_seconds=30,
     )
     token = make_token(kid="kid-1", claims={**base_claims, "sub": "u", "client_id": "c"})
     with pytest.raises(JwksUnavailableError):

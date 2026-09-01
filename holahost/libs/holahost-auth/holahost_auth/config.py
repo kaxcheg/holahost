@@ -1,37 +1,55 @@
-"""Configuration for holahost-auth's JWT validation."""
+"""What this service needs in order to validate a token, and where it comes from.
 
-from dataclasses import dataclass
+One class, not two. An earlier revision had `AuthSettings` reading the environment and
+`AuthConfig` holding the same five values for the validator, with a mapping between them —
+which is three declarations of one fact, and the mapping was the half that fails silently.
+There is no second shape here: the field names *are* the environment variable names, lower
+-cased, and that is the whole rule.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-@dataclass(frozen=True, slots=True)
-class AuthConfig:
-    """Explicit, required configuration for validating this service's JWTs.
+class AuthConfig(BaseSettings):
+    """The five variables every Holahost service reads to validate JWTs.
 
-    No field has a library-side default — values come from the consuming
-    service's own typed settings (no implicit defaults, per project convention).
+    Loads itself from the environment, so a composition root builds it with no arguments::
+
+        def get_auth_config() -> AuthConfig:
+            return AuthConfig()
+
+    and a test builds it with all five explicit, which take precedence over the
+    environment.
+
+    The names are a platform contract rather than a per-service choice: the same five
+    appear in every service's `.env.example`, every service validates tokens from the same
+    issuer against the same JWKS, and the only value that differs between services is
+    `expected_audience`. That is also why this is not mixed into a service's own `Settings`
+    — the auth library's configuration is the auth library's, and handing a middleware an
+    object that also carries a database password widens what the library can see for no
+    gain.
+
+    No field has a default. An authentication parameter a service forgot to set must stop
+    it starting, not fall back to something plausible — so all five are required, and each
+    is rejected empty (or negative) rather than merely present.
 
     :param jwks_url: URL of the JWKS endpoint.
-    :param expected_algorithm: The single signing algorithm this service
-        accepts (e.g. ``"RS256"``); never read from the token itself.
+    :param expected_algorithm: The single signing algorithm this service accepts
+        (e.g. ``"RS256"``); never read from the token itself.
     :param expected_issuer: Expected ``iss`` claim value.
     :param expected_audience: Expected ``aud`` entry for this service.
-    :param clock_skew_seconds: Allowed leeway when checking ``exp``/``iat``.
+    :param jwt_clock_skew_seconds: Allowed leeway when checking ``exp``/``iat``.
     """
 
-    jwks_url: str
-    expected_algorithm: str
-    expected_issuer: str
-    expected_audience: str
-    clock_skew_seconds: int
+    # `frozen`: nothing should rewrite an authentication parameter after startup, and the
+    # middleware holds this object for the life of the process.
+    model_config = SettingsConfigDict(frozen=True, case_sensitive=False, extra="ignore")
 
-    def __post_init__(self) -> None:
-        if not self.jwks_url:
-            raise ValueError("jwks_url must not be empty")
-        if not self.expected_algorithm:
-            raise ValueError("expected_algorithm must not be empty")
-        if not self.expected_issuer:
-            raise ValueError("expected_issuer must not be empty")
-        if not self.expected_audience:
-            raise ValueError("expected_audience must not be empty")
-        if self.clock_skew_seconds < 0:
-            raise ValueError("clock_skew_seconds must not be negative")
+    jwks_url: str = Field(min_length=1)
+    expected_algorithm: str = Field(min_length=1)
+    expected_issuer: str = Field(min_length=1)
+    expected_audience: str = Field(min_length=1)
+    jwt_clock_skew_seconds: int = Field(ge=0)

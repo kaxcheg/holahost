@@ -1,35 +1,20 @@
-"""Exceptions raised by storage-backed ports (repos, unit of work, vector search).
+"""Exceptions raised by this service's ports.
 
-These are the port contract's own exception types (project convention, CLAUDE.md), not
-vendor driver errors — infrastructure adapters translate driver-specific failures into
-these three categories, chosen because calling code reacts to each differently.
+The three storage failures are the platform's — same types, same split by reaction, one
+translation point from vendor errors — so they are re-exported from `holahost-db` rather
+than redeclared. What is this service's own is the one below them.
 """
 
 from __future__ import annotations
 
+from holahost_db import ConcurrentUpdateError, IntegrityError, StorageUnavailableError
 
-class StorageUnavailableError(Exception):
-    """The database is unreachable, or a call to it timed out.
-
-    Retrying inside the same request is pointless — callers should propagate this up
-    rather than loop on it.
-    """
-
-
-class ConcurrentUpdateError(Exception):
-    """A deadlock, serialization failure, or lock-wait timeout rolled back the transaction.
-
-    The database rolled the transaction back, not application code — the caller may
-    retry the whole transaction a bounded number of times (see UC-R2/UC-R5, §8.6).
-    """
-
-
-class IntegrityError(Exception):
-    """A uniqueness, foreign-key, or check constraint was violated.
-
-    A defect: entity invariants or a lock should have prevented the conflict before it
-    reached storage. Not retried.
-    """
+__all__ = [
+    "ConcurrentUpdateError",
+    "EmbeddingFailedError",
+    "IntegrityError",
+    "StorageUnavailableError",
+]
 
 
 class EmbeddingFailedError(Exception):

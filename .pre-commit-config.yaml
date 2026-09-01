@@ -35,29 +35,47 @@ repos:
   # package still runs in its own `poetry run` venv, so mypy/ruff see that
   # package's real installed dependencies rather than a shared guess. Adding a
   # new package (rag-documents' backend, llm-client, ...) needs no edit here.
+  #
+  # `holahost/templates/` is excluded: the service template is a tree to copy from, not
+  # code that runs anywhere. What has to pass these gates is the copy, inside the service
+  # that made it. Gating on the template instead would make every contributor's machine and
+  # every service's CI install a package nobody deploys. It stays a real package, so its own
+  # `make lint`, `make test` and `make openapi-check` still work when someone edits it.
+  #
+  # Excluding it takes BOTH lines below, and they do different jobs — verified, not assumed:
+  #   `exclude:`             stops the hook running when a change touches nothing else.
+  #   `-not -path templates` stops the loop entering the template when it runs anyway.
+  # `exclude` cannot do the second: with `pass_filenames: false` the matched file list is
+  # discarded, and `entry` is a fixed string that re-derives the packages itself. Tested by
+  # putting a lint error in a template file — with `exclude` alone, a change to
+  # rag-documents still failed on it.
   - repo: local
     hooks:
       - id: python-ruff
         name: python · ruff check (all packages)
-        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run ruff check --fix .) || exit 1; done'
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" -not -path "*/templates/*" | xargs -n1 dirname); do (cd "$d" && poetry run ruff check --fix .) || exit 1; done'
         language: system
         files: \.py$|pyproject\.toml$
         pass_filenames: false
+        exclude: ^holahost/templates/
       - id: python-ruff-format
         name: python · ruff format (all packages)
-        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run ruff format .) || exit 1; done'
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" -not -path "*/templates/*" | xargs -n1 dirname); do (cd "$d" && poetry run ruff format .) || exit 1; done'
         language: system
         files: \.py$|pyproject\.toml$
         pass_filenames: false
+        exclude: ^holahost/templates/
       - id: python-mypy
         name: python · mypy (all packages)
-        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run mypy .) || exit 1; done'
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" -not -path "*/templates/*" | xargs -n1 dirname); do (cd "$d" && poetry run mypy .) || exit 1; done'
         language: system
         files: \.py$|pyproject\.toml$
         pass_filenames: false
+        exclude: ^holahost/templates/
       - id: python-import-linter
         name: python · import-linter (all packages)
-        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" | xargs -n1 dirname); do (cd "$d" && poetry run lint-imports) || exit 1; done'
+        entry: bash -c 'for d in $(find holahost -name pyproject.toml -not -path "*/.venv/*" -not -path "*/templates/*" | xargs -n1 dirname); do (cd "$d" && poetry run lint-imports) || exit 1; done'
         language: system
         files: \.py$|pyproject\.toml$
         pass_filenames: false
+        exclude: ^holahost/templates/

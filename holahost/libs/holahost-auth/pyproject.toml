@@ -11,6 +11,10 @@ packages = [{ include = "holahost_auth" }]
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0"
 pyjwt = { extras = ["crypto"], version = "^2.13" }
+# `AuthConfig` loads itself from the environment: the five variables it declares are a
+# platform contract, not a per-service choice, so the declaration belongs with the
+# validator that consumes them. pydantic itself already arrives with fastapi below.
+pydantic-settings = "^2.7"
 fastapi = "^0.115"
 # For the shared error/rejection contract only (RejectionLogger). The dependency
 # runs http -> auth and never back: holahost-http knows nothing about tokens, and
@@ -41,6 +45,9 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
+# Without this, mypy treats every pydantic-settings field as a required constructor kwarg
+# (it does not know BaseSettings populates them from os.environ, not __init__ args).
+plugins = ["pydantic.mypy"]
 
 [tool.importlinter]
 root_package = "holahost_auth"

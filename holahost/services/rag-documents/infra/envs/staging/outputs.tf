@@ -1,11 +1,11 @@
 output "db_password_secret_name" {
-  value = aws_secretsmanager_secret.db_password.name
+  value = aws_secretsmanager_secret.this["db-password"].name
 }
 
 output "db_superuser_password_secret_name" {
-  value = aws_secretsmanager_secret.db_superuser_password.name
+  value = aws_secretsmanager_secret.this["db-superuser-password"].name
 }
 
 output "log_group_name" {
-  value = aws_cloudwatch_log_group.app.name
+  value = module.platform.log_group_name
 }

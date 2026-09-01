@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from holahost_db import retry_on_concurrent_update
+
 from application.dto.documents import DocumentView, ReplaceDocumentCmd
 from application.exceptions import (
     EmptyDocumentError,
@@ -19,7 +21,6 @@ from application.ports.embedding import EmbeddingModel
 from application.ports.ingestion import FileParser, TextChunker
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
-from application.use_cases._retry import retry_on_concurrent_update
 from domain.entities.chunk import Chunk
 from domain.entities.document import MAX_CHUNKS_PER_DOCUMENT, Document
 from domain.exceptions import ChunkCountExceededError, DomainValidationError
