@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from holahost_db import retry_on_concurrent_update
+
 from application.dto.documents import DeleteDocumentCmd
 from application.exceptions import NotFoundError
 from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
-from application.use_cases._retry import retry_on_concurrent_update
 from domain.value_objects.document_id import DocumentId
 from domain.value_objects.owner_subject import OwnerSubject
 

@@ -55,16 +55,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/NoDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "DocumentParseErrorBody",
@@ -136,16 +130,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/EmptyDocumentDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "EmptyDocumentErrorBody",
@@ -210,7 +198,7 @@
       },
       "InternalErrorBody": {
         "additionalProperties": false,
-        "description": "The one out-of-contract answer. Anything this service did not publish — an\nunmapped exception, a driver failure, a defect — comes back as exactly this, with an\nempty `details` and a fixed message: the cause reaches the log, never the caller.",
+        "description": "The one out-of-contract answer. Anything a service did not publish — an unmapped\nexception, a driver failure, a defect — comes back as exactly this, with an empty\n``details``: the cause reaches the log, never the caller.",
         "properties": {
           "code": {
             "const": "InternalError",
@@ -219,16 +207,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/NoDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "InternalErrorBody",
@@ -285,16 +267,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/InvalidPayloadDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "InvalidPayloadErrorBody",
@@ -310,16 +286,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/NoDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "MalformedRequestErrorBody",
@@ -342,16 +312,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/NoDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "NotFoundErrorBody",
@@ -380,16 +344,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/SizeDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "ParsedTextTooLargeErrorBody",
@@ -531,16 +489,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/SizeDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "TooManyChunksErrorBody",
@@ -574,16 +526,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/UnsupportedMediaTypeDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "UnsupportedMediaTypeErrorBody",
@@ -612,16 +558,10 @@
           },
           "details": {
             "$ref": "#/components/schemas/SizeDetails"
-          },
-          "message": {
-            "description": "Human-readable, for a person reading a log or a response by hand. NOT part of the contract: do not parse it and do not show it to an end user — compose what a user sees from `code` and `details`.",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
           "code",
-          "message",
           "details"
         ],
         "title": "UploadTooLargeErrorBody",

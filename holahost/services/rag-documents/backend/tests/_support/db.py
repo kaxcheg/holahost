@@ -10,7 +10,9 @@ process and calls `SqlAlchemyUnitOfWork(engine)` directly
 
 from __future__ import annotations
 
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork, build_engine
+from holahost_db import SqlAlchemyUnitOfWork
+
+from infrastructure.db.engine import build_engine
 
 
 def build_test_uow(database_url: str, *, pool_size: int = 5) -> SqlAlchemyUnitOfWork:

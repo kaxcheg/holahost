@@ -14,6 +14,7 @@ from typing import Annotated, cast
 
 from fastapi import Depends
 from holahost_auth import AuthConfig
+from holahost_db import SqlAlchemyUnitOfWork
 from holahost_http import InMemoryRateLimiter, RateLimiter
 from sqlalchemy import Engine
 
@@ -23,8 +24,8 @@ from application.ports.repos import DocumentsRepoFactory
 from application.ports.uow import UnitOfWork
 from application.ports.vector import VectorSearchFactory
 from config.settings import Settings
+from infrastructure.db.engine import build_engine
 from infrastructure.db.sqlalchemy_documents_repo import SqlAlchemyDocumentsRepo
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork, build_engine
 from infrastructure.embedding.fastembed_embedding_model import FastembedEmbeddingModel
 from infrastructure.ingestion.composite_file_parser import CompositeFileParser
 from infrastructure.ingestion.recursive_text_chunker import RecursiveTextChunker
@@ -108,15 +109,12 @@ def get_rate_limiter() -> RateLimiter:
 def get_auth_config() -> AuthConfig:
     """Validation config for `HolahostAuthMiddleware`.
 
+    Built with no arguments: `AuthConfig` reads its own five variables from the
+    environment, and their names are a platform contract rather than this service's
+    choice — so there is nothing here to map and nothing to keep in step.
+
     Read once by `create_app()` when it builds the middleware stack, not per request:
     middleware is constructed at app-build time, so there is no `Depends()` graph to
     resolve it through and nothing to cache.
     """
-    settings = get_settings()
-    return AuthConfig(
-        jwks_url=settings.jwks_url,
-        expected_algorithm=settings.expected_algorithm,
-        expected_issuer=settings.expected_issuer,
-        expected_audience=settings.expected_audience,
-        clock_skew_seconds=settings.jwt_clock_skew_seconds,
-    )
+    return AuthConfig()

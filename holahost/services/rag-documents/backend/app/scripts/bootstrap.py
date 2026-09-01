@@ -9,7 +9,7 @@ import time
 from typing import cast
 
 from fastapi import FastAPI
-from sqlalchemy import Engine, text
+from holahost_db import assert_rls_is_enforced
 
 from config.logging import configure_logging, log_event
 from domain.value_objects.embedding import EMBEDDING_DIM
@@ -44,32 +44,6 @@ def _fetch_password_if_needed() -> None:
     os.environ["POSTGRES_PASSWORD"] = secret["SecretString"]
 
 
-def _assert_rls_is_enforced(engine: Engine) -> None:
-    """Refuse to serve traffic on a connection that bypasses row-level security (§8.0).
-
-    Owner isolation has exactly one enforcement point: the RLS policies applied by the
-    migrations. No repository filters by owner in its own SQL, so a connecting role that
-    is a superuser or carries BYPASSRLS silently serves and mutates other owners' rows.
-
-    Checked rather than trusted because that failure mode is invisible by construction —
-    the integration suite proves isolation under a deliberately unprivileged role, so a
-    deployment connecting as something else is covered by no passing test. One query at
-    startup turns a total loss of isolation into a process that refuses to start.
-    """
-    with engine.connect() as conn:
-        bypasses = conn.execute(
-            text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
-        ).scalar_one()
-    if bypasses:
-        raise RuntimeError(
-            "refusing to start: the configured POSTGRES_USER bypasses row-level security "
-            "(superuser or BYPASSRLS), which disables owner isolation entirely. Deploy runs "
-            "scripts/provision_app_role.py to create this role without either attribute — "
-            "check that it ran, and that POSTGRES_USER is not the postgres container's own "
-            "initdb superuser."
-        )
-
-
 def _assert_embedding_dimension_matches(model_name: str, actual_dim: int) -> None:
     """Refuse to serve traffic on a model whose vectors do not fit the schema (§3.7).
 
@@ -102,7 +76,10 @@ def bootstrap() -> FastAPI:
     start = time.monotonic()
     get_settings()  # fail fast on missing/invalid config before touching anything else
     # get_engine() builds the one process-wide pool; the guard spends one query on it.
-    _assert_rls_is_enforced(get_engine())
+    # Owner isolation here has exactly one enforcement point — the RLS policies the
+    # migrations applied — so a role that bypasses them serves every other owner's rows
+    # while every test still passes.
+    assert_rls_is_enforced(get_engine())
     # Eager load (§3.1: the model is ready before traffic arrives). `cast` rather than an
     # isinstance check: `dimension()` is an extra method of the one adapter this getter
     # constructs, deliberately outside the `EmbeddingModel` port (§8.0).

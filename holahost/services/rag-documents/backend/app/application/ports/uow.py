@@ -1,42 +1,12 @@
-"""Protocol for the transactional unit-of-work boundary."""
+"""The transactional unit-of-work boundary this service's use cases wrap every port call in.
+
+The Protocol is the platform's (`holahost-db`) — the boundary and its three failure modes
+are the same for every service — and is re-exported here so the application layer names it
+alongside its own ports.
+"""
 
 from __future__ import annotations
 
-from types import TracebackType
-from typing import Protocol
+from holahost_db import UnitOfWork
 
-
-class UnitOfWork(Protocol):
-    """Demarcates one atomic transaction."""
-
-    def __enter__(self) -> UnitOfWork:
-        """Begin the transaction."""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        """Commit on clean exit; roll back and re-raise on exception.
-
-        Concurrency: hold any lock taken inside (e.g. ``DocumentsRepo.get(...,
-        lock=True)``) until commit/rollback, not before.
-        """
-        ...
-
-    def commit(self) -> None:
-        """Commit the transaction explicitly.
-
-        Raises:
-            StorageUnavailableError: the database is unreachable or timed out.
-            ConcurrentUpdateError: deadlock, serialization failure, or a lock-wait
-                timeout — the transaction was rolled back by the database.
-            IntegrityError: a stored invariant was violated (internal defect).
-        """
-        ...
-
-    def rollback(self) -> None:
-        """Roll back the transaction explicitly."""
-        ...
+__all__ = ["UnitOfWork"]

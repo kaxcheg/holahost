@@ -77,8 +77,69 @@ class RateLimitExceededError(PlatformError):
         return {"retry_after_seconds": self.retry_after}
 
 
+class MalformedRequestError(PlatformError):
+    """A request violated the transport contract, with nothing disclosed about how.
+
+    Empty ``details`` on purpose. This is what a service hands
+    ``RequestIdMiddleware(missing_header_error=...)``, so it is answered *before*
+    authentication, to a caller that by construction arrived by a path it was not meant
+    to — every intended entry path attaches ``X-Request-ID`` unconditionally. Naming the
+    header would hand exactly that caller the hint needed to get past the check. Same
+    discipline as ``401``: the reason is logged, never returned.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("invalid request")
+
+
+class InvalidPayloadError(PlatformError):
+    """A request field failed validation.
+
+    ``limit`` is always present, ``None`` included: one identity answers with one set of
+    keys, and ``None`` says "this field has no length limit", which a caller can read.
+
+    Platform-owned because every service answers it and every service's error handler
+    needs a class to build when the framework's own validation rejects a request before
+    any route runs — see ``register_error_handlers``.
+    """
+
+    def __init__(self, field: str, limit: int | None = None) -> None:
+        super().__init__(f"invalid payload: {field}")
+        self.field = field
+        self.limit = limit
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"field": self.field, "limit": self.limit}
+
+
+class NotFoundError(PlatformError):
+    """The addressed resource does not exist, or belongs to another subject.
+
+    The two cases are deliberately indistinguishable: existence of another subject's
+    resource is never disclosed, which is also why ``details`` is empty. A service that
+    needs to distinguish them answers ``403`` from its own taxonomy instead.
+    """
+
+    def __init__(self, message: str = "not found") -> None:
+        super().__init__(message)
+
+
+INTERNAL_ERROR_CODE = "InternalError"
+"""The one identity with no class behind it.
+
+Deliberately not an exception type: a class nobody ever raises would suggest something
+does, when the meaning is the opposite — this is what a caller is told when the answer is
+none of the errors the service published.
+"""
+
+
 def error_envelope(code: str, message: str, details: Mapping[str, object]) -> dict[str, object]:
-    """Build the platform's error envelope."""
+    """Build the platform's error envelope.
+
+    ``message`` is carried on the wire for a person reading a log or a response by hand.
+    It is **not** part of the contract and is not published in a service's OpenAPI
+    document: a consumer branches on ``code`` and composes what it shows from ``details``.
+    """
     return {"error": {"code": code, "message": message, "details": dict(details)}}
 
 

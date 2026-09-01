@@ -9,8 +9,8 @@ from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, Security, UploadFile
-from fastapi.security import HTTPBearer
 from holahost_auth import TokenContext, current_token
+from holahost_http import bearer_scheme
 
 from application.dto.documents import (
     CreateDocumentCmd,
@@ -51,19 +51,10 @@ from interface.http.error_schemas import (
 from interface.http.mime_sniffer import sniff_mime_type
 from interface.http.schemas import DocumentResponse, SearchRequest, SearchResponse
 
-_bearer = HTTPBearer(
-    scheme_name="bearerAuth",
-    bearerFormat="JWT",
-    # Declares the requirement, never enforces it: `HolahostAuthMiddleware` answered long
-    # before any dependency runs (§8.1 step 2). `auto_error=False` keeps this to telling
-    # the generated schema that these routes take a bearer token, which FastAPI cannot
-    # learn from middleware.
-    auto_error=False,
-    description=(
-        "Platform-issued JWT, validated against the configured JWKS. Its `sub` is the "
-        "owner every document is scoped to — another subject's document is answered "
-        "404, never 403."
-    ),
+_bearer = bearer_scheme(
+    "Platform-issued JWT, validated against the configured JWKS. Its `sub` is the "
+    "owner every document is scoped to — another subject's document is answered "
+    "404, never 403."
 )
 
 

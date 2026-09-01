@@ -24,6 +24,13 @@ from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 
 from domain.value_objects.embedding import EMBEDDING_DIM
 
+# No naming convention on this `MetaData`, and that is a decision rather than an omission.
+# Every constraint below is named explicitly and the migration created it under that name,
+# so adding the platform convention here would rename all of them in the model only —
+# `ck_documents_documents_name_not_blank` against the `documents_name_not_blank` that is in
+# the database — and every `--autogenerate` after that would propose a rename nobody asked
+# for. A schema that starts with the convention (see `holahost/templates/service/`) gets it
+# for free; retrofitting one costs a rename migration and buys nothing here.
 metadata = MetaData()
 
 documents = Table(

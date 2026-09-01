@@ -1,0 +1,49 @@
+[project]
+name = "holahost-observability"
+version = "0.1.0"
+description = "Structured JSON logging for Holahost services (platform shared library)."
+requires-python = ">=3.12,<4.0"
+
+[tool.poetry]
+packages = [{ include = "holahost_observability" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+# The only runtime dependency, and deliberately the only one. This library is the
+# process logger, not the HTTP edge: it is called from composition roots, migrations and
+# one-off provisioning scripts, none of which has an ASGI app. Pulling starlette or
+# fastapi in here would make writing a log line from `alembic upgrade` cost a web stack.
+python-json-logger = "^3.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.importlinter]
+# No contract yet, and that is the honest state: the package is one module plus the
+# `__init__` that re-exports it, so every contract expressible here is either vacuous or
+# a restatement of that. Declared anyway so `lint-imports` runs — the repo-root
+# pre-commit hook invokes it in every package with a pyproject.toml, and a package
+# without this section fails the hook rather than skipping it. A second module of
+# substance is what should bring a real contract with it.
+root_package = "holahost_observability"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"

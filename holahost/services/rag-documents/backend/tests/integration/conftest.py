@@ -7,11 +7,11 @@ from urllib.parse import urlsplit, urlunsplit
 import pytest
 from alembic import command
 from alembic.config import Config
+from holahost_db import SqlAlchemyUnitOfWork
 from sqlalchemy import create_engine, text
 from testcontainers.community.postgres import PostgresContainer
 from tests._support.db import build_test_uow
 
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 from scripts.provision_app_role import provision
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -47,17 +47,11 @@ def _superuser_env(mp: pytest.MonkeyPatch, dsn: str) -> None:
 
 
 def _run_migrations(dsn: str) -> None:
-    """`pytest.MonkeyPatch.context()`, not the session-scoped `monkeypatch`/`monkeypatch_session`
-    fixture idiom used elsewhere: those only undo at the very end of the whole `pytest` session,
-    which is too late here — a bare `pytest` run (no `-m` filter) collects `tests/integration/`
-    before `tests/unit/` alphabetically, so a session-scoped patch would still be leaking
-    POSTGRES_HOST/PORT (testcontainers' random host port) into `tests/unit/config/
-    test_settings.py`'s assertions when they ran later in the *same* process — found for real,
-    not guessed (`test_database_url_is_a_secret`/`..._percent_encodes_special_characters` failed
-    against the leaked port instead of the fixed `postgres:5432` default). These vars are only
-    ever needed for the single `command.upgrade(...)` call below, not for the rest of the
-    session, so a narrowly-scoped context that exits (and restores the prior environment)
-    immediately after is both correct and simpler than tracking a wider-scoped fixture.
+    """`pytest.MonkeyPatch.context()`, not a session-scoped fixture: those undo only at the
+    end of the run, and a bare `pytest` collects `tests/integration/` before `tests/unit/`,
+    so the container's random port leaks into `tests/unit/config/test_settings.py`, which
+    asserts the fixed `postgres:5432`. These variables are needed for the single
+    `command.upgrade(...)` below and nothing after it.
     """
     with pytest.MonkeyPatch.context() as mp:
         _superuser_env(mp, dsn)

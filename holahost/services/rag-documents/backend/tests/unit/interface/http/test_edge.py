@@ -17,10 +17,12 @@ from holahost_http import (
     BodySizeLimitMiddleware,
     RateLimitMiddleware,
     RequestIdMiddleware,
+    log_rejection,
 )
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 from tests._support.fakes import FakeRateLimiter
+from tests._support.http import register_test_handlers
 
 from application.limits import MAX_UPLOAD_SIZE
 from config.logging import configure_logging
@@ -31,9 +33,11 @@ from interface.http.edge import (
     MISSING_REQUEST_ID_ERROR,
     REPORTED_UPLOAD_LIMIT,
     bucket_for,
-    log_rejection,
 )
-from interface.http.errors import register_error_handlers
+
+# `log_rejection` is what `create_edge_app` wires into all four middleware for the real
+# app; it is imported here because this file assembles the stack by hand, to check the
+# ordering the factory is otherwise responsible for.
 
 _TOKEN = TokenContext(subject="user-123", client_id="cli-1", roles=(), act=None)
 _DOCUMENTS = f"{API_BASE_URL}/documents"
@@ -100,7 +104,7 @@ def build_app(
             ),
         ]
     )
-    register_error_handlers(app)
+    register_test_handlers(app)
 
     @app.post(_DOCUMENTS)
     async def create(request: Request) -> dict[str, int]:

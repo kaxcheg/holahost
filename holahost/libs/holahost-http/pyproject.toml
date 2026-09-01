@@ -10,15 +10,22 @@ packages = [{ include = "holahost_http" }]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0"
-# starlette, not fastapi: everything here is plain ASGI. Middleware that has to run
-# before routing (and before the body is read) cannot be expressed with FastAPI's
-# Depends() in the first place — that is the reason this package exists.
+# The pre-routing middleware is plain ASGI and needs only starlette — that half of the
+# package exists precisely because it cannot be expressed with FastAPI's Depends().
 starlette = ">=0.40,<1.0"
+# The other half — the exception handlers and the published error schemas — is FastAPI
+# by nature: `@app.exception_handler`, `RequestValidationError` and the schema generator
+# are what it is about, and every service on the platform is a FastAPI service. Declared
+# as an ordinary dependency rather than an extra: an optional import that every consumer
+# turns on is a switch nobody ever flips the other way.
+fastapi = "^0.115"
+# For the completion event a rejection and a handled failure both write. The direction
+# runs observability -> http and never back: the logger knows nothing about HTTP.
+holahost-observability = { path = "../holahost-observability", develop = true }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
 httpx = "^0.28"
-fastapi = "^0.115"
 ruff = "^0.8"
 mypy = "^1.13"
 import-linter = "^2.1"
@@ -49,6 +56,25 @@ modules = [
     "holahost_http.body_limit",
     "holahost_http.rate_limit",
     "holahost_http.request_id",
+]
+
+[[tool.importlinter.contracts]]
+# The two halves of the package answer at different moments — before routing, and after
+# a route raised — and neither needs the other. Keeping them apart is what stops the
+# ASGI half quietly acquiring a FastAPI import and becoming impossible to run without an
+# application object.
+name = "The pre-routing half and the handler half stay independent"
+type = "forbidden"
+source_modules = [
+    "holahost_http.body_limit",
+    "holahost_http.rate_limit",
+    "holahost_http.request_id",
+]
+forbidden_modules = [
+    "holahost_http.edge",
+    "holahost_http.error_handlers",
+    "holahost_http.error_schemas",
+    "holahost_http.security",
 ]
 
 [build-system]

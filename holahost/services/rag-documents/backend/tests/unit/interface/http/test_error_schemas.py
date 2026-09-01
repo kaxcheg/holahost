@@ -6,21 +6,32 @@ thing as Pydantic models, which is what puts it into `docs/openapi.json`. The la
 forbids merging them (the application layer must not depend on a serialization library),
 so this file is what stops them drifting: rename an error class, add a `details` key, or
 change one without the other, and one of these fails.
+
+The platform's own errors and their models come from `holahost-http` and are checked
+there; what this file covers is the pairing *this service* declares — including the
+platform errors it publishes, since which of them appear in its schema is its decision.
 """
 
 from __future__ import annotations
 
 import pytest
-from holahost_http import error_envelope
+from holahost_http import (
+    InvalidPayloadError,
+    MalformedRequestError,
+    NotFoundError,
+    error_envelope,
+)
+from holahost_http.error_schemas import (
+    InvalidPayloadErrorBody,
+    MalformedRequestErrorBody,
+    NotFoundErrorBody,
+)
 from holahost_http.errors import PlatformError
 from pydantic import BaseModel
 
 from application.exceptions import (
     DocumentParseError,
     EmptyDocumentError,
-    InvalidPayloadError,
-    MalformedRequestError,
-    NotFoundError,
     ParsedTextTooLargeError,
     TooManyChunksError,
     UnsupportedMediaTypeError,
@@ -29,9 +40,6 @@ from application.exceptions import (
 from interface.http.error_schemas import (
     DocumentParseErrorBody,
     EmptyDocumentErrorBody,
-    InvalidPayloadErrorBody,
-    MalformedRequestErrorBody,
-    NotFoundErrorBody,
     ParsedTextTooLargeErrorBody,
     TooManyChunksErrorBody,
     UnsupportedMediaTypeErrorBody,
@@ -54,18 +62,25 @@ _PUBLISHED: list[tuple[PlatformError, type[BaseModel]]] = [
     (TooManyChunksError(limit=500, actual=501), TooManyChunksErrorBody),
     (NotFoundError(), NotFoundErrorBody),
 ]
-"""Only this service's own errors. `401`/`503`, `429` and the transport `413` come from
-the shared edge and are the platform's contract, identical behind every service — this
-document does not restate them (see `error_schemas`)."""
+"""Only the errors this service answers with. `401`/`503`, `429` and the transport `413`
+come from the shared edge and are the platform's contract, identical behind every
+service — this document does not restate them (see `error_schemas`)."""
 
 
 @pytest.mark.parametrize(("error", "model"), _PUBLISHED, ids=lambda x: getattr(x, "__name__", ""))
 class TestEachPublishedErrorMatchesItsModel:
-    def test_the_envelope_validates(self, error: PlatformError, model: type[BaseModel]) -> None:
-        # `extra="forbid"` throughout, so a `details` key nobody published fails here
-        # rather than reaching a consumer that has no schema for it.
-        envelope = error_envelope(error.code, str(error), error.details_dict())
-        model.model_validate(envelope["error"])
+    def test_the_published_half_of_the_envelope_validates(
+        self, error: PlatformError, model: type[BaseModel]
+    ) -> None:
+        # `message` is dropped before validating, and that is the assertion: it rides the
+        # wire for a person reading a log by hand and is deliberately in no model, so
+        # `extra="forbid"` rejects it. Everything else must validate exactly — a `details`
+        # key nobody published fails here rather than reaching a consumer that has no
+        # schema for it.
+        body = dict(error_envelope(error.code, str(error), error.details_dict())["error"])  # type: ignore[call-overload]
+        assert body.pop("message")
+
+        model.model_validate(body)
 
     def test_the_identity_matches(self, error: PlatformError, model: type[BaseModel]) -> None:
         # The anti-rename guard: `code` is derived from the class name, and the model

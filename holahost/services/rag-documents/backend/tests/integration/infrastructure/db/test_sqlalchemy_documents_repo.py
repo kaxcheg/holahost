@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from holahost_db import SqlAlchemyUnitOfWork, translate_db_errors
 from sqlalchemy import create_engine, insert
 from tests._support.builders import make_chunk, make_document_with_chunks
 
@@ -12,9 +13,7 @@ from domain.value_objects.document_name import DocumentName
 from domain.value_objects.mime_type import MimeType
 from domain.value_objects.owner_subject import OwnerSubject
 from infrastructure.db import schema
-from infrastructure.db.errors import translate_db_errors
 from infrastructure.db.sqlalchemy_documents_repo import SqlAlchemyDocumentsRepo
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.integration
 

@@ -1,0 +1,184 @@
+name: <svc>
+
+# The one compose manifest for this service — own compose project, no platform nginx/gateway in
+# front of it here (that's added by the platform's compose on staging/prod; nothing in this file
+# provides it). Used two ways:
+#   - Locally (frame spec "dev (local)"): `make dev-up` builds the image explicitly (a plain
+#     `docker build`, same as CI's `build-push-image` action) and tags it `<svc>:dev`,
+#     *before* this file is ever touched — then publishes the app port straight to the host — no
+#     gateway, X-Request-ID is the caller's job.
+#   - Deployed as-is to staging/prod: the SAME file is embedded and written to
+#     /opt/services/<svc>/docker-compose.yml by the deploy pipeline's SSM command
+#     (ssm-migrate-deploy action), then run there with IMAGE=<ecr-repo>@sha256:<digest>.
+#
+# No `build:` section on `api`: this file
+# only ever *runs* an image, it never builds one, in either context above. That was always true
+# for staging/prod (the build context wouldn't even exist on the instance) and is now made
+# structurally true for dev too, by moving the build to an explicit Makefile step instead of
+# `docker compose up --build`. Consequence: `PYTHON_VERSION` (only ever needed to pick the base
+# image at build time) no longer appears anywhere in this file — Compose used to require *some*
+# value for it on every single invocation regardless of whether a build would ever actually
+# happen (verified live, `${VAR}` interpolation is eager for the whole file), which is exactly
+# what forced the awkward `PYTHON_VERSION=unused` placeholder on every staging/prod command. Gone
+# now, for the same reason it was never load-bearing there in the first place.
+services:
+  postgres:
+    image: postgres:16
+    # `env_file` for DB (and, historically, USER), not `environment: {POSTGRES_DB: ${...}}`: the
+    # official Postgres image reads these as plain container env vars — it doesn't care whether
+    # Compose set them via `environment:` (needs each one resolved through Compose's own
+    # host-shell `${VAR}` interpolation) or `env_file:` (injects the file's pairs directly, same
+    # mechanism `api` below already uses, and the same one `docker run --env-file` uses for the
+    # standalone migration container — see Makefile). Reading the file straight into the container
+    # instead of threading each value through host-shell interpolation first keeps it off the
+    # "must be host-exported for Compose to even parse this file" list.
+    #
+    # USER and PASSWORD are overridden below, and the override is the whole point. To the official
+    # image, `POSTGRES_USER` names the role initdb creates as a SUPERUSER — that is what the
+    # variable means to it, not "the account the application uses". Pointing it at the .env's
+    # `POSTGRES_USER` (the app's own identity) therefore made the application a superuser, and a
+    # superuser bypasses row-level security unconditionally, `FORCE ROW LEVEL SECURITY` included.
+    # Since RLS is this service's *only* enforcement of owner isolation (§8.0 — no repository
+    # filters by owner in its own SQL), that silently disabled owner isolation in every deployed
+    # environment, while the integration suite, which deliberately connects as an unprivileged
+    # role, kept proving it worked. `environment:` wins over `env_file:` in Compose, so the two
+    # identities are kept apart here, at the one place both are visible:
+    #   - `postgres`, below — bootstrap superuser. Runs migrations (CREATE EXTENSION, CREATE
+    #     POLICY, table ownership) and owns the tables. Never used by the running app.
+    #   - `${POSTGRES_USER}` from infra/envs/<env>/.env — the app role, created *without*
+    #     SUPERUSER/BYPASSRLS by scripts/provision_app_role.py, holding plain DML grants only.
+    # `scripts/bootstrap.py::_assert_rls_is_enforced` refuses to serve traffic if the app ever
+    # connects as a role that can bypass RLS again.
+    #
+    # PASSWORD stays host-interpolated, deliberately NOT folded into env_file: unlike DB, it isn't
+    # in the file at all — staging/prod's committed .env never has any password (Secrets-Manager-
+    # only), so `env_file:` would inject nothing for it there, and Postgres's own entrypoint would
+    # then refuse to start ("superuser password is not specified"). The deploy script supplies it
+    # as an inline env var on the `docker compose` invocation itself (see
+    # ssm-migrate-deploy/action.yml), which only `environment:`'s host-shell interpolation picks
+    # up — `env_file:` only ever reads the file on disk, never the invoking process's own
+    # environment.
+    env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
+    environment:
+      # The SAME variable `SuperuserSettings.postgres_superuser` reads (backend/app/config/
+      # settings.py), with the same default — not a second literal that happens to agree. There
+      # are two sides to this one identity: the role initdb CREATES, here, and the role the
+      # deploy's elevated steps CONNECT as (migrations, then scripts/provision_app_role.py). A
+      # hardcoded name here would leave the setting influencing only the second, so overriding it
+      # would produce a client authenticating as a role the server never created.
+      #
+      # Override it in `infra/envs/<env>/.env` and nowhere else. That file is the only source
+      # that reaches BOTH sides: `--env-file` feeds Compose's `${...}` interpolation here, and
+      # the `env_file:` key above injects it into the one-off `api` containers where
+      # `SuperuserSettings` reads it. Exporting it in the invoking shell instead reaches only
+      # this line — verified — leaving the deploy's elevated steps still connecting as the
+      # default while initdb created something else.
+      #
+      # Fixed at initdb regardless of which value is used: the name is written into the `pgdata`
+      # volume when the database is first created, and changing it afterwards renames nothing —
+      # an existing environment needs its volume recreated (`make dev-down-v` in dev), not a new
+      # value. Treat it as chosen once per environment, not as a knob.
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?requires env var POSTGRES_SUPERUSER_PASSWORD — the postgres bootstrap superuser password, NOT the app role's}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # $$ (not $), and reading the container's own POSTGRES_USER/POSTGRES_DB rather than
+      # hardcoding the literal again a third time: Compose's own `${VAR}` interpolation would
+      # otherwise try to resolve $POSTGRES_USER/$POSTGRES_DB *itself* at parse time (same vars
+      # dropped from host-export above) — `$$` escapes that, leaving a literal `$VAR` for the
+      # shell CMD-SHELL runs *inside the container* at healthcheck time, where `environment:`
+      # (USER) and `env_file:` (DB) above already guarantee both are set. USER here is the
+      # bootstrap superuser, which is the right identity for a liveness probe: it exists from
+      # initdb onward, before the app role is provisioned by the first deploy.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    # No `build:` here (see header comment) — `image:` is the only way this service ever
+    # resolves. Dev: `make dev-up` runs `docker build ... -t <svc>:dev` first, so this
+    # `image:` pull finds it already in the local cache (`pull_policy` defaults to `missing` —
+    # check local cache, then registry — never reaching a registry that doesn't have a
+    # `<svc>:dev` tag). Staging/prod: the deploy pipeline sets
+    # IMAGE=<ecr-repo>@sha256:<digest>, a real, already-pushed image, same pull.
+    #
+    # No fallback on either this or env_file below: if IMAGE/ENV were ever accidentally
+    # unset on a staging/prod deploy, a `<svc>:dev`/`infra/envs/dev/.env` default
+    # wouldn't silently succeed wrong (that .env file doesn't exist on the instance at all —
+    # see the header comment) — it'd still fail, just confusingly (a pull error or a
+    # missing-file error instead of a clear "IMAGE/ENV wasn't set"). Mandatory makes the actual
+    # cause the first thing an operator sees. Makefile exports both for dev.
+    #
+    # env_file's own path uses `${ENV}` — the same name `Settings.env` reads *inside* the
+    # container (config/settings.py) — deliberately, not a collision: this `${ENV}` is Compose's
+    # own host-shell interpolation (resolved from whoever invokes `docker compose`, before any
+    # container starts, purely to pick *which* .env file to load) while `Settings.env` reads
+    # `ENV` from *inside* that already-selected file, injected into the container by env_file
+    # below — two different mechanisms, two different environments (host vs. container), that
+    # happen to agree on the same value by construction (each infra/envs/<x>/.env's own `ENV=<x>`
+    # line matches the folder it lives in) — one name for one concept, not two names for it.
+    image: ${IMAGE:?requires env var IMAGE — which image to run}
+    env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
+    networks: [backbone, default]
+    # No `volumes:` here: a service that needs one — a model cache, a scratch area — adds
+    # it, with the mount path read from the same env var the application reads rather than
+    # a second hardcoded literal.
+    # No `ports:` here — deliberately. Publishing the app port is a DEV-ONLY concern and lives in
+    # docker-compose.dev.yml (an override the Makefile's dev targets add with a second `-f`).
+    # On staging/prod the only intended way in is the platform gateway, reached over the external
+    # `backbone` network above; a published 0.0.0.0:8080 on the instance is a second, unguarded
+    # door past it — and past what the gateway adds, notably the `X-Request-ID` that
+    # `holahost_http.RequestIdMiddleware` (parameterised in `interface/http/edge.py`) treats as
+    # proof the caller came through the intended path. This file is deployed verbatim to the
+    # instance (see the header), so a
+    # `ports:` key here, however defaulted, is published there too: neither staging's nor prod's
+    # committed .env sets HOST_PORT, so the `:-8080` fallback is exactly what they would get.
+    # Without this the service logs to the container's stdout and stop there. Nothing
+    # ships them anywhere: no CloudWatch agent runs on the instance, and the log group
+    # this service's terraform creates (`/holahost/<env>/<svc>`) receives not one
+    # datapoint. Everything downstream is built on that group — ten metric filters, four
+    # alarms and the dashboard — so all of it reads as healthy while the service is
+    # silent, and `treat_missing_data = "notBreaching"` makes a total outage look exactly
+    # like a quiet period. The driver is what closes that loop.
+    #
+    # AWS_REGION and ENV come from the same `--env-file` Compose already reads for `${ENV}`
+    # above: staging's and prod's committed .env both carry AWS_REGION, dev's does not.
+    #
+    # No `:?` guard on AWS_REGION, unlike every other mandatory variable in this file, and
+    # it is not an oversight: `${VAR}` interpolation is eager for the WHOLE file, so a
+    # guard here fires on `make dev-up` too — where dev has no region, does not want one,
+    # and overrides this driver away entirely. (Same trap that forced `PYTHON_VERSION=
+    # unused` before the `build:` section was removed — see the header.) On staging/prod
+    # an empty region is not silent either: the daemon refuses to start a container it
+    # cannot attach a log driver to.
+    #
+    # `awslogs-create-group` is deliberately absent — the group is a terraform resource
+    # with a retention policy, and letting the driver create it on demand would produce an
+    # unmanaged group retained forever if the region or env were ever wrong. Failing to
+    # start beats logging into a resource nobody owns.
+    #
+    # Dev overrides this back to `json-file` (docker-compose.dev.yml): there is no AWS
+    # there, and the driver would refuse to start the container at all.
+    #
+    # Requires `logs:CreateLogStream` and `logs:PutLogEvents` on the instance role. That
+    # role is platform-level and outside this service's terraform (which owns the group
+    # itself, the filters and the alarms, but no compute) — see docs/runbook.md.
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: /holahost/${ENV}/<svc>
+        awslogs-stream-prefix: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  backbone:
+    external: true
+
+volumes:
+  pgdata:

@@ -78,10 +78,8 @@ runs:
         ENV_B64=$(base64 -w0 < "${{ inputs.env-file }}")
         SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-password"
         SUPERUSER_SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-superuser-password"
-        # No PYTHON_VERSION anywhere in this script (used to be read here and threaded through
-        # both docker compose lines below) — docker-compose.yml's `api` service has no `build:`
-        # section any more (moved to an explicit `docker build` step in the Makefile, dev-only —
-        # see .build-state/R-25-.../clarifications.md), so Compose never needs it here either.
+        # No PYTHON_VERSION here: docker-compose.yml's `api` service carries no `build:`
+        # section, so Compose never needs it.
 
         # One array element, not several: AWS doesn't document whether `commands` array
         # entries share shell state (a variable set in one entry being visible in the
@@ -99,10 +97,10 @@ runs:
         # volumes): created the network, created+started+waited-for postgres to become healthy,
         # then ran the migration, all as one step. Also confirmed this doesn't collide with an
         # already-running `api` container's port binding on a redeploy (`compose run` doesn't
-        # publish service ports by default) — see .build-state/R-25-.../clarifications.md.
+        # publish service ports by default).
         #
         # `-e POSTGRES_SUPERUSER_PASSWORD=...` on each `run` command itself, PLUS the same var
-        # exported for the whole script: two different consumers, found for real, not assumed —
+        # exported for the whole script: two different consumers —
         # the exported var feeds `postgres`'s own `environment: {POSTGRES_PASSWORD:
         # ${POSTGRES_SUPERUSER_PASSWORD}}` block (Compose's `${VAR}` interpolation, parsed for the
         # *whole* file even though only `api` is being run), while `api`'s own service definition

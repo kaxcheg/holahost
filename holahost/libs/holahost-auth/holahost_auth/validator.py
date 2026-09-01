@@ -59,7 +59,7 @@ def authenticate(
             algorithms=[config.expected_algorithm],
             issuer=config.expected_issuer,
             audience=config.expected_audience,
-            leeway=config.clock_skew_seconds,
+            leeway=config.jwt_clock_skew_seconds,
             options={"require": ["exp", "iat", "sub", "client_id"]},
         )
     except jwt.InvalidTokenError as exc:

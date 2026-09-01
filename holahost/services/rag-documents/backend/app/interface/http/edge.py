@@ -13,15 +13,9 @@ so it must not drag in the application layer to answer "what is my base path".
 
 from __future__ import annotations
 
-import logging
-import time
+from holahost_http import MalformedRequestError, body_cap_for_upload
 
-from holahost_http import body_cap_for_upload
-from starlette.types import Scope
-
-from application.exceptions import MalformedRequestError
 from application.limits import MAX_UPLOAD_SIZE
-from config.logging import log_event
 from interface.http.api_base import API_BASE_URL
 
 _DOCUMENTS_PREFIX = f"{API_BASE_URL}/documents"
@@ -72,49 +66,15 @@ def bucket_for(method: str, path: str) -> str | None:
     return READ_BUCKET
 
 
-def log_rejection(scope: Scope, *, outcome: str, detail: str | None = None) -> None:
-    """Write the `op_completed` line for a request refused before it reached a route.
-
-    Middleware answers without ever entering a handler, so nothing downstream would log
-    these — and they are exactly the outcomes §8.7's metric filters count
-    (`RateLimitExceededError`, `401`). Reads what earlier middleware left in the scope: the
-    request id and timer are always there (request-id middleware is outermost), the token
-    only once authentication has succeeded, which is why an auth failure logs no
-    `client_id`.
-    """
-    state = scope.get("state", {})
-    start = state.get("start_time")
-    token = state.get("token")
-    log_event(
-        "op_completed",
-        # WARNING, flat: every outcome this can be handed is the caller's own doing —
-        # a missing header (422), bad credentials (401), an over-quota caller (429), an
-        # over-sized body (413). None of them is the service failing, and none reaches
-        # 5xx. The status itself never arrives here: `RejectionLogger`'s signature is
-        # the library's, and it passes only `outcome` and `detail`.
-        level=logging.WARNING,
-        route=f"{scope['method']} {scope['path']}",
-        outcome=outcome,
-        duration_ms=(time.monotonic() - start) * 1000 if start is not None else 0.0,
-        request_id=state.get("request_id"),
-        client_id=getattr(token, "client_id", None),
-        sub=getattr(token, "subject", None),
-        # No `error_code`: it only ever held `outcome` again — see `errors._log_failure`.
-        error_reason=detail,
-    )
-
-
 MISSING_REQUEST_ID_ERROR = MalformedRequestError()
 """What this service answers with when `X-Request-ID` is absent (§7.6, §8.1 step 1).
 
-The requirement itself is platform-wide and lives in `holahost_http.RequestIdMiddleware`
-(its `missing_header_error` argument) — both real entry paths attach the header
-unconditionally, so its absence means a caller is misconfigured or bypassing the intended
-path. The code and status that violation is answered with are this service's own
-taxonomy, which is why the library takes them as an argument instead of owning them.
-
-Mute by design — see `MalformedRequestError`. Which header was missing reaches the log
-instead, through the middleware's own `on_rejected` call.
+The requirement lives in `holahost_http.RequestIdMiddleware` (its `missing_header_error`
+argument) — both real entry paths attach the header unconditionally, so its absence means
+a caller is misconfigured or bypassing the intended path. Which error that violation is
+answered with is still the service's decision, which is why the library takes it as an
+argument rather than raising one of its own: this service names the platform's mute
+`MalformedRequestError`, and the status it carries is set beside it in `app.py`.
 """
 
 
@@ -127,5 +87,4 @@ __all__ = [
     "READ_BUCKET",
     "REPORTED_UPLOAD_LIMIT",
     "bucket_for",
-    "log_rejection",
 ]

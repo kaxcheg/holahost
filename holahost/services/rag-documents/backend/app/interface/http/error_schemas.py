@@ -11,48 +11,38 @@ gap by validating every published error against its own model.
 
 The unions are discriminated on `code`: `details` is a tagged union whose shape depends on
 the error, and the identity is its tag. A consumer switches on `code`, then reads `details`
-knowing its keys.
+knowing its keys. `message` is in no model — it rides the wire for a person reading a log
+by hand, and publishing it would invite the parsing §7.6 says not to do.
 
-**Only this service's own errors are here.** The shared middleware's answers — `401`/`503`
-from `holahost-auth`, `429` and the transport `413` from `holahost-http` — are the
-platform's contract, identical behind every service, and restating them per service would
-make one fact look like N. `MalformedRequestError` is delivered by `RequestIdMiddleware`
-but declared by this service, so it belongs here.
+**Only this service's own errors are here.** The platform's — the envelope wrapper, the
+empty `details`, `InvalidPayloadError`, `MalformedRequestError`, `NotFoundError` and
+`InternalError` — come from `holahost_http.error_schemas`; its middleware's answers
+(`401`/`503`, `429`, the transport `413`) are described nowhere per-service, because
+restating one fact behind N services makes it N facts that drift.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class _Strict(BaseModel):
-    """Forbids undeclared keys, which is what lets the conformance test fail: a `details`
-    that grew an unpublished key stops validating instead of quietly passing."""
-
-    model_config = ConfigDict(extra="forbid")
-
-
-_MESSAGE = Field(
-    description=(
-        "Human-readable, for a person reading a log or a response by hand. NOT part of "
-        "the contract: do not parse it and do not show it to an end user — compose what "
-        "a user sees from `code` and `details`."
-    )
+from holahost_http.error_schemas import (
+    INTERNAL_RESPONSES,
+    InvalidPayloadErrorBody,
+    MalformedRequestErrorBody,
+    NoDetails,
+    NotFoundErrorBody,
+    Strict,
+    discriminated,
+    envelope,
 )
+from pydantic import Field
 
 
-class UnsupportedMediaTypeDetails(_Strict):
+class UnsupportedMediaTypeDetails(Strict):
     allowed: list[str] = Field(description="MIME types this service accepts.")
 
 
-class InvalidPayloadDetails(_Strict):
-    field: str = Field(description="Which request field failed validation.")
-    limit: int | None = Field(description="That field's length limit, or null if it has none.")
-
-
-class SizeDetails(_Strict):
+class SizeDetails(Strict):
     """Shared by every error that reports "you exceeded a size", each of which is its own
     error with its own limit — the shape is the same, the meaning of `limit` is not."""
 
@@ -60,12 +50,8 @@ class SizeDetails(_Strict):
     actual: int
 
 
-class EmptyDocumentDetails(_Strict):
+class EmptyDocumentDetails(Strict):
     min_chars: int = Field(description="Characters that had to be extracted, and were not.")
-
-
-class NoDetails(_Strict):
-    """An error whose identity is the whole message — nothing to parameterise."""
 
 
 # Each model names the error it publishes in a comment, not a docstring: a docstring
@@ -73,122 +59,66 @@ class NoDetails(_Strict):
 # declared is a fact about this repository, not about the API.
 #
 # `application.exceptions.UnsupportedMediaTypeError`.
-class UnsupportedMediaTypeErrorBody(_Strict):
+class UnsupportedMediaTypeErrorBody(Strict):
     code: Literal["UnsupportedMediaTypeError"]
-    message: str = _MESSAGE
     details: UnsupportedMediaTypeDetails
 
 
-# `application.exceptions.InvalidPayloadError` — raised by the use cases, and also what
-# `errors.handle_validation_error` answers with when Pydantic rejects a request before
-# one runs. Two raise sites, one identity and one `details` shape.
-class InvalidPayloadErrorBody(_Strict):
-    code: Literal["InvalidPayloadError"]
-    message: str = _MESSAGE
-    details: InvalidPayloadDetails
-
-
-# `application.exceptions.MalformedRequestError` — the one published error no route can
-# raise: `RequestIdMiddleware` answers with it before routing. Hence both its oddities — it
-# is in *every* group's 422, since the header is required of every guarded route, and it
-# has no row in `errors.ERROR_CONTRACT`, since its status is set where the stack is built.
-class MalformedRequestErrorBody(_Strict):
-    code: Literal["MalformedRequestError"]
-    message: str = _MESSAGE
-    details: NoDetails
-
-
 # `application.exceptions.DocumentParseError`.
-class DocumentParseErrorBody(_Strict):
+class DocumentParseErrorBody(Strict):
     code: Literal["DocumentParseError"]
-    message: str = _MESSAGE
     details: NoDetails
 
 
 # `application.exceptions.UploadTooLargeError`.
-class UploadTooLargeErrorBody(_Strict):
+class UploadTooLargeErrorBody(Strict):
     code: Literal["UploadTooLargeError"]
-    message: str = _MESSAGE
     details: SizeDetails
 
 
 # `application.exceptions.ParsedTextTooLargeError`.
-class ParsedTextTooLargeErrorBody(_Strict):
+class ParsedTextTooLargeErrorBody(Strict):
     code: Literal["ParsedTextTooLargeError"]
-    message: str = _MESSAGE
     details: SizeDetails
 
 
 # `application.exceptions.EmptyDocumentError`.
-class EmptyDocumentErrorBody(_Strict):
+class EmptyDocumentErrorBody(Strict):
     code: Literal["EmptyDocumentError"]
-    message: str = _MESSAGE
     details: EmptyDocumentDetails
 
 
 # `application.exceptions.TooManyChunksError`.
-class TooManyChunksErrorBody(_Strict):
+class TooManyChunksErrorBody(Strict):
     code: Literal["TooManyChunksError"]
-    message: str = _MESSAGE
     details: SizeDetails
 
 
-# `application.exceptions.NotFoundError`.
-class NotFoundErrorBody(_Strict):
-    code: Literal["NotFoundError"]
-    message: str = _MESSAGE
-    details: NoDetails
-
-
-# No exception class publishes this one — `errors._internal_error` builds it. Its
-# docstring stays (and reaches the document): unlike the comments above, it says something
-# a consumer needs.
-class InternalErrorBody(_Strict):
-    """The one out-of-contract answer. Anything this service did not publish — an
-    unmapped exception, a driver failure, a defect — comes back as exactly this, with an
-    empty `details` and a fixed message: the cause reaches the log, never the caller."""
-
-    code: Literal["InternalError"]
-    message: str = _MESSAGE
-    details: NoDetails
-
-
-def _envelope(name: str, body: Any) -> type[BaseModel]:
-    """One `{"error": {...}}` wrapper around a body (or a union of bodies)."""
-    return type(name, (_Strict,), {"__annotations__": {"error": body}})
-
-
-_Discriminated = Field(discriminator="code")
-
-IngestErrorResponse = _envelope(
+IngestErrorResponse = envelope(
     "IngestErrorResponse",
     Annotated[
+        # `MalformedRequestErrorBody` is in every group's 422: `RequestIdMiddleware`
+        # answers with it on every guarded route, before this service's own validation
+        # has anything to say.
         InvalidPayloadErrorBody
         | MalformedRequestErrorBody
         | DocumentParseErrorBody
         | ParsedTextTooLargeErrorBody
         | EmptyDocumentErrorBody
         | TooManyChunksErrorBody,
-        _Discriminated,
+        discriminated,
     ],
 )
-SearchErrorResponse = _envelope(
+SearchErrorResponse = envelope(
     "SearchErrorResponse",
-    Annotated[InvalidPayloadErrorBody | MalformedRequestErrorBody, _Discriminated],
+    Annotated[InvalidPayloadErrorBody | MalformedRequestErrorBody, discriminated],
 )
-ReadErrorResponse = _envelope("ReadErrorResponse", MalformedRequestErrorBody)
-UploadTooLargeErrorResponse = _envelope("UploadTooLargeErrorResponse", UploadTooLargeErrorBody)
-UnsupportedMediaTypeErrorResponse = _envelope(
+ReadErrorResponse = envelope("ReadErrorResponse", MalformedRequestErrorBody)
+UploadTooLargeErrorResponse = envelope("UploadTooLargeErrorResponse", UploadTooLargeErrorBody)
+UnsupportedMediaTypeErrorResponse = envelope(
     "UnsupportedMediaTypeErrorResponse", UnsupportedMediaTypeErrorBody
 )
-NotFoundErrorResponse = _envelope("NotFoundErrorResponse", NotFoundErrorBody)
-InternalErrorResponse = _envelope("InternalErrorResponse", InternalErrorBody)
-
-_INTERNAL: dict[int | str, dict[str, Any]] = {
-    500: {"model": InternalErrorResponse, "description": "Out of contract — see the log."}
-}
-"""`500` stays: this service's own handler answers it, and a consumer needs the shape.
-The platform's answers appear in none of the maps below — see the module docstring."""
+NotFoundErrorResponse = envelope("NotFoundErrorResponse", NotFoundErrorBody)
 
 INGEST_RESPONSES: dict[int | str, dict[str, Any]] = {
     413: {"model": UploadTooLargeErrorResponse, "description": "File over MAX_UPLOAD_SIZE."},
@@ -197,7 +127,7 @@ INGEST_RESPONSES: dict[int | str, dict[str, Any]] = {
         "description": "MIME type outside the whitelist.",
     },
     422: {"model": IngestErrorResponse, "description": "The upload could not be accepted."},
-    **_INTERNAL,
+    **INTERNAL_RESPONSES,
 }
 """`POST /documents`. `PUT /{id}` adds 404 — see `REPLACE_RESPONSES`."""
 
@@ -209,12 +139,12 @@ REPLACE_RESPONSES: dict[int | str, dict[str, Any]] = {
 SEARCH_RESPONSES: dict[int | str, dict[str, Any]] = {
     404: {"model": NotFoundErrorResponse, "description": "No such document for this owner."},
     422: {"model": SearchErrorResponse, "description": "The query could not be accepted."},
-    **_INTERNAL,
+    **INTERNAL_RESPONSES,
 }
 
 READ_RESPONSES: dict[int | str, dict[str, Any]] = {
     404: {"model": NotFoundErrorResponse, "description": "No such document for this owner."},
     422: {"model": ReadErrorResponse, "description": "The transport contract was violated."},
-    **_INTERNAL,
+    **INTERNAL_RESPONSES,
 }
 """`GET /{id}` and `DELETE /{id}`: no body to validate, so the only 422 is the edge's."""

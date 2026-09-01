@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Connection, RowMapping, delete, insert, select, text, update
+from holahost_db import SqlAlchemyUnitOfWork, bind_rls_owner, translate_db_errors
+from sqlalchemy import Connection, RowMapping, delete, insert, select, update
 
 from application.exceptions import NotFoundError
 from application.ports.repos import DocumentsRepo
@@ -13,8 +14,6 @@ from domain.value_objects.document_name import DocumentName
 from domain.value_objects.mime_type import MimeType
 from domain.value_objects.owner_subject import OwnerSubject
 from infrastructure.db import schema
-from infrastructure.db.errors import translate_db_errors
-from infrastructure.db.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
 
 def _document_values(document: Document) -> dict[str, Any]:
@@ -66,20 +65,10 @@ class SqlAlchemyDocumentsRepo(DocumentsRepo):
     _uow: SqlAlchemyUnitOfWork  # narrows the inherited attribute for this adapter
 
     def _connection(self) -> Connection:
-        if self._uow.active_connection is None:
-            raise RuntimeError("no active transaction")
-        return self._uow.active_connection
+        return self._uow.connection()
 
     def _bind_owner(self) -> None:
-        # `SET LOCAL` does not accept a bind parameter (Postgres only takes a literal
-        # there) — `set_config(..., is_local=true)` is the parameterized equivalent,
-        # same transaction-scoped reset-on-commit/rollback behavior (verified against
-        # a real syntax error from the naive `SET LOCAL ... = :owner` form).
-        with translate_db_errors():
-            self._connection().execute(
-                text("SELECT set_config('app.current_owner', :owner, true)"),
-                {"owner": self._owner.value},
-            )
+        bind_rls_owner(self._connection(), self._owner.value)
 
     def _add_impl(self, document: Document) -> None:
         if document.owner != self._owner:
