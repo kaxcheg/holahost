@@ -2,20 +2,19 @@ name: SSM migrate and deploy
 description: >
   Syncs docker-compose.yml and the environment's .env file to the target instance, then runs
   `python -m alembic upgrade head` followed by `docker compose up -d`, using the given image.
-  Migrations always run before the container swap (recreate strategy — frame spec). AWS
-  credentials must already be configured.
+  Migrations always run before the container swap (recreate strategy). AWS credentials must
+  already be configured.
 
   The SSM command is sent, then polled to completion (`aws ssm wait command-executed`) — this
   step's own exit code reflects whether the remote script actually succeeded, not just whether
   AWS accepted the command into its queue (`send-command` alone returns immediately either way).
   Remote stdout/stderr are always printed to the job log, on success or failure.
 
-  Both files are embedded directly in the SSM command payload (base64-encoded), not fetched from
-  anywhere external: the repo isn't public (no raw.githubusercontent.com), and the pipeline
-  already has both files checked out plus already authenticates to this exact instance via OIDC —
-  no reason to add git-on-instance or S3 staging just to move a couple KB of text. Confirmed
-  against AWS's own SendCommand docs that this fits well within limits: the hard cap is the whole
-  SSM document at 64 KB (`MaxDocumentSizeExceeded`), and both files together are nowhere near that.
+  Both files are embedded directly in the SSM command payload (base64-encoded) rather than fetched
+  from anywhere external. The pipeline already has them checked out and already authenticates to
+  this exact instance over OIDC, so adding git-on-instance or S3 staging would buy nothing for a
+  couple of KB of text. The relevant SendCommand limit is the whole SSM document at 64 KB
+  (`MaxDocumentSizeExceeded`), which both files together are nowhere near.
 
   No password goes in either embedded file (neither is allowed to carry secrets — see
   `infra/envs/<env>/main.tf`'s value-less secrets). The remote script fetches both itself, on the
@@ -81,39 +80,26 @@ runs:
         # No PYTHON_VERSION here: docker-compose.yml's `api` service carries no `build:`
         # section, so Compose never needs it.
 
-        # One array element, not several: AWS doesn't document whether `commands` array
-        # entries share shell state (a variable set in one entry being visible in the
-        # next), and search results on it disagreed with each other — unverifiable
-        # without a real instance to test against. A single multi-line script sidesteps
-        # the question entirely: `$PGPW` and `set -e`'s fail-fast both work by ordinary
-        # bash semantics inside one script, no cross-entry assumption needed either way.
+        # One array element, not several: AWS does not document whether `commands` entries share
+        # shell state, so a single multi-line script sidesteps the question — `$PGPW` and
+        # `set -e`'s fail-fast both work by ordinary bash semantics inside one script.
         #
-        # `docker compose run --rm api ...`, not a bare `docker run`: `compose run` auto-joins the
-        # project's own network (no manual `--network rag-documents_default` needed any more) and,
-        # via `postgres`'s own `depends_on: condition: service_healthy`, creates and waits for
-        # `postgres` automatically if it isn't already running, which a bare `docker run` never
-        # did — helps the very-first-deploy case (network/postgres don't exist yet before this
-        # script's first run). Verified live from a clean slate (no network, no containers, no
-        # volumes): created the network, created+started+waited-for postgres to become healthy,
-        # then ran the migration, all as one step. Also confirmed this doesn't collide with an
-        # already-running `api` container's port binding on a redeploy (`compose run` doesn't
-        # publish service ports by default).
+        # `docker compose run --rm api ...` rather than a bare `docker run`: `compose run` joins
+        # the project's own network, and through `postgres`'s `depends_on:
+        # condition: service_healthy` it creates and waits for `postgres` when it is not already
+        # running. That is what makes the very first deploy work, where neither the network nor
+        # the database container exists yet. It also does not collide with an already-running
+        # `api` container on a redeploy, because `compose run` publishes no service ports.
         #
-        # `-e POSTGRES_SUPERUSER_PASSWORD=...` on each `run` command itself, PLUS the same var
-        # exported for the whole script: two different consumers —
-        # the exported var feeds `postgres`'s own `environment: {POSTGRES_PASSWORD:
-        # ${POSTGRES_SUPERUSER_PASSWORD}}` block (Compose's `${VAR}` interpolation, parsed for the
-        # *whole* file even though only `api` is being run), while `api`'s own service definition
-        # has *no* mechanism to receive a host CLI var at all — it only has `env_file:` (reads the
-        # synced .env directly, which deliberately never has any password) — normally fine,
-        # because the real, long-running `api` container fetches its own password via
-        # `scripts.bootstrap._fetch_password_if_needed` before `Settings` is built, but both
-        # invocations below override the container's CMD, bypassing `scripts.bootstrap` (and that
-        # fetch) entirely, so they have no other way to get it. `docker compose run`'s own
-        # `-e`/`--env` flag injects straight into that one-off container, same mechanism `docker
-        # run -e` uses, confirmed via `docker compose run --help`. Caught for real: an initial
-        # attempt without this `-e` failed with `KeyError` inside the container, live-tested
-        # against a local stand-in.
+        # `-e POSTGRES_SUPERUSER_PASSWORD=...` on each `run` command AND the same variable
+        # exported for the whole script — two different consumers. The exported one feeds
+        # `postgres`'s `environment: {POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}}` through
+        # Compose's interpolation, which is parsed for the whole file even though only `api` runs.
+        # The `api` service itself has no mechanism to receive a host CLI variable — it has only
+        # `env_file:`, and the synced .env never carries a password. The long-running container
+        # does not need one, because it fetches its own from Secrets Manager before `Settings` is
+        # built; but both invocations below override the container's CMD and bypass that fetch, so
+        # `docker compose run`'s own `-e` is their only way in.
         #
         # Every secret is quoted at its point of use (`-e "VAR=\$PW"`) and otherwise passed as an
         # `export VAR=\$PW` assignment — both forms are immune to word splitting and globbing. An
@@ -145,16 +131,12 @@ runs:
           '{InstanceIds: [$instance], DocumentName: "AWS-RunShellScript", Parameters: {commands: [$script]}}' \
           > /tmp/ssm-command.json
 
-        # send-command is fire-and-forget: it returns as soon as AWS accepts the command into
-        # its queue, not once the remote script (migration + docker compose up) actually
-        # finishes. Without polling, a failed migration on the instance would leave the *old*
-        # container running, and the pipeline's later smoke-check step would then curl that
-        # still-healthy old container and report the whole deploy green despite the failure —
-        # `set -e` in the remote script does make it stop on the first real error, but nothing
-        # here was checking whether it ever got the chance to. `aws ssm wait command-executed`
-        # is AWS's own documented waiter for exactly this: blocks until the invocation reaches a
-        # terminal state, non-zero exit unless that state is Success. Not live-testable without
-        # a real instance (same caveat as every other staging/prod-only path in this session).
+        # send-command is fire-and-forget: it returns as soon as AWS accepts the command into its
+        # queue, not once the remote script finishes. Polling is what makes this step's exit code
+        # mean anything — without it a failed migration would leave the old container running, and
+        # the pipeline's later smoke check would curl that still-healthy old container and report
+        # the deploy green. `aws ssm wait command-executed` blocks until the invocation reaches a
+        # terminal state and exits non-zero unless that state is Success.
         COMMAND_ID=$(aws ssm send-command --cli-input-json file:///tmp/ssm-command.json --query 'Command.CommandId' --output text)
         echo "SSM command sent: $COMMAND_ID"
 

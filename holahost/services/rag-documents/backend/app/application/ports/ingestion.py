@@ -38,7 +38,7 @@ class FileParser(Protocol):
     """Extracts page-provenanced text fragments from raw file bytes.
 
     Implementations sniff the actual content rather than trusting a caller-supplied MIME
-    type, and parse in-process — no external utilities (§3.8).
+    type, and parse in-process — no external utilities.
     """
 
     def parse(self, content: bytes, mime_type: MimeType) -> list[TextFragment]:

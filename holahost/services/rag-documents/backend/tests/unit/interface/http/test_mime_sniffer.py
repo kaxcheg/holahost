@@ -1,4 +1,4 @@
-"""Unit tests for content-based MIME sniffing (spec §7.2, §3.8)."""
+"""Unit tests for content-based MIME sniffing."""
 
 from interface.http.mime_sniffer import sniff_mime_type
 

@@ -27,7 +27,7 @@ def test_header_is_recorded_and_echoed_back() -> None:
 
 
 def test_absence_is_recorded_and_never_synthesized() -> None:
-    """§3.1: the service does not compensate for a missing perimeter by inventing one."""
+    """A service does not compensate for a missing perimeter by inventing one."""
     response = TestClient(build_app()).get("/echo")
     assert response.json() == {"request_id": None, "timed": True}
     assert "X-Request-ID" not in response.headers

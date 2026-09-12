@@ -1,17 +1,15 @@
-"""Provision the unprivileged role the application connects as (§8.0).
+"""Provision the unprivileged role the application connects as.
 
 Run once per deploy, as the bootstrap superuser, *after* `alembic upgrade head` and
 *before* the container swap — see `.github/actions/ssm-migrate-deploy/action.yml` and the
 Makefile's `migrate-*` targets, which are the only callers.
 
-Owner isolation here is enforced solely by Postgres RLS (§8.0) — no repository filters by
-owner in its own SQL — and a superuser bypasses RLS unconditionally, `FORCE ROW LEVEL
-SECURITY` included. The whole guarantee therefore rests on the application connecting as a
-role that is not one, while the role the `postgres` container creates at initdb is a
-superuser by construction. Hence a separate identity, created here explicitly.
+Owner isolation here rests solely on Postgres RLS, and a superuser bypasses RLS
+unconditionally. The role the `postgres` container creates at initdb is a superuser by
+construction, so the application needs a separate identity that is not — created here.
 
-What this file is, is the one place both Postgres identities are held at once, each from
-its own settings model. The statements themselves are the platform's
+This file is the one place both Postgres identities are held at once, each from its own
+settings model. The statements themselves are the platform's
 (`holahost_db.provision_app_role`), because the split between the role that owns a schema
 and the role that serves traffic is not this service's invention.
 """

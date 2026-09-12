@@ -9,12 +9,12 @@ from domain.exceptions import DomainValidationError
 
 @dataclass(frozen=True, slots=True)
 class ChunkIndex:
-    """A chunk's position within its document — >= 0 (spec §4.1).
+    """A chunk's position within its document — >= 0.
 
     Cross-chunk invariants ("unique, no gaps within the document") are a
     whole-collection property this single-value VO cannot check — enforced
-    wherever the full chunk collection is assembled (chunker infra, R-16, or
-    the use case), not here.
+    wherever the full chunk collection is assembled (the chunker, or the use
+    case), not here.
 
     :param value: The zero-based position.
     """

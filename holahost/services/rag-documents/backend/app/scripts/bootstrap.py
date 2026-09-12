@@ -1,5 +1,5 @@
-"""Process entrypoint (ticket R-24): secrets -> Settings -> logging -> app, in that
-order. Exposes `app` at module level for uvicorn (`uvicorn scripts.bootstrap:app`).
+"""Process entrypoint: secrets -> Settings -> logging -> app, in that order. Exposes
+`app` at module level for uvicorn (`uvicorn scripts.bootstrap:app`).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from interface.http.dependencies import get_embedding_model, get_engine, get_set
 
 
 def _fetch_password_if_needed() -> None:
-    """Set `POSTGRES_PASSWORD` from Secrets Manager, before `Settings` is built (§3.8).
+    """Set `POSTGRES_PASSWORD` from Secrets Manager, before `Settings` is built.
 
     Dev: no-op — `.env` sets `POSTGRES_PASSWORD` directly. Staging/prod: fetched fresh on
     every process start.
@@ -45,7 +45,7 @@ def _fetch_password_if_needed() -> None:
 
 
 def _assert_embedding_dimension_matches(model_name: str, actual_dim: int) -> None:
-    """Refuse to serve traffic on a model whose vectors do not fit the schema (§3.7).
+    """Refuse to serve traffic on a model whose vectors do not fit the schema.
 
     `EMBEDDING_MODEL` is per-environment configuration, while `EMBEDDING_DIM` is a domain
     constant that also fixes the `vector(384)` column and `Embedding`'s invariant. Without
@@ -80,9 +80,9 @@ def bootstrap() -> FastAPI:
     # migrations applied — so a role that bypasses them serves every other owner's rows
     # while every test still passes.
     assert_rls_is_enforced(get_engine())
-    # Eager load (§3.1: the model is ready before traffic arrives). `cast` rather than an
+    # Eager load, so the model is ready before traffic arrives. `cast` rather than an
     # isinstance check: `dimension()` is an extra method of the one adapter this getter
-    # constructs, deliberately outside the `EmbeddingModel` port (§8.0).
+    # constructs, deliberately outside the `EmbeddingModel` port.
     model = cast(FastembedEmbeddingModel, get_embedding_model())
     _assert_embedding_dimension_matches(get_settings().embedding_model, model.dimension())
     load_ms = (time.monotonic() - start) * 1000

@@ -1,10 +1,8 @@
-"""What this service needs in order to validate a token, and where it comes from.
+"""What a service needs in order to validate a token, and where it comes from.
 
-One class, not two. An earlier revision had `AuthSettings` reading the environment and
-`AuthConfig` holding the same five values for the validator, with a mapping between them —
-which is three declarations of one fact, and the mapping was the half that fails silently.
-There is no second shape here: the field names *are* the environment variable names, lower
--cased, and that is the whole rule.
+One class, not two: the field names *are* the environment variable names, lower-cased, and
+that is the whole rule. A separate settings class with a mapping function between them
+would be three declarations of one fact, and the mapping is the half that fails silently.
 """
 
 from __future__ import annotations

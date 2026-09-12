@@ -6,7 +6,7 @@ import uuid
 
 
 class DocumentId(uuid.UUID):
-    """A document's identifier — self-generating, never externally assigned (spec §4.1)."""
+    """A document's identifier — self-generating, never externally assigned."""
 
     @classmethod
     def new(cls) -> DocumentId:

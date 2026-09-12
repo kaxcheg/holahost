@@ -4,11 +4,7 @@ The HTTP edge shared by Holahost services, in two halves: the checks that have t
 before a request reaches a route handler, and the mapping from an exception to the error
 envelope once a route has raised.
 
-Consumed as a Poetry path dependency:
-
-```toml
-holahost-http = { path = "../../../libs/holahost-http", develop = true }
-```
+Consumed as a [path dependency](../../README.md#shared-libraries).
 
 ## Why these live in a library and not in a service
 

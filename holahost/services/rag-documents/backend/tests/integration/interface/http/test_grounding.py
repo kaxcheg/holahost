@@ -1,6 +1,7 @@
-"""Grounding contract test (R-29, spec §12 delta): a document with a unique sentinel fact must be
-findable by that fact. Catches retrieval regressions unit tests can't see — real pgvector, real
-embedding model, no fakes (§12: "порог, нормализация, несовпадение модели ingest и запроса").
+"""Grounding contract test: a document with a unique sentinel fact must be findable by that
+fact. Catches retrieval regressions unit tests cannot see — a wrong threshold, missing
+normalization, or a mismatch between the ingest and query models — using real pgvector and the
+real embedding model, no fakes.
 
 Reuses the same `client`/`auth_headers` fixtures as `test_app_end_to_end.py` (real app, real
 Postgres, real JWT validation via the local JWKS test server in conftest.py) rather than

@@ -1,4 +1,4 @@
-"""UC-R4: read a document's metadata (spec §8.5)."""
+"""Read a document's metadata."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 @dataclass
 class GetDocumentUseCase:
-    """UC-R4: read a document's metadata. No file or chunk text is ever returned."""
+    """Read a document's metadata. No file or chunk text is ever returned."""
 
     documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
@@ -31,12 +31,12 @@ class GetDocumentUseCase:
         :raises NotFoundError: the document does not exist, or belongs to another owner.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: conscious pass-through — a plain read, not
-            retried (§8.6 scopes retry to replace/delete only).
+            retried — only replace and delete retry on conflict.
         :raises IntegrityError: conscious pass-through.
         """
         documents_repo = self.documents_repo_factory(OwnerSubject(cmd.owner))
         # No lock: same staleness-accepted trade-off as search. Still runs inside a
-        # transaction — every DocumentsRepo call does, uow is the sole boundary (§8.0).
+        # transaction — every DocumentsRepo call does, uow is the sole boundary.
         with self.uow:
             document = documents_repo.get(DocumentId.from_str(cmd.document_id))
             if document is None:

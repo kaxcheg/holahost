@@ -1,4 +1,4 @@
-"""Tests for DeleteDocumentUseCase (UC-R5)."""
+"""Tests for DeleteDocumentUseCase."""
 
 from __future__ import annotations
 

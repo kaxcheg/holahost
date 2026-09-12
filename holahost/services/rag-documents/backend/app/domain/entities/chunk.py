@@ -14,18 +14,18 @@ from domain.value_objects.page_number import PageNumber
 
 @dataclass(frozen=True, eq=False)
 class Chunk:
-    """An indexed text fragment of a document (spec §4.3).
+    """An indexed text fragment of a document.
 
-    Immutable (`frozen=True`) — spec §4.3 states this outright:
-    a chunk is born and dies only with its document, no update operation
-    exists. `eq=False` disables the dataclass's field-wise default equality
-    so the hand-written `__eq__`/`__hash__` below (identity by `id`) govern
-    instead — the two are independent dataclass options and compose freely.
+    Immutable (`frozen=True`): a chunk is born and dies only with its
+    document, and no update operation exists. `eq=False` disables the
+    dataclass's field-wise default equality so the hand-written
+    `__eq__`/`__hash__` below (identity by `id`) govern instead — the two are
+    independent dataclass options and compose freely.
 
     Not checked here (needs an infrastructure dependency this layer must not
     import, or a whole-collection view this type doesn't have): token-length
     vs. `CHUNK_WINDOW_TOKENS` (needs the embedding model's tokenizer — the
-    chunker's job, R-16, which only ever produces in-window chunks by
+    chunker's job, and it only ever produces in-window chunks by
     construction); page-boundary-crossing and embedding-matches-text
     (process-correctness guarantees from whoever calls `create`, not
     independently re-derivable here).

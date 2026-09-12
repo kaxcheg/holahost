@@ -1,13 +1,12 @@
-"""FastAPI application factory (ticket R-20/R-24 boundary — this is where the pieces
-built by Tasks 4-10 get assembled into one app; `scripts/bootstrap.py`, Task 12, calls
-this after settings/secrets/logging are ready).
+"""FastAPI application factory — where this service's own pieces become one app.
+`scripts/bootstrap.py` calls it once settings, secrets and logging are ready.
 
 The stack itself is not assembled here. `holahost_http.create_edge_app` decides the order
 the middleware run in and mounts every router under the base path, because both are
-platform rules whose violations are silent (§8.1): a request-id middleware placed below
-the body cap logs refusals with no correlation id, a rate limiter placed above
-authentication finds no caller, and a router that forgets the prefix is unreachable
-through the gateway. What is left below is this service's own values.
+platform rules whose violations are silent: a request-id middleware placed below the body
+cap logs refusals with no correlation id, a rate limiter placed above authentication finds
+no caller, and a router that forgets the prefix is unreachable through the gateway. What
+is left below is this service's own values.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ from interface.http.router import router as documents_router
 # the thread pool — to buy the *appearance* of "never touches the disk": heap pages still
 # reach it through swap or a core dump, both host settings, and the temp file avoided is
 # anonymous on Linux (no name in the filesystem, blocks freed when the fd closes). What the
-# service promises is that it never *stores* the file (A-10, §3.8).
+# service promises is that it never *stores* the file.
 
 
 _DESCRIPTION = """\
@@ -72,8 +71,8 @@ def create_app() -> FastAPI:
         rate_limiter=get_rate_limiter(),
         bucket_for=bucket_for,
         max_request_body_size=MAX_REQUEST_BODY_SIZE,
-        # Enforce the transport cap, advertise the file limit, so the two 413s of §7.6 name
-        # one number — see `REPORTED_UPLOAD_LIMIT`.
+        # Enforce the transport cap, advertise the file limit, so both 413s name one
+        # number — see `REPORTED_UPLOAD_LIMIT`.
         reported_body_limit=REPORTED_UPLOAD_LIMIT,
         missing_request_id_error=MISSING_REQUEST_ID_ERROR,
         error_contract=ERROR_CONTRACT,

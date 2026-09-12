@@ -4,15 +4,11 @@ The Postgres access layer shared by Holahost services: the storage error contrac
 unit of work, the two identities a service connects with, and the deploy-time provisioning
 that keeps them apart.
 
-Consumed as a Poetry path dependency:
-
-```toml
-holahost-db = { path = "../../../libs/holahost-db", develop = true }
-```
+Consumed as a [path dependency](../../README.md#shared-libraries).
 
 ## Why a library and not a copy per service
 
-Not for the line count. Every piece here is something that is wrong in a way nothing
+Not for the line count. Every piece here is something that goes wrong in a way nothing
 reports until it matters:
 
 - **The classification.** `QueryCanceled` is a *concurrency* failure, because a lock-wait
@@ -28,8 +24,6 @@ reports until it matters:
 - **The two identities.** Isolation by row-level security is worth exactly nothing if the
   application connects as a role that bypasses it, and nothing in a passing test suite
   says so.
-
-None of that is inventive. All of it was found once.
 
 ## What it provides
 

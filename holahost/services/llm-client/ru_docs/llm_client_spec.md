@@ -1,6 +1,6 @@
 # llm-client — техническая спецификация микросервиса
 
-> **Resource Service** платформы Holahost (см. `holahost/docs/holahost_frame.md`). Фасад над внешними
+> **Resource Service** платформы Holahost (см. `holahost/ru_docs/holahost_frame.md`). Фасад над внешними
 > провайдерами больших языковых моделей; владеет доменом **Provider + Model + Budget + Usage**
 > (реестр провайдеров и моделей приходит из git-конфига, а не из БД).
 >

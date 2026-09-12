@@ -12,7 +12,7 @@ class TokenContext:
     :param roles: Global roles from the token (empty for pure service tokens).
     :param act: The delegating service's subject (RFC 8693 ``act.sub``) if this
         is a token-exchange (on-behalf-of-user) token, else ``None``. Multi-hop
-        nesting is out of scope for this iteration (ADR A-5).
+        nesting is out of scope.
     """
 
     subject: str

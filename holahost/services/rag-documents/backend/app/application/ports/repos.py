@@ -13,11 +13,11 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 class DocumentsRepo(ABC):
     """Persists and reads ``Document`` rows together with the ``Chunk`` rows they own —
-    one repo per aggregate (§4.3), so a chunk is written only as part of its document.
+    one repo per aggregate, so a chunk is written only as part of its document.
 
     ``owner`` is bound at construction, not passed per call: every concrete method calls
     ``_bind_owner()`` before delegating to its ``_*_impl`` hook, leaving a subclass no way
-    to reach storage unscoped (§8.0). It re-runs on every call because it scopes the
+    to reach storage unscoped. It re-runs on every call because it scopes the
     *active transaction*, and one repo instance may span several.
     """
 
@@ -51,7 +51,7 @@ class DocumentsRepo(ABC):
         """Read a document by id, scoped to the owner this repo was constructed with.
 
         A document owned by a different subject is returned as ``None``, identically
-        to a document that does not exist at all (US-R06, A-13). The returned
+        to a document that does not exist at all. The returned
         document's ``chunks`` is always ``None`` — no use case needs chunk contents
         back from a plain read, only ``chunk_count``.
 

@@ -7,7 +7,7 @@ from pydantic import Field, model_validator
 
 
 class Settings(AppRoleSettings):
-    """Typed runtime configuration loaded from environment variables (§3.7/§3.8).
+    """Typed runtime configuration loaded from environment variables.
 
     One class with an `env` discriminator rather than per-env subclasses: there is a single
     config source (`os.environ`), and staging/prod populate `POSTGRES_PASSWORD` via
@@ -38,7 +38,7 @@ class Settings(AppRoleSettings):
     search_top_k: int = Field(gt=0)
     similarity_threshold: float = Field(ge=-1.0, le=1.0)
     max_query_length: int = Field(gt=0)
-    # Two dimensions, four ceilings (§3.7): the bucket says how expensive the operation is,
+    # Two dimensions, four ceilings: the bucket says how expensive the operation is,
     # the identity kind says what the ceiling counts. A service token's counter is one
     # aggregate for the calling service; an exchanged token's is per user of that client.
     # One number for both would starve a busy integration or hand each of its users the
@@ -50,7 +50,7 @@ class Settings(AppRoleSettings):
 
     @model_validator(mode="after")
     def _validate_chunking_window(self) -> Self:
-        """`chunk_overlap_tokens` must be smaller than `chunk_window_tokens` (§3.7).
+        """`chunk_overlap_tokens` must be smaller than `chunk_window_tokens`.
 
         :raises ValueError: overlap >= window.
         """
@@ -60,5 +60,5 @@ class Settings(AppRoleSettings):
 
     @classmethod
     def from_env(cls) -> Settings:
-        """Build `Settings` from environment variables (composition root, R-24)."""
+        """Build `Settings` from environment variables — called by the composition root."""
         return cls()

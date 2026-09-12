@@ -13,15 +13,15 @@ ALLOWED_MIME_TYPES = frozenset(
         "text/markdown",
         "text/plain",
     }
-)  # spec §3.7
+)
 
 
 @dataclass(frozen=True, slots=True)
 class MimeType:
-    """A document's MIME type — must be one this service has a parser for (spec §4.1).
+    """A document's MIME type — must be one this service has a parser for.
 
-    Determined by content-sniffing, not the client-supplied header (spec §3.8) — but a
-    violation still means "the client uploaded an unsupported file" (US-R01: 415
+    Determined by content-sniffing, not the client-supplied header — but a violation
+    still means "the client uploaded an unsupported file" (415
     UnsupportedMediaTypeError), so this raises `DomainValidationError`, not a plain
     `ValueError`.
 

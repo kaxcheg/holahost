@@ -1,4 +1,4 @@
-"""This service's half of the platform logging contract (US-R11, §8.7).
+"""This service's half of the platform logging contract.
 
 The logger, the allowlist mechanism, the scrubber and the core field set live in
 `holahost-observability`. What is this service's own is the list below: the fields it

@@ -1,5 +1,5 @@
-"""Unit tests for the document routes (UC-R1..UC-R5, §7.1-§7.4), via TestClient with
-every port dependency overridden by a fake — no real DB, model, or JWT involved.
+"""Unit tests for the document routes, via TestClient with every port dependency
+overridden by a fake — no real DB, model, or JWT involved.
 """
 
 from tempfile import SpooledTemporaryFile
@@ -134,8 +134,8 @@ class TestReplaceDocument:
 
 
 class TestReadUpload:
-    """§3.8 holds the whole upload in memory, so the endpoint must not keep two copies
-    of it — see `_read_upload`.
+    """Ingest holds the whole upload in memory, so the endpoint must not keep two
+    copies of it — see `_read_upload`.
 
     The `cast`: `SpooledTemporaryFile` is exactly what Starlette's own multipart parser
     hands `UploadFile`, but typeshed does not declare it as a `BinaryIO`, so the real

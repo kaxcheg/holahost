@@ -8,4 +8,5 @@
 **/.git
 **/tests
 **/docs
+**/ru_docs
 **/.build-state

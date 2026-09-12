@@ -1,4 +1,4 @@
-"""Command and result for chunk search (spec §8.4)."""
+"""Command and result for chunk search."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class SearchCmd:
-    """Command for POST /api/rag-documents/documents/{id}/search (UC-R3)."""
+    """Command for POST /api/rag-documents/documents/{id}/search."""
 
     document_id: str
     owner: str
@@ -26,10 +26,10 @@ class SearchHitView:
 
 @dataclass(frozen=True)
 class SearchResult:
-    """UC-R3's output: chunks sorted by descending similarity, capped at ``SEARCH_TOP_K``.
+    """A search's output: chunks sorted by descending similarity, capped at ``SEARCH_TOP_K``.
 
     An empty list is a valid result, not an error — it signals "no relevant context",
-    not "search failed" (spec §7.3).
+    not "search failed".
     """
 
     hits: list[SearchHitView]

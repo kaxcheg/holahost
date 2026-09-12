@@ -1,6 +1,6 @@
 # rag-documents — техническая спецификация микросервиса
 
-> **Resource Service** платформы Holahost (см. `holahost/docs/holahost_frame.md`). Владеет доменом
+> **Resource Service** платформы Holahost (см. `holahost/ru_docs/holahost_frame.md`). Владеет доменом
 > **Document + Chunk**.
 >
 > **Соглашение о путях:** `backend/…`, `infra/…`, `docs/…` — относительно корня сервиса

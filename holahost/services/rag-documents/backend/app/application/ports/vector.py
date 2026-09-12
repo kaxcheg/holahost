@@ -41,7 +41,7 @@ class SearchHit:
 
     A projection, not a duplicate of ``Chunk``: the entity's invariant forces it to
     carry its embedding, which a search response has no reason to return, so
-    ``VectorSearch`` hands back this narrower shape instead of the entity itself (§8.0).
+    ``VectorSearch`` hands back this narrower shape instead of the entity itself.
     """
 
     chunk_id: ChunkId
@@ -53,7 +53,7 @@ class SearchHit:
 class VectorSearch(ABC):
     """Cosine-similarity search over one document's chunks — the read side of Chunk,
     where ``DocumentsRepo`` is the write side. Its own port despite ``Chunk`` having no
-    repo (§4.3): it returns a narrow projection (``SearchHit``) and never reconstructs
+    repo of its own: it returns a narrow projection (``SearchHit``) and never reconstructs
     the entity, so it is not a chunk repository to fold into the aggregate's.
 
     ``owner`` is bound at construction, same shape as ``DocumentsRepo``: ``top_k`` calls
@@ -66,8 +66,7 @@ class VectorSearch(ABC):
 
     @abstractmethod
     def _bind_owner(self) -> None:
-        """Scope the active transaction to the owner this search was constructed
-        with (§8.0)."""
+        """Scope the active transaction to the owner this search was constructed with."""
         ...
 
     def top_k(
@@ -84,8 +83,8 @@ class VectorSearch(ABC):
 
         Returns:
             Hits sorted by descending similarity, capped at ``k``. Empty if nothing
-            clears ``threshold``, or if ``document_id`` belongs to another owner
-            (US-R06, A-13) — a valid, non-error result either way.
+            clears ``threshold``, or if ``document_id`` belongs to another owner —
+            a valid, non-error result either way.
 
         Raises:
             StorageUnavailableError: the database is unreachable or timed out.

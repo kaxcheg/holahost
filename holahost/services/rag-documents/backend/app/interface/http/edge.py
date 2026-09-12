@@ -1,11 +1,11 @@
-"""Everything the shared middleware needs to know about *this* service (§3.1, §8.1).
+"""Everything the shared middleware needs to know about *this* service.
 
 `holahost-http` and `holahost-auth` supply the mechanisms — request-id propagation, a
 body-size cap, authentication, a rate limiter — deliberately without opinions about which
 routes they apply to, how big is too big, what a rejection is called on the wire, or how
-it is logged. Those are this service's contract (§3.8, §7.6, §8.1, §8.7), and they all
-live here: one module for the values and rules the edge is parameterised with, so
-`app.py` is left holding nothing but the wiring.
+it is logged. Those are this service's contract, and they all live here: one module for
+the values and rules the edge is parameterised with, so `app.py` is left holding nothing
+but the wiring.
 
 `api_base.py` stays separate and minimal: the container healthcheck imports it directly,
 so it must not drag in the application layer to answer "what is my base path".
@@ -27,18 +27,18 @@ HEALTH_PATH = f"{API_BASE_URL}/health"
 INGEST_BUCKET = "ingest"
 READ_BUCKET = "read"
 
-# The unit every RATE_LIMIT_* setting is counted in (§3.7). A constant rather than a
+# The unit every RATE_LIMIT_* setting is counted in. A constant rather than a
 # setting: the window is what those numbers *mean*, and halving it would silently halve
 # every ceiling while the .env files went on claiming 60 and 600.
 RATE_LIMIT_WINDOW_SECONDS = 3600
 
 # A transport limit: it bounds the whole HTTP body, multipart framing included, and only
 # decides how much the edge reads before anyone can look. `MAX_UPLOAD_SIZE` stays the
-# application's own check on the extracted file (§3.8). Derived so the two cannot drift.
+# application's own check on the extracted file. Derived so the two cannot drift.
 MAX_REQUEST_BODY_SIZE = body_cap_for_upload(MAX_UPLOAD_SIZE)
 
 REPORTED_UPLOAD_LIMIT = MAX_UPLOAD_SIZE
-"""The `limit` a 413 from either size gate advertises (§7.6, US-R01).
+"""The `limit` a 413 from either size gate advertises.
 
 The middleware enforces `MAX_REQUEST_BODY_SIZE`, `CreateDocumentUseCase` enforces
 `MAX_UPLOAD_SIZE`, and both are a refusal the caller must act on, so both name the file
@@ -48,7 +48,7 @@ own check and is refused a second time.
 
 
 def bucket_for(method: str, path: str) -> str | None:
-    """Which rate-limit bucket a request falls into, or `None` for unlimited (§8.1 step 3).
+    """Which rate-limit bucket a request falls into, or `None` for unlimited.
 
     Split by *operation*, not by HTTP verb: `POST /{id}/search` costs a query embedding
     plus a vector scan, nowhere near an ingest's parse/chunk/embed of a whole file, so
@@ -67,7 +67,7 @@ def bucket_for(method: str, path: str) -> str | None:
 
 
 MISSING_REQUEST_ID_ERROR = MalformedRequestError()
-"""What this service answers with when `X-Request-ID` is absent (§7.6, §8.1 step 1).
+"""What this service answers with when `X-Request-ID` is absent.
 
 The requirement lives in `holahost_http.RequestIdMiddleware` (its `missing_header_error`
 argument) — both real entry paths attach the header unconditionally, so its absence means

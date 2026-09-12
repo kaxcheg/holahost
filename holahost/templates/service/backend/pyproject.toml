@@ -5,18 +5,17 @@ description = "<One sentence on what this service is for.>"
 requires-python = ">=3.12,<4.0"
 
 [tool.poetry]
-# The package name stays a real one — not `<svc>` — so this template is a package the
-# repo-root hooks lint, typecheck and import-check like any other. A template nothing
-# verifies is a template that has already rotted; `sed` replaces it along with everything
-# else when the tree is copied.
+# The package name stays a real one — not `<svc>` — so this stays a package whose own
+# `make lint`, `make test` and `make openapi-check` work. A template nothing verifies is
+# a template that has already rotted; `sed` replaces the name along with everything else
+# when the tree is copied.
 #
 # Explicit src-layout packaging (app/domain -> importable as bare `domain`).
-# `package-mode = false` was tried first and reverted: it skips installing the
-# project's own code into the venv entirely, which works for pytest/mypy (they
-# have their own pythonpath/mypy_path settings) but leaves import-linter unable
-# to find `domain` at all — it has no config-level path option, only real
-# Python import resolution. Real packaging fixes that for every tool uniformly,
-# including a developer running `poetry run lint-imports` by hand.
+# Not `package-mode = false`: that skips installing the project's own code into
+# the venv, which pytest and mypy survive through their own pythonpath settings
+# but import-linter does not — it has no config-level path option, only real
+# Python import resolution. Real packaging serves every tool uniformly, including
+# a developer running `poetry run lint-imports` by hand.
 packages = [
     { include = "domain", from = "app" },
     { include = "application", from = "app" },
@@ -88,11 +87,11 @@ strict = true
 python_version = "3.12"
 mypy_path = ["app", "."]
 # Without this, mypy treats every pydantic-settings field as a required constructor
-# kwarg (it doesn't know BaseSettings populates them from os.environ, not __init__
-# args) — matches ~/repos/lead-capture's own pyproject.toml, which hit the same issue.
+# kwarg — it does not know BaseSettings populates them from os.environ rather than
+# from __init__ args.
 plugins = ["pydantic.mypy"]
-# Same bug class as pytest's --import-mode=importlib fix above, hit independently:
-# mypy has its own file-to-module resolution, unrelated to pytest's addopts, and by
+# Same class of problem as pytest's --import-mode=importlib setting above, and a
+# separate fix: mypy has its own file-to-module resolution, unrelated to addopts, and by
 # default walks up through __init__.py-less directories the same way pytest's old
 # "prepend" mode did — `tests/unit/domain/test_exceptions.py` and
 # `tests/unit/application/exceptions/test_exceptions.py` both resolve to the bare
@@ -104,9 +103,9 @@ explicit_package_bases = true
 
 [tool.importlinter]
 # `config` is listed here (import-linter needs every top-level package it should
-# recognize) but stays out of the `layers` contract below: it's a leaf-exception
-# (CLAUDE.md project convention) — every layer may import it, it imports nothing
-# from domain/application/infrastructure/interface. `scripts/` (the composition root)
+# recognize) but stays out of the `layers` contract below: it is a leaf exception —
+# every layer may import it, and it imports nothing from
+# domain/application/infrastructure/interface. `scripts/`, the composition root,
 # stays outside the contract entirely.
 root_packages = ["domain", "application", "infrastructure", "config", "interface"]
 

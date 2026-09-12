@@ -19,10 +19,10 @@ _PLAIN_TEXT = frozenset({"text/plain", "text/markdown"})
 
 class CompositeFileParser:
     """Adapter for the `FileParser` port — routes by MIME to pymupdf / python-docx / utf-8
-    decode (spec §3.4/§8.0). Parsing itself writes nothing and shells out to nothing: it
-    works on the `bytes` it is handed, in-process (§3.8). How the upload got there is the
-    transport's business — Starlette spools a large body to an anonymous temp file, which
-    is why §3.8 states the file is never *stored*, not that bytes never touch a disk.
+    decode. Parsing itself writes nothing and shells out to nothing: it works on the
+    `bytes` it is handed, in-process. How the upload got there is the transport's
+    business — Starlette spools a large body to an anonymous temp file, which is why the
+    guarantee is that the file is never *stored*, not that bytes never touch a disk.
     """
 
     def parse(self, content: bytes, mime_type: MimeType) -> list[TextFragment]:
@@ -47,7 +47,7 @@ class CompositeFileParser:
         # text — `TextFragment` rejects empty/whitespace-only text (application port
         # invariant), so they're skipped here rather than constructed. A PDF with
         # nothing extractable on any page ends up an empty list, which the use case's
-        # own `MIN_EXTRACTED_TEXT_CHARS` check then correctly rejects (§3.7) — not a
+        # own `MIN_EXTRACTED_TEXT_CHARS` check then correctly rejects — not a
         # crash on the first blank page.
         try:
             with pymupdf.open(stream=content, filetype="pdf") as doc:

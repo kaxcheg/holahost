@@ -54,7 +54,7 @@ def make_document_with_chunks(
 ) -> Document:
     """A valid, freshly-created ``Document`` (via ``Document.create``) with real
     ``Chunk``s attached — ``DocumentsRepo.add()`` requires ``document.chunks`` to be
-    set (§4.3), which ``make_document``'s ``from_repo``-based document never has."""
+    set, which ``make_document``'s ``from_repo``-based document never has."""
     document_id = DocumentId.new()
     chunks = [make_chunk(document_id=document_id, index=i) for i in range(chunk_count)]
     return Document.create(

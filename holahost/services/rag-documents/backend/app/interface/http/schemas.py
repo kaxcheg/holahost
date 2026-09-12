@@ -1,4 +1,4 @@
-"""Pydantic request/response models — the wire shapes of spec §7.2-§7.5."""
+"""Pydantic request/response models — this service's wire shapes."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from application.dto.search import SearchResult
 
 
 class DocumentResponse(BaseModel):
-    """The one document representation shared by create, replace, and read (§7.2)."""
+    """The one document representation shared by create, replace, and read."""
 
     document_id: str
     name: str
@@ -33,12 +33,12 @@ class DocumentResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Body of POST .../search (§7.3). No length/emptiness constraints here —
-    deliberately: those are business rules already enforced by
-    `SearchDocumentUseCase` (`InvalidPayloadError`), routed through the same envelope
-    as every other application error. Duplicating them here would raise Pydantic's own
-    `RequestValidationError` for the *value* checks too, which is a different (though
-    still envelope-mapped, see `errors.py`) code path for no benefit.
+    """Body of POST .../search. No length or emptiness constraints here, deliberately:
+    those are business rules already enforced by `SearchDocumentUseCase`
+    (`InvalidPayloadError`), routed through the same envelope as every other
+    application error. Declaring them here as well would raise Pydantic's own
+    `RequestValidationError` for the value checks too — a different code path, still
+    envelope-mapped, for no benefit.
     """
 
     query: str

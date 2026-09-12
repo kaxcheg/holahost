@@ -12,9 +12,9 @@ description: >
 
   The push is idempotent: if the sha tag already exists in the repository, the existing digest is
   reused and nothing is built or pushed. Same commit means the same image by definition, so this
-  is what build-once already implies — and without it, re-running a workflow that failed *after*
-  the build (a flaky migration, a smoke-check timeout) would fail again at `docker push`, on an
-  immutable tag that the previous attempt already wrote.
+  is what build-once already implies — and it is what lets a workflow that failed after the build
+  (a flaky migration, a smoke-check timeout) be re-run, rather than failing again at `docker push`
+  on an immutable tag the previous attempt already wrote.
 inputs:
   dockerfile:
     description: Path to the Dockerfile, relative to the repo root.

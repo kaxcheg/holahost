@@ -1,4 +1,4 @@
-"""UC-R5: delete a document (spec §8.5)."""
+"""Delete a document."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 @dataclass
 class DeleteDocumentUseCase:
-    """UC-R5: delete a document and its chunks (cascade) in one locked transaction."""
+    """Delete a document and its chunks (cascade) in one locked transaction."""
 
     documents_repo_factory: DocumentsRepoFactory
     uow: UnitOfWork
@@ -32,9 +32,9 @@ class DeleteDocumentUseCase:
             reason in the log alone (`interface/http/errors.py`).
         :raises NotFoundError: the document does not exist, or belongs to another
             owner — including on a second call for an already-deleted document
-            (delete is idempotent by observable effect, US-R05).
+            (delete is idempotent by observable effect).
         :raises StorageUnavailableError: conscious pass-through.
-        :raises ConcurrentUpdateError: re-raised only after being retried twice (§8.6).
+        :raises ConcurrentUpdateError: re-raised only after being retried twice.
         :raises IntegrityError: conscious pass-through.
         """
         doc_id = DocumentId.from_str(cmd.document_id)

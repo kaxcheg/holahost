@@ -1,4 +1,4 @@
-"""Commands and views for create/replace/read of a document (spec §8.2, §8.5)."""
+"""Commands and views for create/replace/read of a document."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from domain.entities.document import Document
 
 @dataclass(frozen=True)
 class CreateDocumentCmd:
-    """Command for POST /api/rag-documents/documents (UC-R1).
+    """Command for POST /api/rag-documents/documents.
 
     ``mime_type`` is the content-sniffed MIME type, not the client's declared
-    Content-Type header (§3.8) — sniffing happens in the interface layer before this
-    command is constructed.
+    Content-Type header — sniffing happens in the interface layer before this command
+    is constructed.
     """
 
     owner: str
@@ -25,7 +25,7 @@ class CreateDocumentCmd:
 
 @dataclass(frozen=True)
 class ReplaceDocumentCmd:
-    """Command for PUT /api/rag-documents/documents/{id} (UC-R2)."""
+    """Command for PUT /api/rag-documents/documents/{id}."""
 
     document_id: str
     owner: str
@@ -36,7 +36,7 @@ class ReplaceDocumentCmd:
 
 @dataclass(frozen=True)
 class GetDocumentCmd:
-    """Command for GET /api/rag-documents/documents/{id} (UC-R4)."""
+    """Command for GET /api/rag-documents/documents/{id}."""
 
     document_id: str
     owner: str
@@ -44,7 +44,7 @@ class GetDocumentCmd:
 
 @dataclass(frozen=True)
 class DeleteDocumentCmd:
-    """Command for DELETE /api/rag-documents/documents/{id} (UC-R5)."""
+    """Command for DELETE /api/rag-documents/documents/{id}."""
 
     document_id: str
     owner: str
@@ -52,8 +52,8 @@ class DeleteDocumentCmd:
 
 @dataclass(frozen=True)
 class DocumentView:
-    """The one representation of a document — shared by create, replace, and read
-    (spec §8.2): only the response code differs, never the response shape.
+    """The one representation of a document — shared by create, replace, and read:
+    only the response code differs, never the response shape.
     """
 
     document_id: str

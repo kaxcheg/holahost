@@ -1,9 +1,9 @@
-"""Unit tests for this service's edge policy (spec §3.1, §8.1 steps 1-3).
+"""Unit tests for this service's edge policy.
 
 The point of these is *ordering*. Each of the four checks is easy to get right on its
-own; what §8.1 actually specifies is which one wins when several would fail, and — the
-reason any of this is middleware at all — that none of them waits for the request body
-to be read first.
+own; what the platform contract fixes is which one wins when several would fail, and —
+the reason any of this is middleware at all — that none of them waits for the request
+body to be read first.
 """
 
 import json
@@ -124,7 +124,7 @@ class TestBucketMapping:
         assert bucket_for("PUT", f"{_DOCUMENTS}/doc-1") == "ingest"
 
     def test_search_is_a_read_despite_being_a_post(self) -> None:
-        # §8.1 step 3: split by what the operation costs, not by the verb.
+        # Buckets split by what the operation costs, not by the verb.
         assert bucket_for("POST", f"{_DOCUMENTS}/doc-1/search") == "read"
 
     def test_get_and_delete_are_reads(self) -> None:
@@ -149,7 +149,7 @@ class TestRequestIdRequired:
         assert "X-Request-ID" not in response.text
 
     def test_request_id_check_runs_before_auth(self) -> None:
-        # Both would fail; §8.1 puts the transport contract first, so a caller that
+        # Both would fail; the transport contract comes first, so a caller that
         # broke it hears about that rather than about its credentials.
         app, _ = build_app(accepts_auth=False)
         response = TestClient(app).post(_DOCUMENTS, files={"file": ("a.txt", b"x")})

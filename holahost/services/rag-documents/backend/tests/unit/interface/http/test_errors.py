@@ -1,4 +1,4 @@
-"""This service's half of the exception -> envelope mapping (§7.6/§8.6).
+"""This service's half of the exception -> envelope mapping.
 
 The machinery is `holahost_http.register_error_handlers`' and is tested there: the MRO
 walk, the closed vocabulary, the bare-`Exception` path and its header echo, the log level
@@ -109,7 +109,7 @@ class TestTheContract:
         assert response.json()["error"]["details"] == {"limit": 100, "actual": 200}
 
     def test_an_error_this_service_never_published_is_internal(self) -> None:
-        # §7.6/US-R09: a 500 body carries no internal detail; the reason goes to the log.
+        # A 500 body carries no internal detail; the reason goes to the log.
         response = _client().get("/unmapped")
 
         assert response.status_code == 500
@@ -124,7 +124,7 @@ class TestTheContract:
 class TestDomainValidationErrorIsInternal:
     """This service's `silent_500_types` wiring. Both halves are a defect: an unset
     `field` is internal by definition, and a `field`-carrying one that got this far means
-    the use case owing it a §7.6 error did not produce one."""
+    the use case owing it a published error did not produce one."""
 
     def test_an_invariant_violation_maps_to_500_without_leaking(self) -> None:
         response = _client().get("/domain-invariant")

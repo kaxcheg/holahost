@@ -11,10 +11,10 @@ class EmbeddingModel(Protocol):
     """Computes L2-normalized embedding vectors for chunk text and search queries.
 
     The same model instance and weights must be used for both ``embed_texts`` (ingest)
-    and ``embed_query`` (search) — otherwise cosine similarity is meaningless (§3.6).
+    and ``embed_query`` (search) — otherwise cosine similarity is meaningless.
 
     Concurrency: implementations must be thread-safe. The model is loaded once per
-    process (A-9) and called concurrently from the request threadpool's worker threads.
+    process and called concurrently from the request threadpool's worker threads.
     """
 
     def embed_texts(self, texts: list[str]) -> list[Embedding]:

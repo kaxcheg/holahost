@@ -1,4 +1,4 @@
-"""holahost-http: the HTTP edge every Holahost service shares (LIB-02).
+"""holahost-http: the HTTP edge every Holahost service shares.
 
 Two halves, both of them things a service cannot get right on its own from inside the
 framework's request cycle:

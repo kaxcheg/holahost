@@ -1,4 +1,4 @@
-"""Tests for ReplaceDocumentUseCase (UC-R2)."""
+"""Tests for ReplaceDocumentUseCase."""
 
 from __future__ import annotations
 

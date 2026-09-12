@@ -35,19 +35,18 @@ jobs:
         with:
           working-directory: holahost/services/rag-documents/infra/envs/staging
 
-      # Only a sha tag. A `release-<branch>` tag derived from GITHUB_REF used to be computed here
-      # too, and it could not survive its own trigger: this workflow runs on EVERY push to
-      # `release/v*`, a GitFlow release branch takes stabilization commits after the first one,
-      # and the ECR repo is immutable for everything but `latest*` — so the second push onto the
-      # same branch would re-push an identical, already-taken tag and fail the build. The version
-      # tag is applied once instead, by promote-prod, onto the digest that actually ships.
+      # Only a sha tag here. A version tag derived from the branch name cannot survive its own
+      # trigger: this workflow runs on every push to `release/v*`, a release branch takes
+      # stabilization commits after the first, and the ECR repository is immutable for everything
+      # but `latest*` — so the second push would re-push an already-taken tag and fail the build.
+      # The version tag is applied once instead, by promote-prod, onto the digest that ships.
       - name: Compute image tag
         id: tags
         run: |
           echo "repo_url=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)" >> "$GITHUB_OUTPUT"
-          # Полный sha, не первые 7 символов: короткий префикс в растущем репозитории даёт
-          # ненулевой шанс коллизии при нулевой выгоде, а тег — единственная привязка образа
-          # к коммиту, по которой его потом находит промоут.
+          # The full sha, not the first seven characters: in a growing repository a short prefix
+          # carries a non-zero chance of collision for no benefit, and this tag is the only thing
+          # binding an image to its commit when promote-prod later looks it up.
           echo "sha_tag=git-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/build-push-image
@@ -66,8 +65,8 @@ jobs:
           compose-file: holahost/services/rag-documents/docker-compose.yml
           env-file: holahost/services/rag-documents/infra/envs/staging/.env
 
-      # Cold volume downloads the embedding model on first boot (R-30's own backlog wording,
-      # "smoke с ожиданием прогрева модели") — retried with a window, not one-shot.
+      # A cold volume downloads the embedding model on first boot, so the check is retried within
+      # a window rather than run once.
       - uses: ./.github/actions/smoke-check
         with:
           url: https://staging.hola.host/api/rag-documents/health

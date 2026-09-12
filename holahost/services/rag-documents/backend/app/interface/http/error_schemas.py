@@ -1,4 +1,4 @@
-"""The published shape of every error this service can answer with (§7.6).
+"""The published shape of every error this service can answer with.
 
 `application/exceptions` declares the errors themselves; this module is the same contract
 as Pydantic models, which is what puts it into `docs/openapi.json` — the artifact a
@@ -12,7 +12,7 @@ gap by validating every published error against its own model.
 The unions are discriminated on `code`: `details` is a tagged union whose shape depends on
 the error, and the identity is its tag. A consumer switches on `code`, then reads `details`
 knowing its keys. `message` is in no model — it rides the wire for a person reading a log
-by hand, and publishing it would invite the parsing §7.6 says not to do.
+by hand, and publishing it would invite exactly the parsing the contract rules out.
 
 **Only this service's own errors are here.** The platform's — the envelope wrapper, the
 empty `details`, `InvalidPayloadError`, `MalformedRequestError`, `NotFoundError` and

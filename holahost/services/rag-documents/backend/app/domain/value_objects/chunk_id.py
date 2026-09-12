@@ -6,7 +6,7 @@ import uuid
 
 
 class ChunkId(uuid.UUID):
-    """A chunk's identifier — self-generating, never externally assigned (spec §4.1)."""
+    """A chunk's identifier — self-generating, never externally assigned."""
 
     @classmethod
     def new(cls) -> ChunkId:

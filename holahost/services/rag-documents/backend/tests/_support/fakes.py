@@ -19,16 +19,16 @@ _DEFAULT_OWNER = OwnerSubject("user-123")  # matches every test command's owner 
 
 
 def _require_open_unit_of_work(port: str) -> None:
-    """Fail loudly on a port call made outside an open ``UnitOfWork`` (§8.0).
+    """Fail loudly on a port call made outside an open ``UnitOfWork``.
 
-    The rule these fakes exist to protect: "каждый вызов `DocumentsRepo`/`VectorSearch`
-    обязан идти внутри явного `with uow:`". Nothing enforced it, so a use case that
-    dropped its `with self.uow:` passed the entire unit suite and would have failed
-    only against a real connection.
+    The rule these fakes exist to protect: every ``DocumentsRepo`` and ``VectorSearch``
+    call runs inside an explicit ``with uow:``. Without this check a use case that
+    dropped its ``with self.uow:`` would pass the whole unit suite and fail only against
+    a real connection.
     """
     if not FakeUnitOfWork.any_open():
         raise AssertionError(
-            f"{port} call outside an open UnitOfWork — §8.0 requires every call to run "
+            f"{port} call outside an open UnitOfWork — every call must run "
             "inside an explicit `with uow:`"
         )
 
@@ -87,9 +87,10 @@ class FakeDocumentsRepo(DocumentsRepo):
 
     Also implements ``DocumentsRepoFactory`` via ``__call__``, which **rebinds** the
     owner exactly as the real factory does by constructing a repo for it. Returning
-    ``self`` while ignoring the argument made the whole owner-scoping contract
-    untestable: a use case that asked the factory for the wrong subject got a repo
-    scoped to the right one anyway, so §8.0's isolation rule held only in comments.
+    ``self`` while ignoring the argument would make the owner-scoping contract
+    untestable: a use case that asked the factory for the wrong subject would get a
+    repo scoped to the right one anyway, and the isolation rule would hold only in
+    comments.
     """
 
     def __init__(
@@ -113,8 +114,8 @@ class FakeDocumentsRepo(DocumentsRepo):
 
     def _bind_owner(self) -> None:
         # No real RLS to simulate — filtering below is against self._owner directly.
-        # What this does enforce is the other half of the contract: §8.0 requires every
-        # repository call to run inside an explicit `with uow:`, and nothing checked it.
+        # What this does enforce is the other half of the contract: every repository
+        # call runs inside an explicit `with uow:`.
         _require_open_unit_of_work("DocumentsRepo")
 
     def _add_impl(self, document: Document) -> None:
@@ -142,10 +143,10 @@ class FakeVectorSearch(VectorSearch):
     """Returns a preset list of hits for the owner they were registered under, and
     nothing for anyone else. Owner bound at construction and rebound by ``__call__``,
     exactly like ``FakeDocumentsRepo`` and for the same reason: hits returned
-    regardless of ``owner`` made the isolation contract (US-R06, A-13) unfalsifiable.
+    regardless of ``owner`` would make the isolation contract unfalsifiable.
 
     Records every call, so a test can pin what the use case actually asked for —
-    ``document_id``, ``k`` and ``threshold`` were all ignored as well."""
+    ``document_id``, ``k`` and ``threshold`` included."""
 
     def __init__(
         self,
@@ -174,7 +175,7 @@ class FakeVectorSearch(VectorSearch):
         self.calls.append((document_id, k, threshold))
         if self._owner != self._hits_owner:
             # What RLS does in production: another subject's chunks are simply not
-            # visible, and an empty result is a valid, non-error outcome (§8.0).
+            # visible, and an empty result is a valid, non-error outcome.
             return []
         return self._hits
 
@@ -198,7 +199,7 @@ class FakeUnitOfWork:
 
     Also tracks, class-wide, how many of these are currently open — which is what
     ``_require_open_unit_of_work`` reads. Class-wide rather than per instance because
-    §8.0's rule is "no repository call outside a transaction", not "inside this
+    the rule is "no repository call outside a transaction", not "inside this
     particular object": a unit test has exactly one unit of work in play, and keying
     the check on identity would mean threading it through all ~40 fake constructions
     to assert something none of them is actually about.

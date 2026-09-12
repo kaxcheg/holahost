@@ -1,6 +1,5 @@
-# ECR repository + lifecycle policy for rag-documents (R-26). Applied once, no workspace —
-# shared across all environments (frame spec: "infra/common | ECR-репозиторий сервиса с
-# lifecycle-политикой | однократно, один на все окружения").
+# ECR repository + lifecycle policy for rag-documents. Applied once and shared by every
+# environment, which is why it lives here rather than under infra/envs/.
 #
 # Nothing here is this service's own: the repository name is its `<svc>` name, and the tag
 # rules are what makes the platform's build-once/promote-by-digest strategy work at all.

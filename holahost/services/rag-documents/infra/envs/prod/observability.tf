@@ -22,7 +22,7 @@
 # or two samples is noise, and ingest is structurally rarer than search.
 # `datapoints_to_alarm` tolerates one sparse window rather than resetting on any gap.
 
-# ---- Duration (§8.7 row 1) ------------------------------------------------------------------
+# ---- Duration ---------------------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_metric_filter" "ingest_duration" {
   name           = "rag-documents-${var.env}-ingest-duration"
@@ -46,7 +46,7 @@ resource "aws_cloudwatch_metric_alarm" "ingest_p95" {
   period              = var.ingest_metric_period_seconds
   extended_statistic  = "p95"
   threshold           = var.ingestion_p95_budget_ms
-  alarm_description   = "p95 create/replace duration exceeds INGESTION_P95_BUDGET (§3.7)."
+  alarm_description   = "p95 create/replace duration exceeds INGESTION_P95_BUDGET."
   alarm_actions       = [module.platform.alerts_topic_arn]
   treat_missing_data  = "notBreaching"
 }
@@ -73,12 +73,12 @@ resource "aws_cloudwatch_metric_alarm" "search_p95" {
   period              = var.search_metric_period_seconds
   extended_statistic  = "p95"
   threshold           = var.search_p95_budget_ms
-  alarm_description   = "p95 search duration exceeds SEARCH_P95_BUDGET (§3.7)."
+  alarm_description   = "p95 search duration exceeds SEARCH_P95_BUDGET."
   alarm_actions       = [module.platform.alerts_topic_arn]
   treat_missing_data  = "notBreaching"
 }
 
-# ---- §8.7: ingest stage breakdown (stage_ms) ---------------------------------------------------
+# ---- Ingest stage breakdown (stage_ms) ---------------------------------------------------------
 # One metric per stage rather than one filter with four transformations: a metric filter's value
 # is a single JSON selector, so the stages are four series by construction. Nested selectors
 # (`$.stage_ms.parse`) are what `_log_success` actually emits — `_StageTimer.as_dict()` writes the
@@ -102,7 +102,7 @@ resource "aws_cloudwatch_log_metric_filter" "ingest_stage_ms" {
   }
 }
 
-# ---- §8.7: top_score distribution --------------------------------------------------------------
+# ---- top_score distribution --------------------------------------------------------------------
 # Gated on `$.hits > 0`, not on the presence of `top_score`: `_log_success` sets
 # `top_score=result.hits[0].score if result.hits else None`, so the two conditions are the same
 # condition — and `hits` is an ordinary number the filter syntax handles without relying on how a
@@ -120,7 +120,7 @@ resource "aws_cloudwatch_log_metric_filter" "search_top_score" {
   }
 }
 
-# ---- Volume / adoption (business-facing, not in §8.7 — legible to a non-developer) -----------
+# ---- Volume / adoption (business-facing — legible to a non-developer) --------------------------
 
 resource "aws_cloudwatch_log_metric_filter" "document_created" {
   name           = "rag-documents-${var.env}-document-created"
@@ -147,7 +147,7 @@ resource "aws_cloudwatch_log_metric_filter" "search_count" {
   }
 }
 
-# ---- §8.7 row 4: empty-search ratio (proxy for SIMILARITY_THRESHOLD miscalibration) -----------
+# ---- Empty-search ratio (proxy for SIMILARITY_THRESHOLD miscalibration) ------------------------
 
 resource "aws_cloudwatch_log_metric_filter" "empty_search" {
   name           = "rag-documents-${var.env}-empty-search"
@@ -161,7 +161,7 @@ resource "aws_cloudwatch_log_metric_filter" "empty_search" {
   }
 }
 
-# ---- §8.7 row 6: chunk-count distribution ------------------------------------------------------
+# ---- Chunk-count distribution ------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_metric_filter" "ingest_chunk_count" {
   name           = "rag-documents-${var.env}-ingest-chunk-count"
@@ -307,10 +307,10 @@ resource "aws_cloudwatch_metric_alarm" "success_search_rate" {
 }
 
 # ---- Refusals this service owns --------------------------------------------------------------
-# Identities from this service's own ERROR_CONTRACT (§7.6), plus the error its edge answers a
-# missing X-Request-ID with. No alarm on any: each is ordinary at some rate, and what matters
-# is a change in it. `UploadTooLargeError` and `PayloadTooLargeError` share one metric — both
-# are the 413 of §7.6, and the question is how often a caller sends too much.
+# Identities from this service's own ERROR_CONTRACT, plus the error its edge answers a missing
+# X-Request-ID with. No alarm on any: each is ordinary at some rate, and what matters is a change
+# in it. `UploadTooLargeError` and `PayloadTooLargeError` share one metric — both answer 413, and
+# the question is how often a caller sends too much.
 
 resource "aws_cloudwatch_log_metric_filter" "refused_too_large" {
   name           = "rag-documents-${var.env}-refused-too-large"

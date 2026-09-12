@@ -99,7 +99,7 @@ def test_scoped_to_document_id(uow: SqlAlchemyUnitOfWork) -> None:
 
 
 def test_search_for_wrong_owner_returns_no_hits(uow: SqlAlchemyUnitOfWork) -> None:
-    """Proves VectorSearch is RLS-scoped too, not just DocumentsRepo (§8.0) — a
+    """Proves VectorSearch is RLS-scoped too, not just DocumentsRepo — a
     search bound to a different owner sees nothing, even though the chunks
     genuinely exist and would otherwise match."""
     documents_repo = SqlAlchemyDocumentsRepo(uow, _OWNER)

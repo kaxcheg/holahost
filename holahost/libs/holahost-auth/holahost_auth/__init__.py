@@ -1,4 +1,4 @@
-"""holahost-auth: offline JWT validation for Holahost services (ADR A-5)."""
+"""holahost-auth: offline JWT validation for Holahost services."""
 
 from holahost_auth.config import AuthConfig
 from holahost_auth.context import TokenContext

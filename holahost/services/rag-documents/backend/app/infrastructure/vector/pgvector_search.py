@@ -12,12 +12,12 @@ from infrastructure.db import schema
 
 
 class PgvectorSearch(VectorSearch):
-    """Adapter for the `VectorSearch` port — one SQL query per call, no lock (§8.0):
-    a single `SELECT ... ORDER BY ... LIMIT` is atomic under Postgres's own snapshot
-    semantics, so a concurrent replace is seen entirely-before or entirely-after,
-    never mixed (A-6). Runs on `uow.active_connection`, same as `SqlAlchemyDocumentsRepo`.
+    """Adapter for the `VectorSearch` port — one SQL query per call, no lock: a single
+    `SELECT ... ORDER BY ... LIMIT` is atomic under Postgres's own snapshot semantics,
+    so a concurrent replace is seen entirely-before or entirely-after, never mixed.
+    Runs on `uow.active_connection`, same as `SqlAlchemyDocumentsRepo`.
 
-    Owner isolation is enforced by Postgres RLS (§8.0), bound per call via
+    Owner isolation is enforced by Postgres RLS, bound per call via
     `_bind_owner()` — the query below does not filter by owner itself.
     """
 

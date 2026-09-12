@@ -2,7 +2,7 @@
 real Postgres, real JWT validation. Proves the composition root actually wires
 (fakes in test_router.py can't catch a real wiring bug).
 
-`client`/`auth_headers` fixtures live in `conftest.py` (shared with `test_grounding.py`, R-29).
+`client`/`auth_headers` fixtures live in `conftest.py`, shared with `test_grounding.py`.
 """
 
 from __future__ import annotations
@@ -118,10 +118,10 @@ def _attach(records: list[dict[str, Any]]) -> Iterator[None]:
 def test_ingest_and_search_report_their_own_cost(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    """§8.7's `stage_ms` and `top_score`, against the real pipeline.
+    """The `stage_ms` and `top_score` log fields, against the real pipeline.
 
-    Both fields were in the log allowlist and emitted by nothing. Without `stage_ms` a
-    slow ingest is one opaque `duration_ms` — a scanned PDF that takes its time in parse
+    Declaring a field in the allowlist does not make anything emit it. Without `stage_ms`
+    a slow ingest is one opaque `duration_ms` — a scanned PDF that takes its time in parse
     looks exactly like model contention in embed. Without `top_score` there is no way to
     tell "the threshold is too high" from "this document has no answer", which is what
     `SIMILARITY_THRESHOLD` has to be calibrated against.

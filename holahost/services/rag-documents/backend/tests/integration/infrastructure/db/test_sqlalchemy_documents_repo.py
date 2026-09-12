@@ -22,7 +22,7 @@ def _chunk_rows(
     repo: SqlAlchemyDocumentsRepo, uow: SqlAlchemyUnitOfWork, document_id: DocumentId
 ) -> list[object]:
     """Reads `chunks` rows directly, bypassing the repo's own SQL — needs the
-    transaction's owner bound first (RLS applies to this raw query too, §8.0), which
+    transaction's owner bound first (RLS applies to this raw query too), which
     `repo._bind_owner()` does using whichever owner `repo` was constructed with."""
     repo._bind_owner()
     assert uow.active_connection is not None
@@ -108,7 +108,7 @@ def test_update_replaces_chunks_when_given(uow: SqlAlchemyUnitOfWork) -> None:
 def test_update_by_wrong_owner_raises_not_found(uow: SqlAlchemyUnitOfWork) -> None:
     """The RLS-bound `WHERE id = ...` matches 0 rows for a transaction bound to a
     different owner — proving the block is Postgres's, not a pre-check the caller
-    could have skipped (§8.0)."""
+    could have skipped."""
     victim_repo = SqlAlchemyDocumentsRepo(uow, OwnerSubject("victim"))
     victim_document = make_document_with_chunks(owner="victim", name="Original.pdf")
     with uow:
@@ -177,7 +177,7 @@ def test_lock_true_takes_a_row_lock(uow: SqlAlchemyUnitOfWork) -> None:
 def test_cross_owner_row_is_invisible_even_via_raw_sql(uow: SqlAlchemyUnitOfWork) -> None:
     """Proves the block is Postgres RLS, not something living in the repo's own code:
     even a raw SQL SELECT bypassing every repo method entirely cannot see another
-    owner's row once the transaction is bound to a different owner (§8.0)."""
+    owner's row once the transaction is bound to a different owner."""
     victim_repo = SqlAlchemyDocumentsRepo(uow, OwnerSubject("victim"))
     document = make_document_with_chunks(owner="victim")
     with uow:
@@ -199,7 +199,7 @@ def test_cross_owner_row_is_invisible_even_via_raw_sql(uow: SqlAlchemyUnitOfWork
 
 def test_unbound_transaction_sees_no_rows(uow: SqlAlchemyUnitOfWork) -> None:
     """Fails closed: a transaction that never binds an owner sees nothing at all, not
-    everything — the safe failure mode if some future code path forgot to bind (§8.0)."""
+    everything — the safe failure mode if some future code path forgot to bind."""
     owner_repo = SqlAlchemyDocumentsRepo(uow, OwnerSubject("victim"))
     document = make_document_with_chunks(owner="victim")
     with uow:
@@ -212,7 +212,7 @@ def test_unbound_transaction_sees_no_rows(uow: SqlAlchemyUnitOfWork) -> None:
 
 
 def test_superuser_connection_bypasses_rls(uow: SqlAlchemyUnitOfWork, superuser_dsn: str) -> None:
-    """The one thing RLS cannot close (§8.0, no `FORCE` closes this): a true
+    """The one thing RLS cannot close, `FORCE` included: a true
     superuser connection sees every row regardless of policy. This is why
     integration tests run as the unprivileged `rag_documents_app` role (conftest.py)
     — proving the boundary is real, not assumed, and confirming why it matters that
@@ -239,7 +239,7 @@ def test_with_check_violation_raises_integrity_error(uow: SqlAlchemyUnitOfWork) 
     raises `psycopg.errors.InsufficientPrivilege`, and `translate_db_errors()` turns
     that into `IntegrityError` — deliberately bypasses `_add_impl`'s own owner guard
     (raw SQL, not `repo.add()`) to reach the DB-level backstop directly, since the
-    guard makes this unreachable through the repo's public API (§8.0)."""
+    guard makes this unreachable through the repo's public API."""
     repo = SqlAlchemyDocumentsRepo(uow, OwnerSubject("user-1"))
     document = make_document_with_chunks(owner="user-1")
     with pytest.raises(IntegrityError), uow:

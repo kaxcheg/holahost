@@ -34,12 +34,11 @@ jobs:
         with:
           working-directory: holahost/services/rag-documents/infra/envs/prod
 
-      # Resolve by the COMMIT's sha tag, not by a `release-*` tag: the git tag this workflow runs
-      # on points at exactly one commit, and deploy-staging pushed that commit's image as
-      # `git-<short-sha>` — so the sha tag is a direct, unambiguous handle on the image staging
-      # actually validated. (The old derivation went through `release-<branch>`, a tag shared by
-      # every commit of the release branch, which is both ambiguous about *which* build shipped
-      # and impossible to push more than once on an immutable repo — see deploy-staging.yml.)
+      # Resolve by the commit's sha tag, not by a branch-derived tag: the git tag this workflow
+      # runs on points at exactly one commit, and deploy-staging pushed that commit's image as
+      # `git-<sha>` — so the sha tag is a direct, unambiguous handle on the image staging actually
+      # validated. A tag shared by every commit of a release branch would be ambiguous about which
+      # build shipped, and unpushable twice on an immutable repository.
       #
       # `describe-images`, not `docker pull` + `docker inspect`: the digest is registry metadata,
       # so there is no reason to pull the whole (torch-sized) image onto the runner to read it —
@@ -49,10 +48,10 @@ jobs:
         run: |
           set -euo pipefail
           REPO=$(terraform -chdir=holahost/services/rag-documents/infra/common output -raw repository_url)
-          # Тот же полный sha, что пишет deploy-staging. GITHUB_SHA здесь — коммит, на
-          # который поставлен git-тег `<svc>/v*`; рамочная спека требует ставить его на
-          # коммит ветки `release/v*`, прошедший staging, именно чтобы образ для него
-          # существовал (squash-мерж в `main` даёт новый sha, для которого сборки нет).
+          # The same full sha deploy-staging writes. GITHUB_SHA here is the commit the
+          # `<svc>/v*` git tag points at, which is why that tag belongs on the `release/v*`
+          # commit that passed staging: a squash merge into `main` produces a new sha for which
+          # no image was ever built.
           SHA_TAG="git-${GITHUB_SHA}"
           DIGEST=$(aws ecr describe-images \
             --repository-name "${REPO##*/}" \
@@ -91,7 +90,7 @@ jobs:
           set -euo pipefail
           REPO="${{ steps.resolve.outputs.repo }}"
           REPO_NAME="${REPO##*/}"
-          # GITHUB_REF_NAME = "rag-documents/vYYYYMMDD.N" (frame spec's per-component version tag).
+          # GITHUB_REF_NAME = "rag-documents/vYYYYMMDD.N" — the per-component version tag.
           VERSION_TAG="release-${GITHUB_REF_NAME#*/}"
           MANIFEST=$(aws ecr batch-get-image \
             --repository-name "$REPO_NAME" \

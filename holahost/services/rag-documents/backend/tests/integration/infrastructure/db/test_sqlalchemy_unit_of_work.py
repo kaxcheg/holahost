@@ -25,7 +25,7 @@ _COUNT_DOCUMENTS = text("SELECT count(*) FROM documents")
 def test_commits_on_clean_exit(uow: SqlAlchemyUnitOfWork) -> None:
     with uow:
         assert uow.active_connection is not None
-        uow.active_connection.execute(_SET_OWNER)  # RLS WITH CHECK needs this bound (§8.0)
+        uow.active_connection.execute(_SET_OWNER)  # RLS WITH CHECK needs this bound
         uow.active_connection.execute(_INSERT_DOCUMENT)
     with uow:
         assert uow.active_connection is not None

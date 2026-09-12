@@ -1,6 +1,6 @@
 """The service's own name, and the one public path segment derived from it.
 
-The frame spec makes `<svc>` a single identity with three derived uses: the container name
+The platform makes `<svc>` a single identity with three derived uses: the container name
 on the `backbone` network, the ECR repository name, and this path segment —
 `API_BASE_URL = /api/<svc>`, a bare path with no domain, because the gateway routes by path
 and does not rewrite it.

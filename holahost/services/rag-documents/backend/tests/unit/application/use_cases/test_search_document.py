@@ -1,4 +1,4 @@
-"""Tests for SearchDocumentUseCase (UC-R3)."""
+"""Tests for SearchDocumentUseCase."""
 
 from __future__ import annotations
 
@@ -90,8 +90,8 @@ class TestSearchDocumentUseCase:
         with pytest.raises(InvalidPayloadError) as exc:
             _uc(FakeDocumentsRepo([existing])).execute(cmd)
         assert exc.value.field == "query"
-        # Present even here, where nothing was exceeded: US-R09 wants one `details`
-        # field set per class, and the applicable limit is a fact worth answering with.
+        # Present even here, where nothing was exceeded: the error contract wants one
+        # `details` shape per class, and the applicable limit is worth answering with.
         assert exc.value.limit == MAX_QUERY_LENGTH
 
     def test_rejects_query_over_max_length(self) -> None:

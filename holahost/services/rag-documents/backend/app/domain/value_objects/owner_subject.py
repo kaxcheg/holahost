@@ -9,10 +9,10 @@ from domain.exceptions import DomainValidationError
 
 @dataclass(frozen=True, slots=True)
 class OwnerSubject:
-    """The `sub` of the token that owns a resource — never taken from the request body (spec §4.1).
+    """The `sub` of the token that owns a resource — never taken from the request body.
 
-    Equality is exact value match (dataclass default), matching the spec's
-    stated "exact match" comparison rule.
+    Equality is exact value match (the dataclass default): ownership is decided by
+    comparing subjects literally, with no normalisation.
 
     :param value: The subject string.
     """

@@ -3,7 +3,7 @@
 The mechanism — the allowlist raising rather than dropping, its survival under `-O`, the
 scrubber, the core field set — is `holahost-observability`'s and is tested there. What is
 left to check here is the declaration: that this service's own fields are accepted, and
-that the fields US-R11 names as forbidden are not.
+that the four that must never be logged are not.
 """
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ class TestTheServicesOwnFields:
             stage_ms={"parse": 1.0, "chunk": 2.0, "embed": 3.0, "persist": 4.0},
         )
 
-    def test_what_us_r11_forbids_is_refused(self) -> None:
-        """The four things US-R11 names. None is declared, so each raises — the point
-        being that the protection is structural: nothing here inspects a value.
+    def test_sensitive_fields_are_refused(self) -> None:
+        """The four fields that must never be logged. None is declared, so each raises —
+        the point being that the protection is structural: nothing here inspects a value.
 
         Literal keyword arguments rather than a parametrised `**{field: ...}` splat:
         mypy rejects splatting a `dict[str, str]` past `log_event`'s keyword-only

@@ -1,4 +1,4 @@
-"""Unit tests for interface-layer Pydantic schemas (spec §7.2-§7.5)."""
+"""Unit tests for interface-layer Pydantic schemas."""
 
 from datetime import UTC, datetime
 

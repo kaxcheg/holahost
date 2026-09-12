@@ -1,4 +1,4 @@
-"""What this service publishes, and the status each error answers with (spec §7.6).
+"""What this service publishes, and the status each error answers with.
 
 Two declarations and nothing else, which is the point: the machinery around them — the MRO
 walk that answers an unpublished subclass as its published ancestor, the closed vocabulary
@@ -50,7 +50,7 @@ SILENT_500_TYPES: tuple[type[Exception], ...] = (DomainValidationError,)
 
 A domain invariant that reached the interface layer untranslated is a defect either way:
 an unset `field` is internal by definition, and a `field`-carrying one means the use case
-owing it a §7.6 error did not produce one. Named rather than left to the bare-`Exception`
+owing it a published error did not produce one. Named rather than left to the bare-`Exception`
 handler, which Starlette binds to `ServerErrorMiddleware` — that one re-raises after
 writing the response, so uvicorn prints an unstructured traceback outside the JSON log and
 outside its scrubbing."""

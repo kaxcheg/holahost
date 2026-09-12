@@ -164,9 +164,9 @@ resource "aws_cloudwatch_dashboard" "main" {
             # metric by another, so the ratio exists only as math.
             [{ expression = "((sc-es)/sc)*100", label = "Result rate %", id = "rr", yAxis = "right" }],
           ]
-          # No `SIMILARITY_THRESHOLD` reference line: it is an application constant (§3.7),
-          # and a Terraform copy would drift the first time the real one is calibrated. The
-          # p95 budgets are mirrored only because an alarm needs its threshold here.
+          # No `SIMILARITY_THRESHOLD` reference line: it is an application constant, and a
+          # Terraform copy would drift the first time the real one is calibrated. The p95
+          # budgets are mirrored only because an alarm needs its threshold here.
         }
       },
       {
