@@ -1,4 +1,4 @@
-"""Unit tests for GET /api/rag-documents/health (US-R10, §7.5)."""
+"""Unit tests for GET /api/rag-documents/health."""
 
 from __future__ import annotations
 

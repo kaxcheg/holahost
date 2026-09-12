@@ -1,29 +1,16 @@
 """Assembling a service's HTTP edge, in the one order that works.
 
-The middleware in this package are independent of each other, and each is usable on its
-own. What is *not* independent is the sequence they run in, and every part of it is
-load-bearing:
+The middleware in this package are independent of each other and each is usable alone.
+What is *not* independent is the sequence they run in:
 
-* **request id** outermost, so that a refusal by anything below it still carries the
-  caller's correlation id — a rejection logged without one cannot be traced to the request
-  that caused it;
-* **body size** next, because the framework reads a request body while collecting an
-  endpoint's arguments, which happens *before* it resolves that endpoint's dependencies:
-  anything expressed further in accepts the whole upload first and refuses it after;
-* **authentication** after that, because it is the only writer of
-  ``scope["state"]["token"]``;
-* **rate limit** innermost, because it keys on that token. Placed above authentication it
-  finds no caller and raises rather than silently treating the route as unlimited — a
-  failure at least, but at request time rather than at startup.
+    RequestId -> BodySize -> Auth -> RateLimit -> routing
 
-Written out per service that order is four lines a reviewer checks by eye, and
-``app.add_middleware()`` builds it in reverse. So this function decides the sequence
-itself: a service supplies *what* runs, never *when*.
+A service supplies *what* runs, never *when*. This function also mounts every router
+under the base path and always registers the exception handlers — two more things whose
+omission is silent rather than loud.
 
-It mounts routers and registers the exception handlers for the same reason. A router that
-forgets the base path is unreachable through the gateway — for a health route, the deploy's
-smoke check never finds it — and an app with no handlers registered answers 500 to every
-error the service publishes while looking healthy.
+Why each position is load-bearing, and why these are middleware rather than dependencies,
+is in this package's README.
 """
 
 from __future__ import annotations

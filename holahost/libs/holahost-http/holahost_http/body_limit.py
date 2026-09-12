@@ -56,8 +56,7 @@ class BodySizeLimitMiddleware:
 
     Middleware rather than a check inside the handler, because a framework resolves a
     multipart form by reading the whole body first: ``await request.form()`` runs before
-    the endpoint's dependencies, so authentication, rate limiting and any size check
-    written as a dependency all run *after* the upload has been received in full.
+    the endpoint's dependencies.
 
     The cap covers the whole body, framing included (see ``body_cap_for_upload``), which
     makes it a coarse outer bound rather than a replacement for the service's own check

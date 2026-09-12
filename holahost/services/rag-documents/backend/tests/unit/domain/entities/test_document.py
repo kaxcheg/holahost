@@ -38,7 +38,7 @@ class TestDocument:
 
     def test_create_rejects_zero_chunks(self) -> None:
         # Should be structurally unreachable — empty documents are rejected
-        # earlier, at the parsing stage (US-R01: MIN_EXTRACTED_TEXT_CHARS).
+        # earlier, at the parsing stage, by MIN_EXTRACTED_TEXT_CHARS.
         # Hitting this is an internal defect, not a client mistake.
         with pytest.raises(ValueError, match="at least one chunk"):
             Document.create(
@@ -47,7 +47,7 @@ class TestDocument:
 
     def test_create_rejects_too_many_chunks(self) -> None:
         # Reachable in practice: only knowable after chunking completes
-        # (US-R01: 422 TooManyChunksError) — a real client-triggerable path.
+        # and answered with 422 TooManyChunksError — a real client-triggerable path.
         doc_id = DocumentId.new()
         with pytest.raises(DomainValidationError, match="chunk") as exc:
             Document.create(

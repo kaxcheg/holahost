@@ -10,15 +10,14 @@ from domain.value_objects.page_number import PageNumber
 
 
 class RecursiveTextChunker:
-    """Adapter for the `TextChunker` port over `RecursiveCharacterTextSplitter` (§3.4).
+    """Adapter for the `TextChunker` port over `RecursiveCharacterTextSplitter`.
 
     Wraps each fragment in a LangChain `Document` carrying `metadata={"page": ...}` and
     runs `split_documents` — the splitter chunks each document independently, so a chunk
-    never crosses a fragment's boundary and inherits its source `page` exactly (§8.0).
-    `length_function` is injected (production: the embedder's own tokenizer via
-    `FastembedEmbeddingModel.count_tokens`, wired at composition — R-24, out of scope
-    here; tests use `len`) so chunk-window guarantees never drift from what the model
-    actually tokenizes.
+    never crosses a fragment's boundary and inherits its source `page` exactly.
+    `length_function` is injected (in production the embedder's own tokenizer via
+    `FastembedEmbeddingModel.count_tokens`, wired at composition; tests use `len`) so
+    chunk-window guarantees never drift from what the model actually tokenizes.
     """
 
     def __init__(

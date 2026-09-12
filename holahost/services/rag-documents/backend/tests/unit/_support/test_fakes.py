@@ -1,6 +1,5 @@
 """Tests for the test fakes themselves — for the two contracts they exist to protect:
-§8.0's "every repository call runs inside an explicit `with uow:`", and owner scoping
-(US-R06, A-13).
+"every repository call runs inside an explicit `with uow:`", and owner scoping.
 
 Both are falsifiable only if the fakes enforce them. A fake that returns its preset hits
 regardless of owner, or that constructs a ``FakeUnitOfWork`` of its own instead of the one

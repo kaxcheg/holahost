@@ -59,7 +59,7 @@ class TestChunk:
             )
 
     def test_create_rejects_a_negative_index(self) -> None:
-        # ChunkIndex itself enforces >= 0 (spec §4.1) — this confirms Chunk is
+        # ChunkIndex itself enforces >= 0 — this confirms Chunk is
         # actually wired to that VO, not silently accepting a raw int.
         with pytest.raises(ValueError, match="negative"):
             Chunk.create(

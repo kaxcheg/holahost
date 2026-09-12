@@ -3,11 +3,7 @@
 Structured JSON logging shared by Holahost services: the logger, the field allowlist that
 keeps content out of it, and the platform's operation-completion event.
 
-Consumed as a Poetry path dependency:
-
-```toml
-holahost-observability = { path = "../../../libs/holahost-observability", develop = true }
-```
+Consumed as a [path dependency](../../README.md#shared-libraries).
 
 ## Why a library, and why this one has no HTTP dependency
 

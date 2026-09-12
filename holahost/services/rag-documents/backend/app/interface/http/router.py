@@ -1,4 +1,4 @@
-"""Document routes — UC-R1..UC-R5 (spec §7.1-§7.4, §8.2-§8.5)."""
+"""Document routes: create, replace, search, read and delete."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Securi
 
 
 class _StageTimer:
-    """Per-stage wall clock for one ingest, for `op_completed.stage_ms` (§8.7).
+    """Per-stage wall clock for one ingest, for `op_completed.stage_ms`.
 
     Both ingest use cases run the same four stages, each with its own failure mode — a
     slow parse (a big scanned PDF), a slow embed (model contention), a slow persist (lock
@@ -150,7 +150,7 @@ class _TimedEmbedder:
 def _read_upload(file: UploadFile) -> bytes:
     """Read the whole upload, then release the parser's own copy of it.
 
-    Sync read — endpoints stay sync `def` per ADR A-9, so `file.file` is the way in.
+    Sync read — endpoints stay sync `def`, so `file.file` is the way in.
 
     The release is about *when*: `FileParser` takes `bytes`, so the copy is unavoidable,
     but FastAPI's form cleanup closes the spool only after the handler returns — on the
@@ -290,7 +290,7 @@ def search_document(
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SearchResponse:
-    # §3.7's three search knobs reach the use case from here and nowhere else: the
+    # The three search knobs reach the use case from here and nowhere else: the
     # application layer must not import `Settings`.
     use_case = SearchDocumentUseCase(
         documents_repo_factory,

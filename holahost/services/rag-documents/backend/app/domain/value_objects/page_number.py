@@ -9,7 +9,7 @@ from domain.exceptions import DomainValidationError
 
 @dataclass(frozen=True, slots=True)
 class PageNumber:
-    """Provenance page number — >= 1 if set, `None` for pageless formats (spec §4.1).
+    """Provenance page number — >= 1 if set, `None` for pageless formats.
 
     :param value: The 1-based page number, or `None`.
     """

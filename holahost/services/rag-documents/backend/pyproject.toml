@@ -6,12 +6,11 @@ requires-python = ">=3.12,<4.0"
 
 [tool.poetry]
 # Explicit src-layout packaging (app/domain -> importable as bare `domain`).
-# `package-mode = false` was tried first and reverted: it skips installing the
-# project's own code into the venv entirely, which works for pytest/mypy (they
-# have their own pythonpath/mypy_path settings) but leaves import-linter unable
-# to find `domain` at all — it has no config-level path option, only real
-# Python import resolution. Real packaging fixes that for every tool uniformly,
-# including a developer running `poetry run lint-imports` by hand.
+# Not `package-mode = false`: that skips installing the project's own code into
+# the venv, which pytest and mypy survive through their own pythonpath settings
+# but import-linter does not — it has no config-level path option, only real
+# Python import resolution. Real packaging serves every tool uniformly, including
+# a developer running `poetry run lint-imports` by hand.
 packages = [
     { include = "domain", from = "app" },
     { include = "application", from = "app" },
@@ -99,11 +98,11 @@ strict = true
 python_version = "3.12"
 mypy_path = ["app", "."]
 # Without this, mypy treats every pydantic-settings field as a required constructor
-# kwarg (it doesn't know BaseSettings populates them from os.environ, not __init__
-# args) — matches ~/repos/lead-capture's own pyproject.toml, which hit the same issue.
+# kwarg — it does not know BaseSettings populates them from os.environ rather than
+# from __init__ args.
 plugins = ["pydantic.mypy"]
-# Same bug class as pytest's --import-mode=importlib fix above, hit independently:
-# mypy has its own file-to-module resolution, unrelated to pytest's addopts, and by
+# Same class of problem as pytest's --import-mode=importlib setting above, and a
+# separate fix: mypy has its own file-to-module resolution, unrelated to addopts, and by
 # default walks up through __init__.py-less directories the same way pytest's old
 # "prepend" mode did — `tests/unit/domain/test_exceptions.py` and
 # `tests/unit/application/exceptions/test_exceptions.py` both resolve to the bare
@@ -113,10 +112,8 @@ namespace_packages = true
 explicit_package_bases = true
 
 # python-docx / pymupdf / langchain_text_splitters ship no type stubs; strict = true
-# otherwise treats a missing-stub import as an error. fastembed does NOT belong here
-# — it ships a real py.typed marker + full annotations (verified: `mypy --strict` on
-# a standalone `reveal_type(TextEmbedding().embed(...))` resolves a precise
-# Iterable[NDArray[...]] union with no override at all).
+# otherwise treats a missing-stub import as an error. fastembed does NOT belong here —
+# it ships a real py.typed marker and full annotations, and needs no override.
 [[tool.mypy.overrides]]
 module = ["docx.*", "pymupdf.*", "langchain_text_splitters.*"]
 ignore_missing_imports = true
@@ -133,10 +130,10 @@ disallow_untyped_calls = false
 
 [tool.importlinter]
 # `config` is listed here (import-linter needs every top-level package it should
-# recognize) but stays out of the `layers` contract below: it's a leaf-exception
-# (CLAUDE.md project convention) — every layer may import it, it imports nothing
-# from domain/application/infrastructure/interface. `scripts/` (composition root,
-# R-24) stays outside the contract entirely.
+# recognize) but stays out of the `layers` contract below: it is a leaf exception —
+# every layer may import it, and it imports nothing from
+# domain/application/infrastructure/interface. `scripts/`, the composition root,
+# stays outside the contract entirely.
 root_packages = ["domain", "application", "infrastructure", "config", "interface"]
 
 [[tool.importlinter.contracts]]

@@ -1,4 +1,4 @@
-"""UC-R1: create a new document (spec §8.2)."""
+"""Create a new document."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 @dataclass
 class CreateDocumentUseCase:
-    """UC-R1: parse, chunk, embed, then write a document and its chunks atomically."""
+    """Parse, chunk, embed, then write a document and its chunks atomically."""
 
     parser: FileParser
     chunker: TextChunker
@@ -55,11 +55,11 @@ class CreateDocumentUseCase:
         :raises EmptyDocumentError: fewer than `MIN_EXTRACTED_TEXT_CHARS` were extracted.
         :raises ParsedTextTooLargeError: parsed text exceeds `MAX_PARSED_TEXT_LENGTH`.
         :raises TooManyChunksError: more than `MAX_CHUNKS_PER_DOCUMENT` chunks resulted.
-        :raises EmbeddingFailedError: conscious pass-through — not retried in-request (§8.6).
+        :raises EmbeddingFailedError: conscious pass-through — not retried in-request.
         :raises StorageUnavailableError: conscious pass-through.
-        :raises ConcurrentUpdateError: conscious pass-through — unlike replace/delete,
-            create has no pre-existing row to lock and conflict on, so §8.6 does not
-            call for a retry here.
+        :raises ConcurrentUpdateError: conscious pass-through — unlike replace and
+            delete, create has no pre-existing row to lock and conflict on, so there
+            is nothing for a retry to resolve.
         :raises IntegrityError: conscious pass-through — an internal defect.
         """
         try:

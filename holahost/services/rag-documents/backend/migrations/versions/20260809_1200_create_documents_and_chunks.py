@@ -58,7 +58,7 @@ def upgrade() -> None:
     op.create_index("idx_chunks_document_id", "chunks", ["document_id"])
 
     # Postgres RLS is the sole enforcement of "an owner never sees/writes another
-    # owner's row" (§8.0) — repos do not filter by owner in application code. FORCE
+    # owner's row" — repos do not filter by owner in application code. FORCE
     # is required alongside ENABLE: by default RLS does not apply to a table's
     # owning role, only to other roles. A true superuser connection bypasses RLS
     # unconditionally regardless of FORCE — that boundary is enforced by which role
@@ -73,8 +73,8 @@ def upgrade() -> None:
         """
     )
 
-    # chunks has no owner column of its own (§4.3 — subordinate to documents, no
-    # repo of its own) — its policy re-derives ownership through the parent row,
+    # chunks has no owner column of its own — it is subordinate to documents and has no
+    # repository of its own — so its policy re-derives ownership through the parent row,
     # which is itself already RLS-filtered in the same transaction.
     op.execute("ALTER TABLE chunks ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE chunks FORCE ROW LEVEL SECURITY")

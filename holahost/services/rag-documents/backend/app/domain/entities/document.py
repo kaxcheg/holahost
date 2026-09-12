@@ -12,21 +12,20 @@ from domain.value_objects.document_name import DocumentName
 from domain.value_objects.mime_type import MimeType
 from domain.value_objects.owner_subject import OwnerSubject
 
-MAX_CHUNKS_PER_DOCUMENT = 500  # spec §3.7
+MAX_CHUNKS_PER_DOCUMENT = 500
 
 
 @dataclass(eq=False)
 class Document:
-    """An indexed document (spec §4.2) — the aggregate root for its `Chunk`s: a chunk
-    is never created, replaced, or removed except through `create`/`replace_content`
-    here, which is where "chunks belong to this document" and "at least one chunk"
-    are enforced (§4.3 — Chunk itself has no repo, no update, and dies with its
-    document).
+    """An indexed document — the aggregate root for its `Chunk`s: a chunk is never
+    created, replaced, or removed except through `create`/`replace_content` here,
+    which is where "chunks belong to this document" and "at least one chunk" are
+    enforced. `Chunk` itself has no repository, no update, and dies with its document.
 
     Mutable — `name` changes on rename, `mime_type`/`chunk_count` on content
-    replacement, `updated_at` with either. `owner` is fixed at creation (transfer is
-    out of scope, §4.2). Equality and hashing are by `id`, which is what `eq=False`
-    plus the hand-written `__eq__`/`__hash__` below achieve.
+    replacement, `updated_at` with either. `owner` is fixed at creation; transferring
+    ownership is out of scope. Equality and hashing are by `id`, which is what
+    `eq=False` plus the hand-written `__eq__`/`__hash__` below achieve.
 
     :param id: Self-generated identifier.
     :param owner: Immutable after creation.
@@ -73,8 +72,8 @@ class Document:
         generates the id and builds `chunks` with it before calling this.
 
         :raises ChunkCountExceededError: more than `MAX_CHUNKS_PER_DOCUMENT` chunks —
-            the one client-facing invariant here (US-R01: 422 `TooManyChunksError`),
-            which is why it has a type of its own for the caller to select.
+            the one client-facing invariant here (422 `TooManyChunksError`), which is
+            why it has a type of its own for the caller to select.
         :raises DomainValidationError: with `field` unset — `chunks` is empty, or holds a
             chunk belonging to another document. Both are structurally unreachable, so
             either is an internal defect: nothing translates it, and it surfaces as 500.
@@ -123,7 +122,7 @@ class Document:
 
     def replace_content(self, mime_type: MimeType, chunks: list[Chunk]) -> None:
         """Replace the document's content — new mime type and the full new chunk
-        set — and bump `updated_at` (US-R02).
+        set — and bump `updated_at`.
 
         :raises ChunkCountExceededError: see `create`.
         :raises DomainValidationError: see `create` — the two unset-`field` ones.

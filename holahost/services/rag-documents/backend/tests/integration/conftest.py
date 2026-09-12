@@ -19,7 +19,7 @@ _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 
 # A dedicated, unprivileged role for integration tests. testcontainers' default
 # connection is a Postgres superuser, and a superuser bypasses row-level security
-# unconditionally — no policy, no FORCE ROW LEVEL SECURITY, can change that (§8.0).
+# unconditionally — no policy, no FORCE ROW LEVEL SECURITY, can change that.
 # Tests must run as a non-superuser role or RLS enforcement is never actually
 # exercised, only assumed. The role is created by the very same code the deploy runs
 # (`scripts/provision_app_role.py`), so what these tests exercise is the real

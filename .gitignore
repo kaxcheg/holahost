@@ -17,11 +17,9 @@ venv/
 .coverage
 htmlcov/
 
-# Environment files. Two naming conventions coexist: the older <svc-root>/.env.<env>.example
-# (env name in the filename) and the newer infra/envs/<env>/.env.example + infra/envs/<env>/.env
-# (env name is the directory instead — real dev/.env stays a per-developer local copy and must
-# stay ignored; real staging/.env and prod/.env are non-secret and safe to commit, so are
-# explicitly un-ignored by path, not by a basename glob that would also catch dev/.env).
+# Environment files. A real dev/.env is a per-developer local copy and stays ignored; staging/.env
+# and prod/.env hold non-secret runtime settings and are committed, so they are un-ignored by path
+# rather than by a basename glob that would also catch dev/.env.
 *.env
 .env.*
 !.env.*.example
@@ -32,16 +30,12 @@ htmlcov/
 # OS / editor
 .DS_Store
 *.swp
+.vscode/
 
-# Claude Code / build-session process state (local working memory)
+# Local tooling state
 .build-state/
 .claude/
-settings.json
 CLAUDE.md
-
-# Node
-node_modules/
-frontend/dist/
 
 # Terraform (keep .terraform.lock.hcl tracked)
 .terraform/

@@ -132,13 +132,12 @@ jobs:
             --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
             -t rag-documents:ci .
 
-      # §12's size budget, checked where it can still be acted on. The image carries an
-      # embedding model's runtime plus its dependencies, and nothing else warns when a
-      # transitive dependency, a stray cache directory, or the model weights themselves
-      # start riding along — a `.dockerignore` gap shipped `.import_linter_cache` into the
-      # image once already, and only a by-hand `docker run ls` caught it. The ceiling is
-      # deliberately loose: it is a tripwire against an order-of-magnitude drift, not a
-      # budget to optimise against.
+      # The size budget, checked where it can still be acted on. The image carries an embedding
+      # model's runtime plus its dependencies, and nothing else warns when a transitive
+      # dependency, a stray cache directory, or the model weights themselves start riding along —
+      # a `.dockerignore` gap is invisible until someone lists the image by hand. The ceiling is
+      # deliberately loose: a tripwire against order-of-magnitude drift, not a budget to optimise
+      # against.
       - name: Image size budget
         if: steps.filter.outputs.changed == 'true'
         env:
@@ -148,7 +147,7 @@ jobs:
           size_mb=$(( $(docker image inspect rag-documents:ci --format '{{.Size}}') / 1000000 ))
           echo "rag-documents:ci is ${size_mb} MB (ceiling ${MAX_IMAGE_MB} MB)"
           if [ "$size_mb" -gt "$MAX_IMAGE_MB" ]; then
-            echo "::error::image grew past the §12 budget — check .dockerignore and new dependencies"
+            echo "::error::image grew past its size budget — check .dockerignore and new dependencies"
             exit 1
           fi
 
@@ -157,9 +156,8 @@ jobs:
 
       # `validate` is the baseline that always runs: it needs no credentials and no state, so it
       # works on a fork PR and on a machine with no AWS at all. It cannot see drift, though —
-      # it never reads state, so a resource changed by hand in the console passes it untouched,
-      # and the frame spec calls that an incident rather than a nuisance. `terraform plan` below
-      # is what catches it; the two are a pair, not alternatives.
+      # it never reads state, so a resource changed by hand in the console passes it untouched.
+      # `terraform plan` below is what catches that; the two are a pair, not alternatives.
       - name: Terraform validate (common)
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/services/rag-documents/infra/common
@@ -187,9 +185,9 @@ jobs:
       #                                what turns these steps on — no workflow edit needed.
       #   ...fork != true              a fork PR gets no secrets and no OIDC token by GitHub's
       #                                own design, so the step could only fail. It is skipped,
-      #                                and a skipped step reports success — which is what the
-      #                                frame spec requires of a filtered job, rather than a
-      #                                required check stuck red on every outside contribution.
+      #                                and a skipped step reports success — which is what a
+      #                                required check needs, rather than being stuck red on
+      #                                every outside contribution.
       #
       # `plan` exits 0 whether or not there is a diff; drift shows up as a non-empty plan in the
       # log, which is the point. `-lock=false` because reading state for a plan should never

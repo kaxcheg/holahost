@@ -17,9 +17,9 @@ def authenticate(
 ) -> TokenContext:
     """Validate a JWT from a raw `Authorization` header value, fully offline.
 
-    Implements holahost_frame.md's validation procedure: scheme check, parse,
-    `alg` pinning, signature by `kid`, standard claims, `TokenContext`. The
-    only possible network call is the JWKS re-fetch inside `jwks_client`.
+    The platform's validation procedure in order: scheme check, parse, `alg`
+    pinning, signature by `kid`, standard claims, `TokenContext`. The only
+    possible network call is the JWKS re-fetch inside `jwks_client`.
 
     :param authorization_header: Raw `Authorization` header value, or `None`.
     :param config: This service's fixed validation configuration.
@@ -90,7 +90,7 @@ def _validated_act(claims: dict[str, object]) -> str | None:
     Absent `act` means "not delegated" (`None`). A present but malformed one
     (not `{"sub": <non-empty str>}`) is rejected rather than read as "not
     delegated": failing open would let a tampered delegation marker past the
-    confused-deputy check downstream (frame spec, point 6).
+    confused-deputy check downstream.
 
     :raises AuthenticationError: `act` is present but malformed.
     """

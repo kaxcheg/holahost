@@ -36,19 +36,17 @@ repos:
   # package's real installed dependencies rather than a shared guess. Adding a
   # new package (rag-documents' backend, llm-client, ...) needs no edit here.
   #
-  # `holahost/templates/` is excluded: the service template is a tree to copy from, not
-  # code that runs anywhere. What has to pass these gates is the copy, inside the service
-  # that made it. Gating on the template instead would make every contributor's machine and
-  # every service's CI install a package nobody deploys. It stays a real package, so its own
+  # `holahost/templates/` is excluded: the service template is a tree to copy from, not code
+  # that runs anywhere. What has to pass these gates is the copy, inside the service that made
+  # it. Gating on the template instead would make every contributor's machine and every
+  # service's CI install a package nobody deploys. It stays a real package, so its own
   # `make lint`, `make test` and `make openapi-check` still work when someone edits it.
   #
-  # Excluding it takes BOTH lines below, and they do different jobs — verified, not assumed:
+  # Excluding it takes BOTH lines below, and they do different jobs:
   #   `exclude:`             stops the hook running when a change touches nothing else.
   #   `-not -path templates` stops the loop entering the template when it runs anyway.
   # `exclude` cannot do the second: with `pass_filenames: false` the matched file list is
-  # discarded, and `entry` is a fixed string that re-derives the packages itself. Tested by
-  # putting a lint error in a template file — with `exclude` alone, a change to
-  # rag-documents still failed on it.
+  # discarded, and `entry` is a fixed string that re-derives the packages itself.
   - repo: local
     hooks:
       - id: python-ruff

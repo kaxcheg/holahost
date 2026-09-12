@@ -1,4 +1,4 @@
-"""The errors this service throws at its boundary — one class per error (spec §7.6).
+"""The errors this service throws at its boundary — one class per error.
 
 Each class is the whole contract for the error it names: its **identity** on the wire is
 its class name, verbatim (`PlatformError.code`), and the shape of its **`details`** is
@@ -87,7 +87,7 @@ class ParsedTextTooLargeError(ApplicationError):
     A different error from `UploadTooLargeError`, not the same one later: it measures
     extracted characters rather than uploaded bytes, and a caller that hits it sent a file
     the service was willing to read. Mapped to 422 against the raw-size error's 413,
-    resolving §7.6's table in favour of US-R01's more specific AC.
+    because "we read it and it was too big" is a different fact from "we refused to read it".
     """
 
     def __init__(self, limit: int, actual: int) -> None:

@@ -1,30 +1,61 @@
 # Holahost
 
-Holahost is a property-management app for short-term-rental hosts (calendar, pricing, guest
-communication, …), built as a **microservice monorepo** on AWS EC2 — Docker Compose services on a
-shared network behind an API Gateway. The target architecture (compute, routing, auth, and the
-per-microservice contract) is described in
-[`holahost/docs/holahost_overview.md`](holahost/docs/holahost_overview.md).
+A property-management platform for short-term-rental hosts — calendar, pricing, guest communication
+— built as a microservice monorepo on AWS: Docker Compose services on a shared network behind an API
+Gateway, each one an independent deploy unit.
 
-> **Status — early skeleton.** The guest-message RAG demo service that this repo originally hosted has
-> been **extracted to its own repository**. The platform, shared infrastructure, and services are being
-> (re)built per the overview; expect this tree to fill in.
+The architecture, the contract every microservice satisfies and the shared libraries are described
+in [`holahost/README.md`](holahost/README.md).
 
 ## Layout
 
 ```
 holahost/
-  docs/        product & architecture docs (holahost_overview.md)
-  frontend/    web app-shell            — to be added
-  infra/       shared infrastructure    — to be added (EC2, API Gateway, CloudFront, ECR, GitHub)
-  services/    backend microservices    — to be added (e.g. auth)
-.github/  .pre-commit-config.yaml  .tool-versions  CONTRIBUTING.md   repo-global tooling
+  services/<svc>/     backend microservices
+  libs/<lib>/         shared platform libraries (path dependencies, not published)
+  tools/<tool>/       console tools — not deploy units
+  templates/service/  the skeleton a new service is copied from
+  infra/modules/      Terraform modules the services' own roots call
+  make/common.mk      make targets every service includes
+.github/  .pre-commit-config.yaml  .tool-versions  CONTRIBUTING.md
 ```
 
-Each microservice is an **independent deployable** — it owns its ECR repo, Terraform, and CI/CD
-pipelines (local dev / staging / prod). See the microservice contract in the overview.
+## What is here
+
+| Component | State |
+|---|---|
+| [`holahost-observability`](holahost/libs/holahost-observability/README.md), [`holahost-http`](holahost/libs/holahost-http/README.md), [`holahost-auth`](holahost/libs/holahost-auth/README.md), [`holahost-db`](holahost/libs/holahost-db/README.md) | implemented |
+| [`rag-documents`](holahost/services/rag-documents/README.md) — document ingestion and vector search | implemented, with CI/CD and Terraform |
+| [`templates/service`](holahost/templates/service/README.md) — new-service skeleton | implemented |
+| `infra/modules` — `service-ecr`, `service-observability` | implemented |
+| [`llm-client`](holahost/services/llm-client/README.md) — facade over external LLM providers | designed, not built |
+| [`guest-reply`](holahost/tools/guest-reply/README.md) — console orchestrator | designed, not built |
+| `auth` — JWT issuer; platform Terraform root; web frontend | designed, not built |
+
+Nothing here is deployed yet: the Terraform roots describe infrastructure that has not been applied
+outside local development.
+
+## Getting started
+
+Toolchain versions are pinned in `.tool-versions` (Python, Poetry, Terraform) and are the same ones
+the Docker images and CI use.
+
+```bash
+make hooks-install                      # one-time: install the pre-commit and commit-msg hooks
+
+cd holahost/services/rag-documents
+make dev-up                             # build, migrate, start the service and its Postgres
+make ci-local                           # what CI runs: hooks, tests, the OpenAPI contract check
+```
+
+Each service documents its own operation in `docs/runbook.md` — deploying from scratch, verifying,
+upgrading, rolling back, rotating secrets.
 
 ## Conventions
 
-Branching (GitFlow), commits (Conventional Commits), and merge strategy:
+Branching, commit format, merge strategy, naming and the hook set are in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

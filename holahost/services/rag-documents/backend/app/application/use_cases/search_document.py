@@ -1,4 +1,4 @@
-"""UC-R3: find relevant chunks for a query (spec §8.4)."""
+"""Find relevant chunks for a query."""
 
 from __future__ import annotations
 
@@ -16,12 +16,12 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 @dataclass
 class SearchDocumentUseCase:
-    """UC-R3: embed the query and return its top-K most similar chunks.
+    """Embed the query and return its top-K most similar chunks.
 
-    The three search parameters are injected rather than read from module constants: §3.7
-    makes them environment configuration, and the threshold is explicitly provisional
-    ("calibrated on real guidebooks later"). They are wired from `Settings` in the
-    composition root, the only layer allowed to know `Settings` exists.
+    The three search parameters are injected rather than read from module constants:
+    all three are environment configuration, and the threshold in particular is
+    provisional until calibrated on real documents. They are wired from `Settings` in
+    the composition root, the only layer allowed to know `Settings` exists.
     """
 
     documents_repo_factory: DocumentsRepoFactory
@@ -45,13 +45,13 @@ class SearchDocumentUseCase:
         :raises NotFoundError: the document does not exist, or belongs to another owner.
             Checked in the same transaction, and so the same snapshot, as the search: run
             separately, a document deleted in between answers `200 {"chunks": []}` — the
-            "nothing cleared the threshold" signal — instead of the `404` §7.1 promises.
+            "nothing cleared the threshold" signal — instead of the `404` it owes.
         :raises InvalidPayloadError: `cmd.query` is empty or exceeds `max_query_length`.
             Checked before any database work: judging it needs nothing from storage.
         :raises EmbeddingFailedError: conscious pass-through.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: conscious pass-through — a plain read, not
-            retried (§8.6 scopes retry to replace/delete only).
+            retried — only replace and delete retry on conflict.
         :raises IntegrityError: conscious pass-through.
         """
         owner = OwnerSubject(cmd.owner)
@@ -61,7 +61,7 @@ class SearchDocumentUseCase:
         if not cmd.query.strip() or len(cmd.query) > self.max_query_length:
             raise InvalidPayloadError(field="query", limit=self.max_query_length)
 
-        # Outside any transaction, as in the ingest pipeline (§8.2/§8.3): CPU-bound work
+        # Outside any transaction, as in the ingest pipeline: CPU-bound work
         # must not hold a pooled connection. It runs before the ownership check, so a
         # missing document costs one embedding — bounded by the read rate limit, and the
         # price of the check and the search sharing one transaction below.
@@ -71,12 +71,12 @@ class SearchDocumentUseCase:
         vector_search = self.vector_search_factory(owner)
 
         # One transaction for both reads: two would cost two pool checkouts and two
-        # `_bind_owner()` round trips per search against §3.7's 500 ms budget, and would
+        # `_bind_owner()` round trips per search against a 500 ms budget, and would
         # put the check and the search in different snapshots (see `:raises NotFoundError:`).
         #
         # No lock: search accepts a stale-but-consistent result during a concurrent
         # replace rather than blocking the hot path. The ownership pre-check only tells
-        # 404 apart from "nothing matched" — RLS scopes `top_k` either way (§8.0).
+        # 404 apart from "nothing matched" — RLS scopes `top_k` either way.
         with self.uow:
             if documents_repo.get(document_id) is None:
                 raise NotFoundError

@@ -53,12 +53,12 @@ def _chunk_values(chunk: Chunk) -> dict[str, Any]:
 
 class SqlAlchemyDocumentsRepo(DocumentsRepo):
     """Adapter for the `DocumentsRepo` port (application/ports/repos.py) — persists
-    `Document` rows together with the `Chunk` rows they own (§4.3: one repo for the
-    aggregate, chunks are never written independently). Runs on `uow.active_connection`
-    — every call happens inside an active transaction (§8.0), so there is no
-    standalone-connection branch here.
+    `Document` rows together with the `Chunk` rows they own — one repo for the aggregate,
+    chunks are never written independently. Runs on `uow.active_connection`: every call
+    happens inside an active transaction, so there is no standalone-connection branch
+    here.
 
-    Owner isolation is enforced by Postgres RLS (§8.0), bound per call via
+    Owner isolation is enforced by Postgres RLS, bound per call via
     `_bind_owner()` — no method here filters by owner in its own SQL.
     """
 

@@ -5,9 +5,9 @@ class AuthenticationError(Exception):
     """A JWT failed validation, for any reason.
 
     Every failure mode below maps to the same HTTP reaction — 401 with no
-    reason disclosed in the response body (US-R07) — so one type is correct
-    per the project's typing rule (a type exists only if the caller reacts
-    differently). `reason` is for logging only, never for the response body.
+    reason disclosed in the response body — so one type is correct: a type
+    exists only where the caller reacts differently. `reason` is for logging
+    only, never for the response body.
 
     :param reason: Human-readable cause, logged by the caller.
     """

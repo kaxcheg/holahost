@@ -7,13 +7,13 @@ from dataclasses import dataclass
 
 from domain.exceptions import DomainValidationError
 
-EMBEDDING_DIM = 384  # spec §3.7 — paraphrase-multilingual-MiniLM-L12-v2
+EMBEDDING_DIM = 384  # paraphrase-multilingual-MiniLM-L12-v2
 _NORM_TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True, slots=True)
 class Embedding:
-    """An L2-normalized embedding vector (spec §4.1).
+    """An L2-normalized embedding vector.
 
     Normalization is an invariant, not a caller operation: the constructor
     rejects anything not already normalized, so cosine similarity in search

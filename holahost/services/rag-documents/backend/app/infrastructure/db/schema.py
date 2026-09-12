@@ -1,4 +1,4 @@
-"""Single source of truth for the relational schema (spec §6).
+"""Single source of truth for the relational schema.
 
 These ``Table`` objects drive both the Core queries in the repository adapters and the
 Alembic migrations (``migrations/env.py`` exposes ``metadata`` as ``target_metadata``).

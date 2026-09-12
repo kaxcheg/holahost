@@ -1,19 +1,18 @@
 # syntax=docker/dockerfile:1
-# Build context MUST be the TRUE git repo root (parent of holahost/), not holahost/ itself and not
-# this directory: .tool-versions lives at the true root (single source for local dev/Docker/CI —
-# confirmed by build failure when context was holahost/, .tool-versions not found there), while
-# backend/pyproject.toml's Poetry path dependency on ../../../libs/holahost-auth requires
-# holahost/libs/holahost-auth/ to also be reachable. Both are only simultaneously reachable from
-# the true root. Build (from the true repo root, i.e. two levels above holahost/services/):
+# The build context MUST be the git repo root (the parent of holahost/), not holahost/ itself and
+# not this directory: `.tool-versions` lives at that root and is the single source of tool versions
+# for local dev, Docker and CI, while backend/pyproject.toml's Poetry path dependency on
+# ../../../libs/holahost-auth needs holahost/libs/ reachable too. Only the repo root reaches both.
+# Build from there:
 #   docker build -f holahost/services/<svc>/Dockerfile \
 #     --build-arg PYTHON_VERSION=$(awk '$1=="python"{print $2}' .tool-versions) -t <svc>:dev .
 #
-# PYTHON_VERSION has no default on purpose: it's what FROM below resolves to, before any RUN/COPY
-# runs — Docker can't awk .tool-versions for it the way the poetry install below does (that trick
-# only works once a shell exists, inside an already-pulled stage). A default here would silently
-# drift from .tool-versions the moment that file changes, which is exactly the bug this replaced —
-# every real caller (make, CI) already passes --build-arg explicitly; a bare `docker build` without
-# it now fails loudly instead of quietly building a stale Python version.
+# PYTHON_VERSION has no default on purpose: it is what FROM below resolves to, before any RUN or
+# COPY runs, so Docker cannot read it out of .tool-versions the way the poetry install below does —
+# that only works once a shell exists inside an already-pulled stage. A default here would drift
+# from .tool-versions the moment that file changes. Every real caller (make, CI) passes
+# --build-arg explicitly, and a bare `docker build` without it fails loudly instead of quietly
+# building a stale Python version.
 ARG PYTHON_VERSION
 
 FROM python:${PYTHON_VERSION}-slim AS builder
@@ -56,10 +55,9 @@ COPY holahost/services/<svc>/backend/migrations/ /app/migrations/
 COPY holahost/services/<svc>/backend/alembic.ini /app/alembic.ini
 
 # The path comes from `interface.http.api_base`, the same module `create_app()` mounts every
-# router under — not a third hand-written copy of the literal. A bare `/health` was written here
-# once and silently became a 404 the moment routers moved under the service's base path, leaving
-# the container permanently `unhealthy` (urlopen raises HTTPError on 404, so the probe exits
-# non-zero on every attempt) while the service itself was answering fine.
+# router under, rather than a third hand-written copy of the literal. A bare `/health` here would
+# be a 404, leaving the container permanently `unhealthy` — urlopen raises HTTPError on 404, so
+# the probe exits non-zero on every attempt — while the service itself answers fine.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD python -c "from interface.http.api_base import API_BASE_URL; import urllib.request as u; u.urlopen(f'http://localhost:8080{API_BASE_URL}/health', timeout=3)" || exit 1
 

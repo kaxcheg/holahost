@@ -21,13 +21,12 @@ runs:
         INTERVAL: ${{ inputs.interval-seconds }}
       run: |
         set -euo pipefail
-        # --connect-timeout/--max-time are what make the budget an actual upper bound.
-        # Without them every attempt inherits curl's own ~300 s defaults, so a gateway
-        # that accepts the TCP connection and then never answers — an instance up
-        # without its `backbone` network, a half-started container — turned the nominal
-        # 30 x 20 s = 10 minute wait into ~2.7 hours, until GitHub's job limit killed
-        # it. The failure line printed "600 seconds" the whole time, which is the other
-        # half of the fix: it now reports what actually elapsed.
+        # --connect-timeout/--max-time are what make the budget an actual upper bound. Without
+        # them every attempt inherits curl's own ~300 s defaults, so a gateway that accepts the
+        # TCP connection and then never answers — an instance up without its `backbone` network,
+        # a half-started container — stretches a nominal ten-minute wait into hours, until
+        # GitHub's job limit kills it. The failure line reports elapsed time rather than the
+        # budget, for the same reason: so the log says what actually happened.
         start=$SECONDS
         budget=$(( RETRIES * INTERVAL ))
         deadline=$(( start + budget ))

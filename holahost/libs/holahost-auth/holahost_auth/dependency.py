@@ -13,15 +13,11 @@ from holahost_auth.middleware import TOKEN_SCOPE_KEY
 def current_token(request: Request) -> TokenContext:
     """FastAPI dependency returning the caller's validated ``TokenContext``.
 
-    Reads what ``HolahostAuthMiddleware`` put in the request scope; it does not
-    validate anything itself. Validation happens once, before routing, because it has
-    to: a dependency runs after the framework has already read the request body, so
-    authenticating there means every anonymous upload is received in full first.
-
-    That leaves this as the typed handle on the result — annotate a route parameter
-    ``Annotated[TokenContext, Depends(current_token)]`` and get the context, with none
-    of the "did auth actually run for this route?" ambiguity a second validation path
-    would reintroduce.
+    Reads what ``HolahostAuthMiddleware`` put in the request scope; it never validates
+    anything itself. This is the typed handle on the result — annotate a route parameter
+    ``Annotated[TokenContext, Depends(current_token)]`` and get the context, with none of
+    the "did auth actually run for this route?" ambiguity a second validation path would
+    reintroduce.
 
     :raises RuntimeError: the route is not covered by ``HolahostAuthMiddleware`` (or
         is listed among its ``public_paths``). A wiring mistake, not a caller error —

@@ -6,16 +6,14 @@
 #     MAX_IMAGE_MB := 900
 #     include ../../make/common.mk
 #
-# and then adds only what is genuinely its own. Everything here is derived from `SVC`,
-# because the frame spec already makes that one name the container name on `backbone`, the
-# ECR repository, the path segment and the secret prefix — so a second source for any of
-# them is a second thing to keep in step.
+# and then adds only what is genuinely its own. Everything here is derived from `SVC`: that one
+# name is already the container name on `backbone`, the ECR repository, the path segment and the
+# secret prefix, so a second source for any of them is a second thing to keep in step.
 #
-# Targets are declared here rather than in each service for the reason the split usually
-# fails: the interesting parts are not the commands but the ordering and the quoting, and
-# both were arrived at by watching them go wrong. `migrate` before `up`, the bare
-# `pre-commit`, the twice-set superuser password, the quoting at each point of use — each
-# is commented where it happens.
+# The targets live here rather than in each service because the interesting part is not the
+# commands but the ordering and the quoting: `migrate` before `up`, the bare `pre-commit`, the
+# twice-set superuser password, the quoting at each point of use. Each is commented where it
+# happens.
 
 REPO_ROOT ?= ../../..
 BE ?= backend
@@ -138,8 +136,8 @@ migrate-dev: ## alembic upgrade head + provision the app role, against the compo
 # Every value is quoted at its point of use: unquoted, a generated password containing a
 # space splits into two `docker compose` arguments, and one containing `*` or `?` globs
 # against the working directory and hands the container a different string than the secret
-# holds. The `VAR=$$PW` assignment prefix is exempt by shell rules, which is exactly what
-# made the inconsistency easy to miss when only that form was there.
+# holds. The `VAR=$$PW` assignment prefix is exempt by shell rules, so quoting it too is
+# redundant — and consistent, which is what keeps the exposed forms from being overlooked.
 define migrate_remote
 	PGPW=$$(aws secretsmanager get-secret-value --secret-id holahost/$(1)/$(SVC)/db-password --query SecretString --output text); \
 	SUPERPW=$$(aws secretsmanager get-secret-value --secret-id holahost/$(1)/$(SVC)/db-superuser-password --query SecretString --output text); \
@@ -163,11 +161,11 @@ migrate-prod: ## run by promote-prod via SSM; manual use: make migrate-prod IMAG
 hooks-install: ## install git hooks (repo-root pre-commit config)
 	cd $(REPO_ROOT) && pre-commit install
 
-# Three targets, not one, and the split is the honest part. A single `ci-local` that ran
-# only pre-commit and pytest promised parity it did not have: a renamed route or a response
-# field that quietly became optional passed locally and failed the PR on `openapi-check` —
-# the one check most likely to catch exactly that. Deliberately NOT covered: `terraform
-# plan`, which needs real credentials, and is gated in CI for the same reason.
+# Three targets, not one, and the split is what keeps the parity claim honest. `ci-local` covers
+# everything that needs no Docker and no cloud credentials — including `openapi-check`, which is
+# what catches a renamed route or a response field that quietly became optional. `ci-image` and
+# `ci-tf` each add one dependency. Deliberately not covered anywhere: `terraform plan`, which
+# needs real credentials and is gated in CI for that reason.
 ci-local: ## pre-commit + the full test suite + the OpenAPI contract check (no Docker/Terraform)
 	cd $(REPO_ROOT) && pre-commit run --all-files
 	cd $(BE) && poetry run pytest

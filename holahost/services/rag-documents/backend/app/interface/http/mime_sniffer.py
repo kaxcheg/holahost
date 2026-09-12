@@ -1,4 +1,4 @@
-"""Content-based MIME type resolution (spec §7.2, §3.8) — never trusts a client-supplied
+"""Content-based MIME type resolution — never trusts a client-supplied
 label (multipart Content-Type, filename) except for the one case content genuinely
 cannot resolve: text/markdown vs. text/plain, where the filename's extension is the
 only available signal.

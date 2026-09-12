@@ -1,21 +1,15 @@
 # holahost-auth
 
-Offline JWT validation for Holahost services — a shared platform library, not a standalone
-service (ADR A-5 of the `rag-documents` spec). Ships as a Poetry path-dependency, consumed
-directly rather than published:
-
-```toml
-# a consuming service's pyproject.toml
-[tool.poetry.dependencies]
-holahost-auth = { path = "../../libs/holahost-auth", develop = true }
-```
+Offline JWT validation for Holahost services. One shared library rather than a copy per service:
+this is a security check, and N implementations of it drift. Consumed as a
+[path dependency](../../README.md#shared-libraries).
 
 ## What it does
 
-Implements the platform's numbered offline JWT-validation procedure (see `holahost_frame.md`,
-"Аутентификация и авторизация"): scheme check, parse, `alg` pinning (never read from the token
-itself), signature verification by `kid` against a cached JWKS (with a single re-fetch if `kid` is
-unknown), standard claims (`exp`/`iat`/`iss`/`aud`, with configurable clock skew), and
+Implements the platform's offline JWT-validation procedure: scheme check, parse, `alg` pinning
+(never read from the token itself), signature verification by `kid` against a cached JWKS (with a
+single re-fetch if `kid` is unknown), standard claims (`exp`/`iat`/`iss`/`aud`, with configurable
+clock skew), and
 `sub == client_id` discrimination between service, user, and delegated (token-exchange) tokens
 (exposed as `TokenContext.is_service_token`, which is what a rate limiter keys its ceilings on).
 
@@ -65,11 +59,9 @@ Two pieces, one validation path:
 
 ### Why validation is middleware and not a dependency
 
-A framework resolves the request body while building an endpoint's arguments, which happens
-*before* it resolves that endpoint's dependencies. Authentication expressed as `Depends(auth)`
-therefore runs *after* a multipart upload has already been read in full: an anonymous 50 MiB POST
-is received end to end and only then answered `401`. Validating ahead of routing is what makes
-"reject before reading" possible at all.
+The same reason every edge check is — a framework reads the request body before resolving an
+endpoint's dependencies, so `Depends(auth)` answers `401` only after the whole upload has been
+received. See [`holahost-http`](../holahost-http/README.md#why-these-live-in-a-library-and-not-in-a-service).
 
 Exclusions are explicit (`public_paths`) rather than structural, because middleware wraps the whole
 app: there is no "router this isn't declared under" to opt out by.
@@ -97,11 +89,10 @@ def get_auth_config() -> AuthConfig:
 | `JWT_CLOCK_SKEW_SECONDS` | Allowed leeway when checking `exp`/`iat` |
 
 The field names are the variable names, lower-cased. That is the whole mapping rule, and
-having no second spelling is the point: an earlier revision had a settings class and a
-config class with a function between them, which is three declarations of one fact — and
-the function was the half that fails silently. Drop `clock_skew_seconds` from a
-hand-written mapping and the service rejects valid tokens at the `exp` boundary whenever a
-clock drifts, with nothing in a log to say why.
+having no second spelling is the point. A settings class, a config class and a hand-written
+function between them would be three declarations of one fact, and the function is the half
+that fails silently: drop `clock_skew_seconds` from it and the service rejects valid tokens
+at the `exp` boundary whenever a clock drifts, with nothing in a log to say why.
 
 The variables are a platform contract rather than a per-service choice: every service
 validates tokens from the same issuer against the same JWKS, and the only value that

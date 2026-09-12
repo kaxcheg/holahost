@@ -12,9 +12,9 @@ class DomainValidationError(ValueError):
     `field` says which kind of violation it is, and it is read rather than assumed:
 
     - **set** — traces back to something the caller supplied. The use case that knows
-      which request field that was translates it into the matching §7.6 error
+      which request field that was translates it into the matching published error
       (`InvalidPayloadError`, `UnsupportedMediaTypeError`, `TooManyChunksError`) and uses
-      `field` to name it without re-deriving it (US-R01).
+      `field` to name it without re-deriving it.
     - **`None`** — nothing the caller sent could have caused it: a parser, chunker or
       embedder produced a value violating an invariant, or a stage that was supposed to
       guarantee one did not. No use case translates these; the interface layer answers
@@ -41,7 +41,7 @@ class ChunkCountExceededError(DomainValidationError):
 
     Its own type rather than a `field` value to compare against: `Document.create` and
     `replace_content` raise `DomainValidationError` for three invariants, and only this
-    one is the caller's to fix (US-R01: `422 TooManyChunksError`), so the use case must
+    one is the caller's to fix (`422 TooManyChunksError`), so the use case must
     select exactly it and let the other two reach the `500` they deserve. Selecting on
     `field == "chunk_count"` would put that in a string comparison no type checker sees.
 

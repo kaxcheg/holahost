@@ -33,7 +33,7 @@ _KID = "kid-1"
 # model re-download every run. A stable subdirectory under the real system temp dir
 # (tempfile.gettempdir(), not a literal "/tmp/..." string — S108) persists the
 # ~100+ MB model across test runs, matching FastembedEmbeddingModel's own real
-# production caching behavior (§3.1: loaded once per process into a volume).
+# production caching behavior — loaded once per process into a volume.
 _EMBEDDING_CACHE_DIR = str(Path(tempfile.gettempdir()) / "rag-documents-test-fastembed-cache")
 
 

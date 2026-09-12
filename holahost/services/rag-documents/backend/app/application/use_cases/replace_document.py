@@ -1,4 +1,4 @@
-"""UC-R2: replace a document's content (spec §8.3)."""
+"""Replace a document's content."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from domain.value_objects.owner_subject import OwnerSubject
 
 @dataclass
 class ReplaceDocumentUseCase:
-    """UC-R2: atomically replace a document's content, keeping its id (A-6)."""
+    """Atomically replace a document's content, keeping its id."""
 
     parser: FileParser
     chunker: TextChunker
@@ -63,7 +63,7 @@ class ReplaceDocumentUseCase:
         :raises EmbeddingFailedError: conscious pass-through.
         :raises StorageUnavailableError: conscious pass-through.
         :raises ConcurrentUpdateError: re-raised only after the locked write has
-            already been retried twice (§8.6) — the pipeline itself is not retried,
+            already been retried twice — the pipeline itself is not retried,
             its output is already computed.
         :raises IntegrityError: conscious pass-through.
         """
@@ -73,7 +73,7 @@ class ReplaceDocumentUseCase:
 
         # Unlocked pre-check: cheap, may be stale — re-verified under lock below,
         # so a false positive here just means wasted pipeline work, not corruption.
-        # Still runs inside a transaction — every DocumentsRepo call does (§8.0) —
+        # Still runs inside a transaction — every DocumentsRepo call does —
         # a short one of its own, distinct from the locked write's transaction below.
         with self.uow:
             existing = documents_repo.get(document_id)

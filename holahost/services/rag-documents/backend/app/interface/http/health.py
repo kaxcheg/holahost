@@ -1,11 +1,11 @@
-"""GET <API_BASE_URL>/health (US-R10, §7.5). No auth dependency at all — this is the one
-route holahost-auth's own docs and §8.1 explicitly exclude.
+"""GET <API_BASE_URL>/health. No auth dependency at all — this is the one route the
+platform's authentication middleware excludes.
 
 Under the service's base path like every other route (`interface/http/app.py` applies it), not
-at a bare `/health`: the platform gateway routes `/api/<svc>/*` here *without* rewriting the
-path, so a route published at bare `/health` is reachable only from inside the compose network
-— never through the gateway, and therefore never by either deploy pipeline's smoke check, which
-curls `https://<domain>/api/<svc>/health` exactly as the frame spec prescribes.
+at a bare `/health`: the gateway routes `/api/<svc>/*` here *without* rewriting the path, so a
+route published at bare `/health` is reachable only from inside the compose network — never
+through the gateway, and therefore never by either deploy pipeline's smoke check, which curls
+`https://<domain>/api/<svc>/health`.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def health(
     except Exception:
         return JSONResponse(status_code=503, content={"status": "unavailable"})
     # `model` is resolved via the same `@lru_cache` getter `bootstrap.py` calls eagerly
-    # at startup (§3.1: model loads before the process serves traffic) — reaching this
+    # at startup, so the model loads before the process serves traffic — reaching this
     # line already proves it's loaded; no separate readiness flag needed.
     del model
     return HealthResponse(status="ok")

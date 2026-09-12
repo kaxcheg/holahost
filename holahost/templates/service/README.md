@@ -63,7 +63,7 @@ wiring most likely to be got wrong:
 
 ## The tool configuration is the valuable part of `pyproject.toml`
 
-Not the rule list — that is in the frame spec — but the five workarounds under it:
+Not the rule list, but the five workarounds under it:
 
 - `packages = [...]` rather than `package-mode = false`: the latter works for pytest and
   mypy (both have their own path settings) but leaves `import-linter` unable to resolve the

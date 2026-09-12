@@ -23,7 +23,7 @@ def _to_embedding(vector: npt.NDArray[Any]) -> Embedding:
 
 class FastembedEmbeddingModel:
     """Adapter for the `EmbeddingModel` port over one `fastembed.TextEmbedding`, loaded at
-    construction and shared across the request threadpool (A-9). No lock: ONNX Runtime
+    construction and shared across the request threadpool. No lock: ONNX Runtime
     documents `InferenceSession.Run()` as thread-safe.
 
     `count_tokens` is not part of the port. It is an extra method the composition root

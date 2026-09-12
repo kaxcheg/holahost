@@ -65,7 +65,7 @@
         "type": "object"
       },
       "DocumentResponse": {
-        "description": "The one document representation shared by create, replace, and read (§7.2).",
+        "description": "The one document representation shared by create, replace, and read.",
         "properties": {
           "chunk_count": {
             "title": "Chunk Count",
@@ -430,7 +430,7 @@
         "type": "object"
       },
       "SearchRequest": {
-        "description": "Body of POST .../search (§7.3). No length/emptiness constraints here —\ndeliberately: those are business rules already enforced by\n`SearchDocumentUseCase` (`InvalidPayloadError`), routed through the same envelope\nas every other application error. Duplicating them here would raise Pydantic's own\n`RequestValidationError` for the *value* checks too, which is a different (though\nstill envelope-mapped, see `errors.py`) code path for no benefit.",
+        "description": "Body of POST .../search. No length or emptiness constraints here, deliberately:\nthose are business rules already enforced by `SearchDocumentUseCase`\n(`InvalidPayloadError`), routed through the same envelope as every other\napplication error. Declaring them here as well would raise Pydantic's own\n`RequestValidationError` for the value checks too — a different code path, still\nenvelope-mapped, for no benefit.",
         "properties": {
           "query": {
             "title": "Query",

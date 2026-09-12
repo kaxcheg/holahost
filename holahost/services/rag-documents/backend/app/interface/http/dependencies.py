@@ -1,5 +1,5 @@
 """FastAPI dependency graph — the composition root's per-request/per-process object
-graph (ticket R-24). `@lru_cache` getters are true process-wide singletons (must not
+graph. `@lru_cache` getters are true process-wide singletons (must not
 be rebuilt per request: the `Engine`'s pool, the embedding model, the rate limiter's
 counters, the JWKS-holding `HolahostAuth`). Plain getters are deliberately NOT
 cached — FastAPI's own per-request dependency cache already guarantees a single
@@ -75,7 +75,7 @@ def get_chunker() -> TextChunker:
     settings = get_settings()
     # cast, not assert: get_embedding_model() only ever constructs FastembedEmbeddingModel
     # (the sole EmbeddingModel implementation); count_tokens/max_input_tokens are its own
-    # extra methods, deliberately not part of the EmbeddingModel Protocol (§8.0).
+    # extra methods, deliberately not part of the EmbeddingModel Protocol.
     model = cast(FastembedEmbeddingModel, get_embedding_model())
     return RecursiveTextChunker(
         length_function=model.count_tokens,
@@ -87,7 +87,7 @@ def get_chunker() -> TextChunker:
 
 @lru_cache
 def get_rate_limiter() -> RateLimiter:
-    """Process-wide counters (§8.1 step 3), consulted by `RateLimitMiddleware`.
+    """Process-wide counters, consulted by `RateLimitMiddleware`.
 
     Keyed by `(bucket, is_service)` — the ceiling depends both on what the operation
     costs and on what the counter counts. `True` is a service token, whose `sub` is its

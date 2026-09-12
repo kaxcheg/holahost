@@ -7,12 +7,12 @@ from dataclasses import dataclass
 
 from domain.exceptions import DomainValidationError
 
-MAX_DOCUMENT_NAME_LENGTH = 200  # spec §3.7
+MAX_DOCUMENT_NAME_LENGTH = 200
 
 
 @dataclass(frozen=True, slots=True)
 class DocumentName:
-    """A document's display name — 1..MAX_DOCUMENT_NAME_LENGTH chars, no control chars (spec §4.1).
+    """A document's display name — 1..MAX_DOCUMENT_NAME_LENGTH chars, no control chars.
 
     :param value: The name, taken directly from the request body.
     """
