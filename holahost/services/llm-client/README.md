@@ -8,7 +8,8 @@ Without it every service repeats the same four things: a provider SDK, a provide
 policy for `429` and overload, and its own accounting. Platform-wide spend is then visible nowhere,
 and changing the model means editing N services.
 
-See the platform contract in [`../../README.md`](../../README.md).
+See the platform contract in [`../../README.md`](../../README.md); the full design is
+[`docs/llm_client_spec.md`](docs/llm_client_spec.md).
 
 ## What it takes off a caller
 
