@@ -5,6 +5,10 @@ behind an API Gateway. Services talk synchronously over HTTP — no broker, no e
 is an independent deploy unit owning its ECR repository, Terraform roots and pipelines, so rolling
 one out touches nothing else.
 
+This README is the short version; the framework specification — the full contract, the defaults a
+service inherits and the reasoning behind them — is
+[`docs/holahost_frame.md`](docs/holahost_frame.md).
+
 ## Service types
 
 | Type | Role |

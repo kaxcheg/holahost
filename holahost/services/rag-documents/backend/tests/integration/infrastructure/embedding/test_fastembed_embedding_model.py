@@ -140,7 +140,10 @@ def test_chunks_fill_the_configured_window(embedder: FastembedEmbeddingModel) ->
         chunk_overlap=16,
         max_input_tokens=embedder.max_input_tokens(),
     )
-    paragraph = " ".join(["Заселение начинается в три часа дня по местному времени."] * 60)
+    # A non-English sample on purpose: the model is multilingual, and its tokenizer splits
+    # such text into more tokens per word than English, which is the harder case for the
+    # window arithmetic.
+    paragraph = " ".join(["La entrada comienza a las tres de la tarde, hora local."] * 60)
     chunks = chunker.split([TextFragment(text=paragraph, page=PageNumber(1))])
 
     sizes = [embedder.count_tokens(chunk.text) for chunk in chunks]

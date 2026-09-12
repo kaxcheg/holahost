@@ -37,6 +37,9 @@ htmlcov/
 .claude/
 CLAUDE.md
 
+# Specification drafts kept locally; the published versions live in docs/
+**/ru_docs/
+
 # Terraform (keep .terraform.lock.hcl tracked)
 .terraform/
 *.tfstate

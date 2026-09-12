@@ -84,7 +84,9 @@ make dev-down-v  # stop and wipe volumes
 
 Configuration comes from `infra/envs/dev/.env`, a local copy of the committed `.env.example`.
 Operating it on staging and prod — first deploy, verification, upgrade, rollback, secret rotation —
-is [`docs/runbook.md`](docs/runbook.md).
+is [`docs/runbook.md`](docs/runbook.md). The design in full — the domain, the schema, the error
+contract and the decisions behind them — is
+[`docs/rag_documents_spec.md`](docs/rag_documents_spec.md).
 
 ```bash
 make test        # unit tests

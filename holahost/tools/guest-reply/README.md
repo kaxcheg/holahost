@@ -13,7 +13,8 @@ second deploy unit. It does what an Orchestration Service will later do, and no 
 domain logic of its own, and anything it grows beyond the list below is a sign the decision belongs
 in a service instead.
 
-See the platform contract in [`../../README.md`](../../README.md).
+See the platform contract in [`../../README.md`](../../README.md); the full design is
+[`docs/guest_reply_spec.md`](docs/guest_reply_spec.md).
 
 ## Commands
 
