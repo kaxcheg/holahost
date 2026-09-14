@@ -506,6 +506,11 @@ with:
 - Authentication and authorization, the Tech Constraints Doc, Infrastructure and CI/CD — update the
   corresponding sections of this specification if the microservice's design decisions affect the
   shared stack or the briefs below.
+- Reuse — check the design against "Reusable shared entities": what already exists there is used,
+  not re-implemented; a piece that is the same for any service and would break silently as a
+  per-service copy is extracted (a library, the service template, a Terraform module, a CI
+  action) — as a placeholder until the first development that needs it; the domain layer stays
+  the service's own (see "What is deliberately not extracted").
 
 ## Individual conditions for designing a microservice
 
@@ -655,6 +660,32 @@ implementation, not to the contract.
 **Why before the body is parsed.** As a dependency, the check fires after the framework has already
 read the body: a caller that has exhausted its quota still manages to upload the whole file before
 hearing `429`.
+
+### Brief: domain exceptions
+
+**The service declares.** One type for every invariant violation in `domain/`, in its own
+`domain/exceptions.py`: `DomainValidationError(ValueError)` with `field: str | None`. It is not
+extracted into a library, for the same reason as the base classes for value objects and entities.
+
+**What `field` says** is read, not assumed:
+
+- **set** — the violation traces back to a request field. The use case that knows which one
+  translates it into a published application error (`InvalidPayloadError` or one of the service's
+  own) and names the field from `field` rather than re-deriving it;
+- **`None`** — nothing the caller sent could have caused it: a defect. Nothing translates it; the
+  interface lists the type in `create_edge_app(silent_500_types=...)`, and it is answered
+  `500 InternalError` with an empty body.
+
+**The contract.** A subclass is added only when one call can raise the type for more than one reason
+and the caller has to select one of them: selecting on a `field` string is a comparison no type
+checker sees. The type is not a `PlatformError` — the domain knows nothing of HTTP, and a published
+identity belongs to the application layer's errors. Its message is server-side only: it reaches the
+log, never a response body.
+
+**Why a named type rather than a bare `ValueError`.** An exception nothing handles reaches the
+bare-`Exception` handler, which re-raises after writing the response, and uvicorn prints a traceback
+outside the JSON log and its scrubbing. Registering the handler for `ValueError` itself would catch
+far more than the domain — Pydantic's `ValidationError` is a `ValueError` too.
 
 ### Brief: a microservice's infrastructure and CI/CD
 

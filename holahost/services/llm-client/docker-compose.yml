@@ -1,0 +1,127 @@
+name: llm-client
+
+# The one compose manifest for this service, used two ways:
+#   - Locally: `make dev-up` builds the image explicitly and tags it `llm-client:dev` before this file
+#     is touched, then docker-compose.dev.yml publishes the app port to the host. There is no
+#     gateway in front, so setting X-Request-ID is the caller's job.
+#   - On staging and prod: this same file is written to /opt/services/llm-client/ by the deploy
+#     pipeline's SSM command and run there with IMAGE=<ecr-repo>@sha256:<digest>.
+#
+# There is no `build:` section: this file only ever runs an image. On the instance the build
+# context does not even exist, and keeping dev on the same footing means `PYTHON_VERSION` need not
+# appear here at all — Compose interpolates `${VAR}` eagerly for the whole file, so any variable
+# mentioned must be resolvable on every invocation, build or not.
+services:
+  postgres:
+    image: postgres:16
+    # `env_file` rather than `environment:` for the database name: the official Postgres image
+    # reads these as plain container env vars and does not care how they got there. Reading the
+    # file straight into the container keeps those values off the list of things that must be
+    # exported in the host shell before Compose can even parse this file.
+    #
+    # USER and PASSWORD are overridden below, and the override is the point. To this image
+    # `POSTGRES_USER` names the role initdb creates as a SUPERUSER — not "the account the
+    # application uses". A superuser bypasses row-level security unconditionally, `FORCE ROW LEVEL
+    # SECURITY` included, so if RLS is a service's enforcement of owner isolation, the two
+    # identities have to be kept apart here, at the one place both are visible:
+    #   - `postgres`, below — the bootstrap superuser. Runs migrations (CREATE EXTENSION, CREATE
+    #     POLICY, table ownership) and owns the tables. Never used by the running app.
+    #   - `${POSTGRES_USER}` from infra/envs/<env>/.env — the app role, created without
+    #     SUPERUSER/BYPASSRLS by app/scripts/provision_app_role.py, holding plain DML grants only.
+    # `environment:` wins over `env_file:` in Compose, which is what keeps them apart. The app
+    # refuses to serve traffic if it ever connects as a role that can bypass RLS.
+    #
+    # PASSWORD stays host-interpolated rather than folded into env_file: staging's and prod's
+    # committed .env carry no password at all (Secrets Manager holds it), so `env_file:` would
+    # inject nothing and the Postgres entrypoint would refuse to start. The deploy supplies it as
+    # an inline env var on the `docker compose` invocation, which only `environment:` picks up.
+    env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
+    environment:
+      # The same variable `SuperuserSettings.postgres_superuser` reads, with the same default —
+      # not a second literal that happens to agree. One identity has two sides: the role initdb
+      # creates, here, and the role the deploy's elevated steps connect as (migrations, then
+      # provisioning). A hardcoded name here would leave the setting influencing only the second,
+      # so overriding it would authenticate as a role the server never created.
+      #
+      # Override it in `infra/envs/<env>/.env` and nowhere else — that file is the only source
+      # reaching both sides. Exporting it in the invoking shell reaches only this line.
+      #
+      # The name is fixed at initdb: it is written into the `pgdata` volume when the database is
+      # first created, and changing it afterwards renames nothing. An existing environment needs
+      # its volume recreated (`make dev-down-v` in dev). Chosen once per environment, not a knob.
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?requires env var POSTGRES_SUPERUSER_PASSWORD — the postgres bootstrap superuser password, NOT the app role's}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `$$`, not `$`: Compose would otherwise resolve these itself at parse time. Escaping leaves
+      # a literal `$VAR` for the shell inside the container, where `environment:` and `env_file:`
+      # above already guarantee both are set. The bootstrap superuser is the right identity for a
+      # liveness probe — it exists from initdb onward, before the first deploy provisions the app
+      # role.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    # `image:` is the only way this service resolves. In dev `make dev-up` has already built
+    # `llm-client:dev`, so this finds it in the local cache; on staging and prod the pipeline sets
+    # IMAGE to a pushed digest.
+    #
+    # Neither IMAGE nor ENV has a fallback. A default would not make a misconfigured deploy
+    # succeed — it would fail more confusingly, as a pull error or a missing-file error instead of
+    # a clear statement that the variable was unset.
+    #
+    # `${ENV}` in the env_file path is Compose's host-shell interpolation, resolved before any
+    # container starts, purely to pick which file to load. `Settings.env` inside the container
+    # reads the `ENV=` line from that already-selected file. Two mechanisms, two environments,
+    # agreeing by construction because each infra/envs/<x>/.env carries `ENV=<x>`.
+    image: ${IMAGE:?requires env var IMAGE — which image to run}
+    env_file: ["infra/envs/${ENV:?requires env var ENV — selects which infra/envs/<env>/.env to load}/.env"]
+    networks: [backbone, default]
+    # No `volumes:` here: a service that needs one — a model cache, a scratch area — adds it, with
+    # the mount path read from the same env var the application reads rather than a second literal.
+    #
+    # No `ports:` here either. Publishing the app port is a dev-only concern and lives in
+    # docker-compose.dev.yml, which the Makefile's dev targets add with a second `-f`. This file
+    # is deployed verbatim to the instance, so a `ports:` key here — however defaulted — would be
+    # published there too, opening a second unguarded door past the gateway and past the
+    # `X-Request-ID` the edge treats as proof the caller came through the intended path.
+    #
+    # The `awslogs` driver is what gets logs off the instance. Without it they stop at the
+    # container's stdout: no CloudWatch agent runs there, so the log group this service's
+    # Terraform creates would receive nothing, and every metric filter, alarm and dashboard built
+    # on that group would read as healthy while the service is silent, because
+    # `treat_missing_data = "notBreaching"` cannot tell an outage from a quiet period.
+    #
+    # AWS_REGION and ENV come from the same `--env-file` Compose already reads: staging's and
+    # prod's committed .env carry AWS_REGION, dev's does not. AWS_REGION deliberately has no `:?`
+    # guard, unlike every other mandatory variable here, because interpolation is eager for the
+    # whole file and a guard would fire on `make dev-up` too — where dev has no region and
+    # overrides this driver away entirely. On staging and prod an empty region is not silent: the
+    # daemon refuses to start a container whose log driver cannot attach.
+    #
+    # `awslogs-create-group` is absent on purpose. The group is a Terraform resource with a
+    # retention policy; letting the driver create it on demand would leave an unmanaged group
+    # retained forever if the region or env were ever wrong.
+    #
+    # Requires `logs:CreateLogStream` and `logs:PutLogEvents` on the instance role — platform-level
+    # and outside this service's Terraform. See docs/runbook.md.
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: /holahost/${ENV}/llm-client
+        awslogs-stream-prefix: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  backbone:
+    external: true
+
+volumes:
+  pgdata:

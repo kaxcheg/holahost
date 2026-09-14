@@ -69,10 +69,10 @@ stateDiagram-v2
     resolved --> rejected_context: the estimated input exceeds the model's max_context
     resolved --> budget_ok: neither the caller's nor the provider's budget is exhausted
     resolved --> exhausted: the budget is exhausted
-    exhausted --> rejected_budget: the reject policy
-    exhausted --> downgraded: the downgrade policy
-    downgraded --> budget_ok: a cheaper model was chosen
-    downgraded --> rejected_budget: there is no cheaper model, or its budget is exhausted too
+    exhausted --> rejected_budget: the provider's budget, or the caller's under the reject policy
+    exhausted --> downgraded: the caller's budget under the downgrade policy
+    downgraded --> budget_ok: the cheaper model, charged to the caller's downgrade pool
+    downgraded --> rejected_budget: no cheaper model, or its pool or provider budget is exhausted
     budget_ok --> calling: calling the provider
     calling --> completed: 200
     calling --> retrying: 429 / 5xx / timeout
@@ -95,9 +95,9 @@ stateDiagram-v2
 | `accepted` | the alias or `model_id` resolves to an available model | `resolved` | — |
 | `accepted` | the alias or `model_id` is unknown, or the provider is disabled | `rejected_model` | 400 `UnknownModelError` |
 | `resolved` | the input is longer than the model's `max_context` | `rejected_context` | 422 `ContextOverflowError` |
-| `resolved` | the caller's or the provider's budget is exhausted, policy `reject` | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
-| `resolved` | the budget is exhausted, policy `downgrade`, a cheaper model is available | `budget_ok` | — (the actual model comes back in the response) |
-| `downgraded` | there is no cheaper model, or its budget is exhausted too | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
+| `resolved` | the provider's budget is exhausted, or the caller's own under policy `reject` | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
+| `resolved` | the caller's own budget is exhausted, policy `downgrade`, the cheaper model is set and neither the caller's downgrade pool nor that model's provider budget is exhausted | `budget_ok` | — (the actual model comes back in the response) |
+| `downgraded` | there is no cheaper model, or the caller's downgrade pool or its provider's budget is exhausted too | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
 | `calling` | the provider answered `200` | `completed` → `accounted` | 200 + text + usage + the actual provider and model |
 | `calling` | the provider answered `429`/5xx or timed out, attempts remain | `retrying` → `calling` | — (invisible from outside) |
 | `retrying` | attempts exhausted, there is a next provider in the chain | `failing_over` → `calling` | — (invisible from outside) |
@@ -159,8 +159,8 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
 | `RETRY_MAX_ATTEMPTS`, `RETRY_BACKOFF_BASE`, `RETRY_TOTAL_BUDGET` | the upstream retry policy |
 | `MAX_INPUT_BYTES` | the maximum request size (`system` + `messages`) |
 | `MAX_OUTPUT_TOKENS` | the ceiling on the answer's length |
-| `BUDGET_WINDOW`, `BUDGET_CAP_PER_CLIENT`, `BUDGET_CAP_PER_PROVIDER` | the budget's window and ceilings |
-| `ON_BUDGET_EXHAUSTED`, `DOWNGRADE_MODEL` | the policy on budget exhaustion and the target cheaper model |
+| `BUDGET_WINDOW`, `BUDGET_CAP_PER_CLIENT`, `BUDGET_CAP_DOWNGRADE_PER_CLIENT`, `BUDGET_CAP_PER_PROVIDER` | the budget's window and ceilings |
+| `ON_BUDGET_EXHAUSTED`, `DOWNGRADE_MODEL` | the caller's policy on exhaustion of its own budget and the target cheaper model |
 | `GENERATION_P95_BUDGET` | the target p95 of generation time |
 | `RATE_LIMIT_DEFAULT` | the per-service limit per `client_id`+`sub` pair |
 | `JWT_CLOCK_SKEW` | the clock-skew allowance when checking `exp`/`iat` |
@@ -254,14 +254,18 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
 > As a Caller, I want an optional cheaper answer instead of a hard refusal when the budget is out, so that non-critical flows keep working.
 
 **AC:**
-- Under the `downgrade` policy, budget exhaustion moves the request to `DOWNGRADE_MODEL` rather than
-  refusing it.
+- Under the `downgrade` policy, exhaustion of the caller's own budget (`BUDGET_CAP_PER_CLIENT`) moves
+  the request to `DOWNGRADE_MODEL` rather than refusing it.
+- A downgraded request is charged to a pool of its own, `BUDGET_CAP_DOWNGRADE_PER_CLIENT`, not to the
+  exhausted one (B-4).
+- Exhaustion of the provider's budget is refused whatever the policy.
 - The cheaper model is set by a setting separate from `MODEL_ALIASES`; changing the alias table does
   not affect it.
 - The response carries the actual model, so the caller can tell degradation from normality without
   guessing.
-- If `DOWNGRADE_MODEL` is unset, or its own budget is exhausted too → `429 BudgetExhaustedError`.
-- The policy has a default and is overridden per `client_id`.
+- If `DOWNGRADE_MODEL` is unset, or the caller's downgrade pool or the cheaper model's provider budget
+  is exhausted too → `429 BudgetExhaustedError`.
+- The policy is the caller's, not a budget's: it has a default and is overridden per `client_id`.
 
 ### US-L07: The bounds of input and output
 
@@ -471,7 +475,16 @@ backend/
 
 Retries, model selection, failover and the budget check are orchestration, so they live in the use
 case rather than in the provider adapter. The adapter knows only "call this model with these
-messages" and translates vendor errors into domain classes.
+messages", and translates what the vendor answers into the port's terms: vendor errors into
+`TransientProviderError` / `PermanentProviderError`, and the vendor's stop reason into `FinishReason`
+— through a mapping table of its own for each provider. For `anthropic`:
+
+| `stop_reason` | Result |
+|---|---|
+| `end_turn`, `stop_sequence` | `FinishReason.stop` |
+| `max_tokens` | `FinishReason.max_tokens` |
+| `refusal` (arrives with `200`) | `PermanentProviderError` |
+| `tool_use`, `pause_turn` | unreachable: tools are out of scope (§3.9) |
 
 There are no `infrastructure/auth/` or `interface/http/middleware/` directories: `holahost-auth`
 hands over a ready-made middleware and `current_token`, so there is nothing to adapt, and the edge's
@@ -546,8 +559,13 @@ fallback_chain: [anthropic]          # the order of providers during failover
 downgrade_model: { provider: anthropic, model: claude-haiku-4-5 }   # the downgrade policy's target
 ```
 
-An incorrect config — an alias pointing at a non-existent model, an enabled provider with no secret,
-an empty `fallback_chain` — means the service does not start and writes the reason (US-L14).
+An incorrect config — an alias pointing at a non-existent model, an enabled provider with no secret
+or no models, an empty `fallback_chain` — means the service does not start and writes the reason
+(US-L14).
+
+The exhaustion policy (`ON_BUDGET_EXHAUSTED`) is a caller's setting — a default overridden per
+`client_id` — not an attribute of a budget: a provider's budget is shared by callers whose policies
+differ (§4.3).
 
 ### 3.7 Parameters and limits (numbers)
 
@@ -571,7 +589,8 @@ exists, load that does not fit the budget is not served by the service.
 | `BUDGET_WINDOW` | a day, reset at 00:00 UTC, lazily on the first request of a new window | aggregated over the usage log on the fly, so no separate scheduler is needed |
 | `BUDGET_CAP_PER_CLIENT` | 2,000,000 input and 200,000 output tokens per day | counted separately: the prices differ by a multiple, and one counter would lie |
 | `BUDGET_CAP_PER_PROVIDER` | 10,000,000 input and 1,000,000 output tokens per day | protection of the platform's wallet on top of the per-client ceilings |
-| `ON_BUDGET_EXHAUSTED` | `reject` by default, overridden per `client_id` | a silent downgrade by default should not come as a surprise |
+| `BUDGET_CAP_DOWNGRADE_PER_CLIENT` | input and output tokens per day, counted separately; the value is a deferred decision | the pool downgraded requests are charged to (US-L06) |
+| `ON_BUDGET_EXHAUSTED` | `reject` by default, overridden per `client_id`; applies to the caller's own budget only | a silent downgrade by default should not come as a surprise |
 | `DOWNGRADE_MODEL` | set in the config, applied only under the `downgrade` policy | separate from the alias table (ADR B-4) |
 | `MODEL_TOKENS_PER_SECOND` | a conservative estimate of generation speed, set in the config per model | an input to the pre-flight check (§3.7.1) |
 | `IDEMPOTENCY_KEY_TTL` | 15 minutes | the window in which a repeat with the same key is recognised as a duplicate |
@@ -667,17 +686,16 @@ implementation, not the object's nature. By that criterion there are five entiti
 
 | VO | Based on | Invariants |
 |---|---|---|
-| `RequestId` | `uuid.UUID` | generated by its own `new()`; ties the request, the usage record and the log together |
+| `GenerationId` | `uuid.UUID` | generated by its own `new()` for each generation; the usage record's identity. Not `X-Request-ID`: that one is chosen by the caller, and two paid generations may share it |
 | `ClientId` | `str` | non-empty; taken from a token claim, not from the request body |
 | `Subject` | `str` | non-empty; the token's `sub` (for s2s it equals `client_id`) |
 | `ProviderName` | `str` | a value from the registry; an unknown name is not a VO but a resolution error |
 | `ModelId` | `str` | the model's identifier at the provider |
-| `ModelAlias` | `str` | a logical name (`fast`, `quality`, `default`); resolves to a provider + model pair |
 | `TokenCount` | `int` | ≥ 0 |
 | `Usage` | a pair of `TokenCount` | input and output separately: the prices differ by a multiple, and one counter would lie |
 | `IdempotencyKey` | `str` | 1…128 characters; unique within a `ClientId` and an `IDEMPOTENCY_KEY_TTL` window |
-| `Message` | role + text | the role from a fixed set; the text non-empty |
-| `FinishReason` | an enumeration | a normalised value, the same across all providers |
+| `Message` | role + text | the role is `user` (B-14); the text contains non-whitespace characters and is kept unchanged |
+| `FinishReason` | an enumeration: `stop`, `max_tokens` | the same across all providers; a stop sequence is not told apart from a natural end, because not every provider reports it; a content refusal is a provider error, not a value (§3.2) |
 
 ### 4.2 `Provider` and `Model`
 
@@ -693,8 +711,7 @@ startup and hands back typed objects, not settings dictionaries.
 |---|---|---|
 | `name` | `ProviderName` | |
 | `enabled` | `bool` | a disabled one is excluded from alias resolution and from the failover chain |
-| `api_key_ref` | `str` | a reference to a secret, not the value |
-| `models` | a set of `Model` | non-empty for an enabled provider |
+| `api_key_ref` | `str` | a reference to a secret, not the value; may be absent only for a disabled provider |
 
 `Model`:
 
@@ -708,10 +725,14 @@ startup and hands back typed objects, not settings dictionaries.
 | `tokens_per_second` | `int` | > 0, or the pre-flight estimate (§3.7.1) divides by zero |
 | `deprecated` | `bool` | a marked model still resolves, but no new aliases are pointed at it |
 
-**Invariants:** an enabled provider has at least one available model and a resolvable reference to a
-secret; `max_context` is strictly greater than `max_output`; `tokens_per_second` > 0. A violation is
-caught at startup — the service does not come up (US-L14). The key's value is not held in the object:
-it is read when the provider is called and never reaches the domain.
+**Invariants:** an enabled provider has a resolvable reference to a secret; `max_context` is strictly
+greater than `max_output`; `tokens_per_second` > 0. A violation is caught at startup — the service
+does not come up (US-L14). The key's value is not held in the object: it is read when the provider is
+called and never reaches the domain.
+
+`Provider` holds no models: `Model` refers to its provider, and a reference back cannot be built
+between immutable objects. "An enabled provider has at least one available model" is a property of
+the whole registry, checked when the registry is loaded (§3.6).
 
 **Lifecycle:** the state changes with a rollout of a new configuration; a provider or model removed
 from the config stops resolving but stays readable in the usage log as a historical fact.
@@ -725,16 +746,16 @@ implementing it, not a reason to consider it something else.
 
 | Field | Type | Note |
 |---|---|---|
-| `scope` | an enumeration | `client` or `provider` — two independent dimensions |
-| `key` | `ClientId \| ProviderName` | the subject of the ceiling |
+| `scope` | an enumeration | `client` (the caller's own spend), `client_downgrade` (the caller's downgraded requests — a pool of its own, US-L06), `provider` |
+| `key` | `ClientId \| ProviderName` | `ClientId` for both client scopes, `ProviderName` for `provider` |
 | `window_start` | `datetime` (UTC) | the start of the current day; the boundary is set by the query, not by a stored field |
 | `spent` | `Usage` | an aggregate over the usage log: input and output separately |
 | `caps` | `Usage` | the window's ceilings from the config |
-| `policy` | an enumeration | `reject` or `downgrade` |
 
 **Invariants:** `spent` never decreases within a window — a consequence of the log being append-only;
-the ceilings are positive; the `downgrade` policy requires a cheaper model to be set, or it degenerates
-into `reject`.
+the ceilings are positive; the key's type matches the scope. The exhaustion policy is not a budget's
+attribute: it belongs to the caller, while a provider's budget is shared by callers whose policies
+differ.
 
 **Lifecycle:** the object lives for the duration of one check. Resetting the window is neither an event
 nor an operation: a new day changes the aggregate's range, and there is nothing to zero.
@@ -743,7 +764,8 @@ nor an operation: a new day changes the aggregate's range, and there is nothing 
 
 | Field | Type | Note |
 |---|---|---|
-| `id` | `RequestId` | equals the request's identifier |
+| `id` | `GenerationId` | generated for the generation (§4.1) |
+| `request_id` | `str` | the request's `X-Request-ID`, for correlation with the logs |
 | `client_id` | `ClientId` | |
 | `subject` | `Subject` | |
 | `provider`, `model` | `ProviderName`, `ModelId` | the **actual** ones, not the requested ones |
@@ -829,6 +851,7 @@ idempotency keys live in process memory (B-9); prompts and answers are stored no
 -- It is also the source of truth for the budget: spend in a window = an aggregate over this table.
 CREATE TABLE usage_records (
     id            uuid        PRIMARY KEY,
+    request_id    text        NOT NULL,   -- X-Request-ID: correlation with the logs, not the identity
     client_id     text        NOT NULL,
     subject       text        NOT NULL,
     provider      text        NOT NULL,
@@ -858,8 +881,10 @@ SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0)
    AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC');
 ```
 
-and symmetrically by `provider`. Both queries are served by the existing indexes and read only the
-current day's rows.
+The caller's two pools do not overlap: the `client` scope adds `AND NOT downgraded`, the
+`client_downgrade` scope `AND downgraded` (US-L06); the `provider` scope aggregates symmetrically by
+`provider` over all rows. The queries are served by the existing indexes — the `downgraded` filter is
+applied within the same index range — and read only the current day's rows.
 
 No separate counter table is introduced: it would be a denormalised sum of this same table. It would
 not give atomic budget reservation either — the check happens before the provider call and the
@@ -882,7 +907,7 @@ extension E-5, and it is switched on from a measurement rather than in advance.
 
 | Operation | What happens in the database |
 |---|---|
-| Checking the budget | two aggregates over an index: the current day for the caller and for the provider |
+| Checking the budget | an aggregate over an index per checked scope for the current day: the caller's own pool and the provider, plus the caller's downgrade pool and the cheaper model's provider when the policy moves the request |
 | A successful call | one `INSERT` into the usage log |
 | An unsuccessful call | nothing: no row, no counter |
 | Accepting and completing a request with an idempotency key | no database access — the key's state is in process memory |
@@ -947,7 +972,8 @@ Idempotency-Key: 7c1f…            # optional
 `system` is a field of its own rather than a message with the `system` role in the common list. That
 is the guarantee from §3.8: the service is obliged to preserve the role boundary the caller set, and a
 separate field makes that boundary indestructible — it becomes impossible to glue an instruction
-together with untrusted data by mistake. In `messages`, the `user` and `assistant` roles are allowed.
+together with untrusted data by mistake. In `messages`, only the `user` role is allowed; `assistant`
+arrives with a multi-turn conversation (E-6).
 
 `provider` and `model` in the response are the **actual** ones. If they diverged from what was
 requested, that is visible through `downgraded` (the budget policy fired) and `failed_over` (a
@@ -991,7 +1017,7 @@ data.
 | `ContextOverflowError` | 422 | the input estimate exceeds the model's `max_context` | `max_context`, `estimated` | not until the input is reduced |
 | `RequestTooSlowForSyncError` | 422 | pre-flight: the time estimate does not fit the budget (§3.7.1) | `max_tokens_allowed`, `budget_seconds` | not until `max_tokens` is reduced |
 | `DuplicateRequestError` | 409 | the `Idempotency-Key` is already in flight or already completed | `state` (`in_flight`/`completed`) | no |
-| `BudgetExhaustedError` | 429 | a ceiling is exhausted under the `reject` policy; `Retry-After` is mandatory | `scope` (`client`/`provider`), `resets_at` | yes, after `resets_at` |
+| `BudgetExhaustedError` | 429 | a ceiling is exhausted and the request cannot be served (US-L05, US-L06); `Retry-After` is mandatory | `scope` (`client`/`client_downgrade`/`provider`), `resets_at` | yes, after `resets_at` |
 | `UpstreamLlmError` | 502 | the attempts and the provider chain are exhausted | `attempts`, `upstream_status` | yes |
 
 **Platform responses** are produced by the edge rather than by this service, and they are the same
@@ -1059,14 +1085,13 @@ class BudgetRepo(Protocol):
 class UsageRepo(Protocol):
     def add(self, record: UsageRecord) -> None: ...
     # raises: StorageUnavailableError
-    # concurrency: the insert is idempotent by `request_id` (implemented as `ON CONFLICT DO NOTHING`).
+    # concurrency: the insert is idempotent by the record's `id` (implemented as `ON CONFLICT DO NOTHING`).
     #              Re-inserting the same record is the ordinary redelivery case rather than an error,
     #              so IntegrityError never arrives here and the calling code does not catch it.
     # lock: not needed — an append-only log, with no competing row updates
 
 class IdempotencyStore(Protocol):
-    def begin(self, client_id: ClientId, key: IdempotencyKey,
-              request_id: RequestId) -> None: ...
+    def begin(self, client_id: ClientId, key: IdempotencyKey) -> None: ...
     def complete(self, client_id: ClientId, key: IdempotencyKey, usage: Usage) -> None: ...
     def release(self, client_id: ClientId, key: IdempotencyKey) -> None: ...
     # raises: begin — DuplicateRequestError (carrying the in_flight/completed state);
@@ -1126,25 +1151,29 @@ resulting stack, outermost first:
 5. Routing → `interface/http/schemas.GenerateRequest`: parsing the body and the `Idempotency-Key`
    header; a validation failure → `422 InvalidPayloadError`.
 6. `GenerateUseCase.execute(cmd)`.
-7. The `holahost_http` exception handlers — a domain exception → a status and an envelope per the
-   service's `ERROR_CONTRACT`.
+7. The `holahost_http` exception handlers — an application error → a status and an envelope per the
+   service's `ERROR_CONTRACT`; a domain exception no use case translated → `500` with an empty body
+   (framework specification, "Brief: domain exceptions").
 
 ### 8.2 UC-L1 "Generate an answer"
 
 `GenerateUseCase.execute(cmd: GenerateCmd) -> GenerateResult`
 `GenerateCmd = (client_id, subject, system, messages, model_ref, max_tokens, temperature, stop, idempotency_key, request_id)`
 
+`request_id` is the request's `X-Request-ID`; the generation's own identifier is generated by
+`UsageRecord.create` (step 1.9).
+
 | # | Module and call | What happens |
 |---|---|---|
 | 1.1 | `ProvidersRepo.resolve(cmd.model_ref) -> Model` | `None`, or a disabled provider → `UnknownModelError`; the provider is reached as `model.provider` |
-| 1.2 | `IdempotencyStore.begin(client_id, key, request_id)` | only if a key was sent; on a duplicate it raises `DuplicateRequestError` with the state (`in_flight`/`completed`) |
+| 1.2 | `IdempotencyStore.begin(client_id, key)` | only if a key was sent; on a duplicate it raises `DuplicateRequestError` with the state (`in_flight`/`completed`) |
 | 1.3 | `max_tokens = min(cmd.max_tokens or model.max_output, MAX_OUTPUT_TOKENS, model.max_output)` | the truncation is recorded in the response |
 | 1.4 | `estimate_input_tokens(system, messages)` → compared against `model.max_context` | exceeding it → `ContextOverflowError` |
 | 1.5 | `preflight_fits(max_tokens, model.tokens_per_second, RETRY_TOTAL_BUDGET)` | does not fit → `RequestTooSlowForSyncError` |
 | 1.6 | `BudgetRepo.state("client", client_id)` and `BudgetRepo.state("provider", provider.name)` | two aggregates for the current window |
-| 1.7 | if either is exhausted and the policy is `reject` → `BudgetExhaustedError`; if `downgrade` → `ProvidersRepo.downgrade_target()` and a repeat of steps 1.3–1.6 for the new model | no target, or its budget is exhausted too → `BudgetExhaustedError` |
+| 1.7 | the provider's budget exhausted → `BudgetExhaustedError`; the caller's own exhausted under `reject` → `BudgetExhaustedError`; under `downgrade` → `ProvidersRepo.downgrade_target()`, a repeat of steps 1.3–1.5 for the new model, then `BudgetRepo.state("client_downgrade", client_id)` and the new model's provider budget | no target, or the downgrade pool or that provider's budget is exhausted → `BudgetExhaustedError` |
 | 1.8 | a loop over `ProvidersRepo.chain(...)`: `GenerationProvider.generate(model, …, timeout_s=PROVIDER_TIMEOUT) -> Generation` | `TransientProviderError` → a repeat with backoff within `RETRY_MAX_ATTEMPTS` and `RETRY_TOTAL_BUDGET`; attempts exhausted → the next provider in the chain; the chain exhausted → `UpstreamLlmError` |
-| 1.9 | `UsageRecord.create(request_id, client_id, subject, generation.provider, generation.model, generation.usage, latency, downgraded, failed_over)` | the actual provider and model are taken from `Generation`, not from the request |
+| 1.9 | `UsageRecord.create(request_id, client_id, subject, generation.provider, generation.model, generation.usage, latency, downgraded, failed_over)` | the actual provider and model are taken from `Generation`, not from the request; the record's `id` is generated here |
 | 1.10 | `with UnitOfWork(): UsageRepo.add(record)`; then `IdempotencyStore.complete(...)` | a failure at any earlier step → `IdempotencyStore.release(...)`, and no usage record |
 | 1.11 | `GenerateResult(text, usage, provider, model, finish_reason, downgraded, failed_over)` | |
 
@@ -1257,6 +1286,8 @@ them.
 
 ### Backend — Domain
 
+The service skeleton — a copy of `holahost/templates/service` — arrives with `L-01`–`L-03`.
+
 - `L-01` Value objects — the identifiers, `Usage` as a pair of separate counters, `Message`,
   `IdempotencyKey`, `FinishReason`
 - `L-02` Entities — `Provider`, `Model` (with the provider object inside it), `Budget`, `UsageRecord`,
@@ -1295,7 +1326,8 @@ them.
 
 ### Infrastructure
 
-- `L-18` The Dockerfile and `docker-compose.yml` — the application and Postgres with a volume
+- `L-18` The Dockerfile and `docker-compose.yml` from the template, adapted — the application and
+  Postgres with a volume
 - `L-19` The `infra/common` TF root — ECR with a lifecycle policy
 - `L-20` The `infra/envs/<env>` TF root — the database secret, the provider secrets, the log group, and
   alarms on upstream failures, budget utilisation and the share of `downgraded`
@@ -1309,7 +1341,8 @@ them.
   the paid smoke check on a cheap model
 - `L-24` The `promote-prod` pipeline — resolving the digest, migrations, the rollout, smoke, the
   approval gate
-- `L-25` The Makefile — lint, types, tests, `lint-imports`, `dev-up`, migrations, `ci-local`
+- `L-25` The Makefile from the template, adapted — lint, types, tests, `lint-imports`, `dev-up`,
+  migrations and `ci-local` come from `common.mk`
 
 ---
 
@@ -1476,6 +1509,23 @@ own spend only" becomes part of authorization.
 
 **Trigger.** The second LLM-consuming service on the platform.
 
+### E-6. Multi-turn conversation
+
+**Why.** A chat assistant sends the history of a conversation, not a single question: the model has
+to see its own earlier answers as its own turns.
+
+**Decision.** The `assistant` role in `messages`, together with the turn-order rules the providers
+impose — which role opens the list, that it closes on a `user` turn, how turns alternate — checked by
+the service before the provider is called. Without those rules a request ending on an `assistant`
+turn is a prefill: some models accept it and others refuse it, so re-pointing an alias would turn a
+working request into a provider error.
+
+**What changes in the contract.** `role` accepts `assistant`; a list breaking the turn order is
+refused with `422 InvalidPayloadError`. Existing callers, which send `user` only, are unaffected.
+
+**Trigger.** The first caller that holds a conversation — an Orchestration Service such as a chat
+assistant (§1.3.4).
+
 ---
 
 ## Deferred decisions
@@ -1485,6 +1535,10 @@ own spend only" becomes part of authorization.
 | 1 | The service's entry in `auth`'s git config: the service's `client_id`, the list of callers with `llm-client` in `allowed_audiences`, and their tokens' TTLs — Stage 11 |
 | 3 | The value of `MODEL_TOKENS_PER_SECOND` for each model: taken from a measurement on the target instance rather than from the provider's documentation — fixed at first implementation |
 | 6 | The threshold at which the budget check by aggregate stops fitting the time budget and E-5 is switched on — set by measurement rather than in advance |
+| 3 | The value of `BUDGET_CAP_DOWNGRADE_PER_CLIENT`: no caller uses the `downgrade` policy yet — fixed together with the first one that does, in the registry configuration |
+| 8 | Which model to call at the next provider during failover: `ProvidersRepo.chain()` returns providers, while `GenerationProvider.generate` needs a model — decided before a second provider enters `FALLBACK_CHAIN` |
+| 8 | The spend of a refused call: a content refusal arrives with `200` and confirmed `usage`, but becomes `PermanentProviderError` and creates no usage record — a second gap in accounting next to the timeout (B-12), here with the provider's figures at hand |
+| 8 | A vendor stop reason outside the adapter's mapping table (§3.2) — decided together with the adapter |
 
 ## Stage 9. Architecture Decision Records
 
@@ -1530,13 +1584,17 @@ API rather than data of its own.
 **B-4. Budget exhaustion is a manageable policy, not only a refusal**
 Context: the budget has to protect the platform's wallet, but a hard refusal is not acceptable in
 every scenario — some callers would prefer a cheaper answer to no answer.
-Decision: the behaviour on exhaustion is set by a `reject | downgrade` policy; `downgrade` moves the
-request to a cheaper model set by a **separate setting**, independent of the logical alias table; the
-actual model is returned in the response.
+Decision: the behaviour on exhaustion of a caller's own budget is set by that caller's `reject |
+downgrade` policy; `downgrade` moves the request to a cheaper model set by a **separate setting**,
+independent of the logical alias table, and charges it to a **pool of its own** per caller; the actual
+model is returned in the response. A provider's exhausted budget is refused whatever the policy.
 Rejected: `reject` only (it turns the budget into an emergency stop); a silent downgrade without
 returning the actual model (the caller cannot tell degradation from normality); downgrading by
 re-pointing an alias (it mixes two independent settings — "which model is responsible for what" and
-"what to do when the money runs out").
+"what to do when the money runs out"); downgrading against the same pool (the ceilings are in tokens
+and a cheaper model spends as many, so the repeated check meets the same exhausted counter and the
+policy never answers); ceilings in money with a "the call fits the remainder" check (prices would
+enter the calculations, and the accepted overspend within a single call would have to go).
 Consequences: non-critical scenarios keep working on a cheaper model instead of being refused, and the
 caller sees the substitution in the response. In exchange a mode of quiet quality degradation appears:
 if nobody watches the share of `downgraded` (§8.4), the platform answers for months with a model other
@@ -1675,12 +1733,14 @@ is running out" alert comes out deferred.
 Context: providers accept a system instruction differently — as a separate field or as the first
 message in the list; meanwhile §3.8 obliges the service not to destroy the role boundary the caller
 set.
-Decision: `system` is a separate request field; only the `user` and `assistant` roles are allowed in
-`messages`.
+Decision: `system` is a separate request field; only the `user` role is allowed in `messages` —
+`assistant` arrives with a multi-turn conversation (E-6).
 Rejected: a single list with a `system` role (the instruction could accidentally be placed after
 untrusted data, or lost when concatenating — the boundary that the injection defence depends on
 becomes optional); normalising by "the first message is taken to be the system one" (an implicit rule
-the caller is obliged to remember).
+the caller is obliged to remember); allowing `assistant` without the turn-order rules (a request could
+end on an `assistant` turn — a prefill some models refuse — so re-pointing an alias would turn a
+working request into a provider error).
 Consequences: gluing an instruction together with untrusted content by mistake becomes impossible, and
 any provider's adapter receives the boundary explicitly. In exchange the contract diverges slightly
 from those vendor APIs where the system role sits in the common list — the adapter is obliged to
