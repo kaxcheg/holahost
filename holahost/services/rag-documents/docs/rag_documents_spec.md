@@ -1415,7 +1415,6 @@ conventions — defaults". Only the deviations and additions are here.
 | **`docker build` in `ci`** | the image is heavy because of `onnxruntime`; the layers are cached, but the model is **not** baked into the image (§11), so the size is kept in check by a separate step in the pipeline |
 | **Migrations** | the first migration creates the `vector` extension and needs privileges that the database owner has in the service's container; on a managed DBMS that would become a separate question |
 | **Smoke after a rollout** | `GET /api/rag-documents/health` answers `200` only after the model is loaded into memory, and on a cold volume it is downloaded first. The smoke check is obliged to retry until readiness within a bounded waiting window, otherwise the rollout will fail spuriously |
-| **Installing the dependencies in `ci`** | on top of the default: before the hooks, all the shared libraries are installed in the order of their path dependencies (`observability` → `http` → `auth`, with `db` separately) — the repo-root hooks iterate over every package with a `pyproject.toml`, and `poetry run` in an empty venv silently fails to find the tool |
 | **The order in `deploy`** | no difference: migrations before the container comes up |
 
 ---

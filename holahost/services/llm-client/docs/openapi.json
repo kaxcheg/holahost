@@ -1,0 +1,49 @@
+{
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Generation through external LLM providers, with model aliases, retries, failover, budgets\nand usage accounting.\n\nErrors answer `{\"error\": {\"code\", \"message\", \"details\"}}`. Branch on `code`: it is the\nerror's identity and it tags `details`, whose shape depends on it. `message` is for a\nperson reading a log — do not parse it, and compose what you show a user from `code` and\n`details`. The HTTP status is a projection of the identity, not a separate fact.\n\nOnly this service's own errors are described below. What the shared edge answers with —\n`401`/`503` for authentication, `429` over the rate limit, `413` for a request body past\nthe transport cap — belongs to the platform contract and is the same for every service\nbehind it.\n",
+    "title": "llm-client",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/llm-client/health": {
+      "get": {
+        "operationId": "health_api_llm_client_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  }
+}

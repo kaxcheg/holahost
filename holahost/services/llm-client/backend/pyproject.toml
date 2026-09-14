@@ -1,0 +1,119 @@
+[project]
+name = "llm-client"
+version = "0.1.0"
+description = "A facade over external LLM providers: generation, model aliases, retries, failover, budgets and usage accounting."
+requires-python = ">=3.12,<4.0"
+
+[tool.poetry]
+# Explicit src-layout packaging (app/domain -> importable as bare `domain`).
+# Not `package-mode = false`: that skips installing the project's own code into
+# the venv, which pytest and mypy survive through their own pythonpath settings
+# but import-linter does not — it has no config-level path option, only real
+# Python import resolution. Real packaging serves every tool uniformly, including
+# a developer running `poetry run lint-imports` by hand.
+packages = [
+    { include = "domain", from = "app" },
+    { include = "application", from = "app" },
+    { include = "infrastructure", from = "app" },
+    { include = "config", from = "app" },
+    { include = "interface", from = "app" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+fastapi = "^0.115"
+uvicorn = {extras = ["standard"], version = "^0.34"}
+pydantic-settings = "^2.7"
+boto3 = "^1.35"
+# Drop the four lines below for a service that stores nothing.
+sqlalchemy = "^2.0"
+psycopg = {extras = ["binary", "pool"], version = "^3.2"}
+alembic = "^1.14"
+holahost-auth = {path = "../../../libs/holahost-auth", develop = true}
+holahost-db = {path = "../../../libs/holahost-db", develop = true}
+holahost-http = {path = "../../../libs/holahost-http", develop = true}
+holahost-observability = {path = "../../../libs/holahost-observability", develop = true}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+testcontainers = {extras = ["postgres"], version = "^4.9"}
+boto3-stubs = {extras = ["secretsmanager"], version = "^1.35"}
+httpx = "^0.28"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "app" resolves domain/application as bare imports; "." resolves `tests` itself as
+# a namespace package (PEP 420, no __init__.py needed) so `tests._support.*` test
+# helpers are importable — needed once application-layer tests share fakes/builders,
+# unlike the domain-layer tests, which don't cross files and got by without it.
+pythonpath = ["app", "."]
+# Default "prepend" mode inserts each test file's first __init__.py-less ancestor
+# directory into sys.path — with `tests/unit/application/{exceptions,dto}/` both
+# lacking one, that ancestor is `tests/unit/`, which then shadows the real
+# top-level `application` package with the *directory* `tests/unit/application/`.
+# importlib mode collects test files by exact path instead, sidestepping sys.path
+# entirely for collection (pytest's own recommended fix for this bug class).
+addopts = "--import-mode=importlib"
+markers = [
+    "integration: requires a real Postgres via testcontainers (Docker); excluded from the fast unit run",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's whole assertion idiom is bare `assert`; S101 targets production code
+# where asserts get stripped under `-O`, not test files. S105/S106/S107 (hardcoded
+# password/secret string checks) are ignored here too: tests exercise the secret-
+# loading adapter with fake secret literals, which read identically to a real leak
+# to that checker.
+"tests/*" = ["S101", "S105", "S106", "S107"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = ["app", "."]
+# Without this, mypy treats every pydantic-settings field as a required constructor
+# kwarg — it does not know BaseSettings populates them from os.environ rather than
+# from __init__ args.
+plugins = ["pydantic.mypy"]
+# Same class of problem as pytest's --import-mode=importlib setting above, and a
+# separate fix: mypy has its own file-to-module resolution, unrelated to addopts, and by
+# default walks up through __init__.py-less directories the same way pytest's old
+# "prepend" mode did — `tests/unit/domain/test_exceptions.py` and
+# `tests/unit/application/exceptions/test_exceptions.py` both resolve to the bare
+# name `test_exceptions` and collide ("Duplicate module named..."). Fix: explicit,
+# path-based module names instead of the __init__.py-walk heuristic.
+namespace_packages = true
+explicit_package_bases = true
+
+
+[tool.importlinter]
+# `config` is listed here (import-linter needs every top-level package it should
+# recognize) but stays out of the `layers` contract below: it is a leaf exception —
+# every layer may import it, and it imports nothing from
+# domain/application/infrastructure/interface. `scripts/`, the composition root,
+# stays outside the contract entirely.
+root_packages = ["domain", "application", "infrastructure", "config", "interface"]
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+layers = [
+    "interface",
+    "infrastructure",
+    "application",
+    "domain",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
