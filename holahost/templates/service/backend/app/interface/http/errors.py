@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from holahost_http import ErrorContract, InvalidPayloadError, NotFoundError
 
+from domain.exceptions import DomainValidationError
+
 ERROR_CONTRACT: ErrorContract = {
     # `InvalidPayloadError` is required: it is what the framework's own request validation
     # is answered with, and `create_edge_app` refuses a contract without it.
@@ -30,9 +32,13 @@ ERROR_CONTRACT: ErrorContract = {
 framing, while 422 (RFC 4918 §11.2) is a syntactically correct request whose content could
 not be processed. Reserve 400 for an HTTP framing violation."""
 
-SILENT_500_TYPES: tuple[type[Exception], ...] = ()
-"""Types answered `500` through an ordinary handler rather than Starlette's bare-`Exception`
-one, which is bound to `ServerErrorMiddleware` and re-raises after writing the response —
-so uvicorn prints an unstructured traceback outside the JSON log and outside its scrubbing.
-A service's own domain-invariant error is the usual member: reaching the interface layer
-untranslated is a defect either way."""
+SILENT_500_TYPES: tuple[type[Exception], ...] = (DomainValidationError,)
+"""Answered `500` with an empty body, through an ordinary handler.
+
+A domain invariant that reached the interface layer untranslated is a defect either way: an
+unset `field` is internal by definition, and a `field`-carrying one means the use case owing
+it a published error did not produce one. Named rather than left to the bare-`Exception`
+handler, which Starlette binds to `ServerErrorMiddleware` — that one re-raises after writing
+the response, so uvicorn prints an unstructured traceback outside the JSON log and outside
+its scrubbing. Another type joins only for the same reason: it must never reach a caller,
+and its reason must still reach the log."""
