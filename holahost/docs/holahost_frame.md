@@ -822,16 +822,28 @@ is needed.
 `ruff check --fix` and `ruff format`, `mypy`, `lint-imports`, `conventional-pre-commit` at the
 `commit-msg` stage, `gitleaks`, and the basic checks (whitespace, EOF, YAML, JSON, merge-conflict,
 `check-added-large-files`). Bypassing them with `--no-verify` is forbidden by policy; CI runs the
-same set and blocks the PR.
+same checks and blocks the PR.
+
+Locally the Python hooks walk every package in the repository, so a library change is checked
+against every service that depends on it before the push. A pipeline gates only its own package: the
+generic hooks over its changed files, and `ruff`, `mypy` and `lint-imports` check-only on that
+package. Walking every package from a pipeline would make it install every other package's
+environment and block a PR on code it does not own.
 
 **Pipelines.** GitHub Actions starts from the root `.github/workflows/`, which holds **thin trigger
-stubs** `<svc>-*.yml` with a path filter of `holahost/services/<svc>/**`; the logic lives inside the
-service. A job skipped by the filter must report success into its required context, or the PR will
-hang.
+stubs** `<svc>-*.yml` with a path filter of `holahost/services/<svc>/**` plus `holahost/libs/**`;
+the logic lives inside the service. The libraries are matched because a service runs on their code:
+a library change re-runs the pipeline of every service, and that run is what checks the dependents
+against it. Every library is matched, not a list of today's dependencies — an extra run costs
+minutes, while a dependency added without updating the list breaks a service on `develop` unnoticed.
+The diff base of a new branch's first push is its merge-base with `develop`: a diff from the root
+commit matches every filter. A job skipped by the filter must report success into its required
+context, or the PR will hang.
 
 | Pipeline | Trigger | Steps |
 |---|---|---|
-| `<svc>-ci` | a PR into `develop` / `main` / `release/*`, a push to a short-lived branch | `pre-commit` → tests → `docker build` without a push → `terraform plan` of the service's roots |
+| `<svc>-ci` | a PR into `develop` / `main` / `release/*`, a push to a short-lived branch | `pre-commit` → the Python gates of the service's package → tests → `docker build` without a push → `terraform plan` of the service's roots |
+| `libs-ci` | the same, with a path filter of `holahost/libs/**` | `pre-commit` → each library's Python gates → its unit tests |
 | `<svc>-deploy-staging` | a push to `release/v*` | `terraform apply` → `docker build` and push to ECR under the `git-<sha>` tag (that one only — see "Image tags" below), remembering the digest → SSM Run Command: `alembic upgrade head`, then provisioning the application role, then `docker compose up -d` → smoke |
 | `<svc>-promote-prod` | a push of a `<svc>/v*` tag | `terraform apply` → resolve the digest by the tagged commit's `git-<sha>` **without rebuilding** → SSM Run Command: migrations, then provisioning the application role, then rolling out that same digest → smoke → an `environment: prod` gate with manual approval → tagging the rolled-out digest `release-v<version>` |
 
@@ -929,12 +941,12 @@ appeared. What remains common is `X-Request-ID` and honouring `Retry-After` — 
 trigger: the first Orchestration Service.
 
 **A reusable CI workflow.** The repeating *steps* are already extracted — those are the composite
-actions above. Within the pipeline body, five decisions are service-specific (the path filter's
-regex, the list of packages to install, the image's name and size ceiling, whether there is an
-`openapi-check`, whether there is an integration run) out of roughly a dozen steps. Designing a
-`workflow_call` with five inputs from a single example is a way to guess the wrong interface and,
-unlike with Python libraries, nothing here checks the mistake: a workflow is not typed, and the
-divergence would surface only at the second service. The trigger: the second pipeline.
+actions above. Within the pipeline body, four decisions are service-specific (the path filter's
+regex, the image's name and size ceiling, whether there is an `openapi-check`, whether there is an
+integration run) out of roughly a dozen steps. Designing a `workflow_call` with four inputs from a
+single example is a way to guess the wrong interface and, unlike with Python libraries, nothing here
+checks the mistake: a workflow is not typed, and the divergence would surface only at the second
+service. The trigger: the second pipeline.
 
 ## The operation-completion event contract
 

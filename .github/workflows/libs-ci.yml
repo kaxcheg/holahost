@@ -1,0 +1,86 @@
+name: libs-ci
+
+# The shared libraries' own pipeline: each library's gates and unit tests, run once, here. A
+# service's pipeline gates only its own package and installs none of these; it still runs on a
+# library change, because its path filter matches `holahost/libs/`, and that run is what checks
+# the service against the changed code.
+#
+# Same shape as the services' stubs (see rag-documents-ci.yml): the path check is a job-internal
+# step, so a run that finds nothing to build still completes green.
+
+on:
+  pull_request:
+    branches: [develop, main, "release/**", "hotfix/**"]
+  push:
+    branches: ["feature/**", "bugfix/**", "refactor/**", "chore/**", "docs/**", "test/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      # Order follows the path-dependency graph, which runs one way only:
+      # observability (no platform deps) <- http <- auth; db depends on neither.
+      # Installing a package into a tree where the one it path-depends on is absent
+      # resolves nothing.
+      LIBS: holahost-observability holahost-db holahost-http holahost-auth
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history — needed for the diff-based path filter below
+
+      # The base falls back the same way as in the services' pipelines: where the branch left
+      # `develop`, for the first push of a new branch.
+      - name: Detect library changes
+        id: filter
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
+            base="$(git merge-base origin/develop HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/libs/|\.github/(actions/|workflows/libs-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-python-toolchain
+        if: steps.filter.outputs.changed == 'true'
+
+      - name: Install dependencies
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          for lib in $LIBS; do
+            (cd "holahost/libs/$lib" && poetry install) || exit 1
+          done
+
+      # The four Python hooks are skipped for the same reason as in a service's pipeline: they
+      # walk every package in the repo. The next step runs the same tools on the libraries only.
+      - name: Pre-commit (generic hooks over the libraries' changed files)
+        if: steps.filter.outputs.changed == 'true'
+        env:
+          SKIP: python-ruff,python-ruff-format,python-mypy,python-import-linter
+        run: |
+          pip install pre-commit
+          pre-commit run --files $(git diff --name-only "${{ steps.filter.outputs.base }}" HEAD -- holahost/libs)
+
+      - name: Python gates
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          for lib in $LIBS; do
+            (cd "holahost/libs/$lib" \
+              && poetry run ruff check . \
+              && poetry run ruff format --check . \
+              && poetry run mypy . \
+              && poetry run lint-imports) || exit 1
+          done
+
+      - name: Unit tests
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          for lib in $LIBS; do
+            (cd "holahost/libs/$lib" && poetry run pytest -q) || exit 1
+          done

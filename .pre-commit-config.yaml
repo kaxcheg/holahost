@@ -1,6 +1,7 @@
 # Repo-global quality gates. Bypassing hooks with `git commit --no-verify` is forbidden by policy;
-# CI re-runs the same set. Language/service-specific hooks (lint, types, tests) are added per
-# service/component as they land — the generic set below applies repo-wide.
+# CI re-runs the same checks, per package (see the Python hooks below). Language/service-specific
+# hooks (lint, types, tests) are added per service/component as they land — the generic set below
+# applies repo-wide.
 default_install_hook_types: [pre-commit, commit-msg]
 # Hooks without an explicit `stages` run only at pre-commit; conventional-pre-commit opts into commit-msg.
 default_stages: [pre-commit]
@@ -36,10 +37,17 @@ repos:
   # package's real installed dependencies rather than a shared guess. Adding a
   # new package (rag-documents' backend, llm-client, ...) needs no edit here.
   #
+  # Walking every package is what a contributor's machine needs: a commit that touches a library
+  # is checked against every service that depends on it before it is pushed. A pipeline must not
+  # do that — it would install every other package's venv and gate code it does not own — so CI
+  # skips these four (`SKIP=python-ruff,...`) and runs the same tools, check-only, on its own
+  # package. A library change re-runs the pipeline of every service instead, because each
+  # service's path filter matches `holahost/libs/`; the libraries themselves are gated by libs-ci.
+  #
   # `holahost/templates/` is excluded: the service template is a tree to copy from, not code
   # that runs anywhere. What has to pass these gates is the copy, inside the service that made
-  # it. Gating on the template instead would make every contributor's machine and every
-  # service's CI install a package nobody deploys. It stays a real package, so its own
+  # it. Gating on the template instead would make every contributor's machine install a package
+  # nobody deploys. It stays a real package, so its own
   # `make lint`, `make test` and `make openapi-check` still work when someone edits it.
   #
   # Excluding it takes BOTH lines below, and they do different jobs:

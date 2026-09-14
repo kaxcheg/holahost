@@ -36,17 +36,30 @@ jobs:
       # service's Makefile is an `include`, and its Terraform roots are calls into those
       # modules.
       #
+      # Every library under `holahost/libs/` is matched, not only the ones this service imports
+      # today: the service runs on that code, so a library change has to re-run this pipeline
+      # against it — that run is what checks a dependent service. Matching all of them costs an
+      # extra run now and then; matching a list costs a broken service on `develop` the day a
+      # new dependency is added without the list. The libraries' own gates and tests are
+      # libs-ci's.
+      #
       # `holahost/templates/service` is deliberately NOT matched, and nothing below installs
       # it: the template is a tree to copy from, and what has to pass the gates is the copy,
       # in the service that made it. The repo-root hooks skip `templates/` for the same
       # reason.
+      #
+      # The first push of a new branch has no `before` (GitHub sends zeros), so the base falls
+      # back to where the branch left `develop`. Not the root commit: a diff from the root
+      # matches every filter, and every service's pipeline would run in full on a branch that
+      # touches none of them.
       - name: Detect rag-documents changes
         id: filter
         run: |
           base="${{ github.event.pull_request.base.sha || github.event.before }}"
           if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
-            base="$(git rev-list --max-parents=0 HEAD)"
+            base="$(git merge-base origin/develop HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD)"
           fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/rag-documents|libs/holahost-[a-z]+|make|infra/modules)/|\.github/(actions/|workflows/rag-documents-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
@@ -56,54 +69,39 @@ jobs:
       - uses: ./.github/actions/setup-python-toolchain
         if: steps.filter.outputs.changed == 'true'
 
-      # Every package the repo-root hooks loop over is installed here, before the pre-commit
-      # step. Those hooks are `pass_filenames: false` and run `poetry run <tool>` inside each
-      # package with a pyproject.toml, whatever the PR touched; a fresh runner has no venv, so
-      # `poetry run` silently creates an empty one and reports "Command not found: ruff".
+      # Only this service's own package is installed. The libraries it path-depends on come into
+      # this same venv from the checkout (`develop = true`), which is all its mypy run and its
+      # tests need; the libraries' own venvs are libs-ci's.
       - name: Install dependencies (rag-documents backend)
         if: steps.filter.outputs.changed == 'true'
         working-directory: holahost/services/rag-documents/backend
         run: poetry install
 
-      # Order follows the path-dependency graph, which runs one way only:
-      # observability (no platform deps) <- http <- auth; db depends on neither.
-      # Installing a package into a tree where the one it path-depends on is absent
-      # resolves nothing.
-      - name: Install dependencies (holahost-observability)
+      # The four Python hooks are skipped here and run as the next step instead. They walk every
+      # package with a pyproject.toml, whatever the PR touched — right on a contributor's machine,
+      # where a library change should be checked against every service before the push, and
+      # wrong in a pipeline: it would have to install every other package's venv (a fresh
+      # runner has none, and `poetry run` in an empty one reports "Command not found: ruff"),
+      # and it would gate code this pipeline does not own.
+      - name: Pre-commit (generic hooks over this service's changed files)
         if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/libs/holahost-observability
-        run: poetry install
-
-      - name: Install dependencies (holahost-db)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/libs/holahost-db
-        run: poetry install
-
-      - name: Install dependencies (holahost-http)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/libs/holahost-http
-        run: poetry install
-
-      - name: Install dependencies (holahost-auth)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/libs/holahost-auth
-        run: poetry install
-
-      - name: Library unit tests
-        if: steps.filter.outputs.changed == 'true'
-        run: |
-          (cd holahost/libs/holahost-observability && poetry run pytest -q)
-          (cd holahost/libs/holahost-db && poetry run pytest -q)
-          (cd holahost/libs/holahost-http && poetry run pytest -q)
-          (cd holahost/libs/holahost-auth && poetry run pytest -q)
-
-      - name: Pre-commit (this service's + the shared libraries' changed files)
-        if: steps.filter.outputs.changed == 'true'
+        env:
+          SKIP: python-ruff,python-ruff-format,python-mypy,python-import-linter
         run: |
           pip install pre-commit
-          base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          git cat-file -e "$base" 2>/dev/null || base="$(git rev-list --max-parents=0 HEAD)"
-          pre-commit run --files $(git diff --name-only "$base" HEAD -- holahost/services/rag-documents holahost/libs)
+          pre-commit run --files $(git diff --name-only "${{ steps.filter.outputs.base }}" HEAD -- holahost/services/rag-documents)
+
+      # The same four tools as the skipped hooks, check-only, on this package alone. Not
+      # conditional on which files changed: when only a library did, this is the step that
+      # checks the service against it.
+      - name: Python gates (rag-documents backend)
+        if: steps.filter.outputs.changed == 'true'
+        working-directory: holahost/services/rag-documents/backend
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check .
+          poetry run mypy .
+          poetry run lint-imports
 
       - name: Unit tests
         if: steps.filter.outputs.changed == 'true'

@@ -75,7 +75,10 @@ run once per Python package in the repo, in that package's own venv — plus
 `conventional-pre-commit`, gitleaks, and the pre-commit-hooks basics (whitespace / EOF / yaml / json
 / merge-conflict / large files > 1 MB).
 
-- Bypassing hooks (`git commit --no-verify`) is forbidden by policy; CI re-runs the full set.
+- Bypassing hooks (`git commit --no-verify`) is forbidden by policy; CI re-runs the same checks, per
+  package: each pipeline runs the generic hooks over its changed files and ruff, mypy and
+  import-linter on its own package only. A library change re-runs every service's pipeline, and the
+  libraries themselves are gated by `libs-ci`.
 - `make ci-local`, from a service directory, runs the CI-parity suite locally (hooks + the full test
   suite + the OpenAPI contract check) — use it before pushing.
 - Every PR fills the template (`.github/PULL_REQUEST_TEMPLATE.md`); an empty section is a review finding.

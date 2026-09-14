@@ -87,4 +87,6 @@ Not the rule list, but the five workarounds under it:
    vocabulary, before any route exists. It is the contract, and it is cheapest now.
 4. Domain, use cases, adapters, routes.
 5. `infra/` and the CI stub — copy the shape from an existing service; both are short and
-   mostly a call into a platform module.
+   mostly a call into a platform module. The stub installs and gates only this service's
+   package (the repo-root Python hooks are skipped in CI), and its path filter matches
+   `holahost/libs/`, so a library change re-checks the service.
