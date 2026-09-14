@@ -1,12 +1,29 @@
 # Service template
 
-The skeleton of a new Holahost Resource or Orchestration Service. Copy the tree, replace
-`<svc>` everywhere, and delete what the service does not need.
+The skeleton of a new Holahost Resource or Orchestration Service. Copy the tree, fill in the
+placeholders, and delete what the service does not need.
 
 ```
-cp -r holahost/templates/service holahost/services/<svc>
-grep -rl '<svc>' holahost/services/<svc> | xargs sed -i 's/<svc>/my-service/g'
+mkdir -p holahost/services/<svc>
+git archive HEAD:holahost/templates/service | tar -x -C holahost/services/<svc>
+rm holahost/services/<svc>/README.md
+cd holahost/services/<svc>
+grep -rl '<svc>' . | xargs sed -i 's/<svc>/my-service/g'
+grep -rl '<Svc>' . | xargs sed -i 's/<Svc>/MyService/g'
 ```
+
+`git archive`, not `cp -r`: a checkout where the template has been worked on also holds its
+untracked `.venv` and tool caches, and a copied `.venv` is the template's environment — its
+editable install still points at the template's `app/`. Only what git tracks is copied.
+
+| Placeholder | Where | Replace with |
+|---|---|---|
+| `<svc>` | everywhere | the service name: the container, the ECR repository, the path segment and the secret prefix |
+| `<Svc>` | `infra/envs/*/main.tf` | the same name in PascalCase, the metric namespace |
+| `<One sentence on what this service is for.>` | `backend/pyproject.toml`, `backend/app/interface/http/app.py` | by hand, then `make openapi` carries it into `docs/openapi.json` |
+
+`name` in `backend/pyproject.toml` is not a placeholder: the template keeps a real package name so
+its own gates run (see the comment there), and a copy renames it by hand.
 
 ## What is here, and what is deliberately not
 
@@ -22,6 +39,7 @@ What remains is genuinely per-service:
 |---|---|
 | `Makefile` | the service name and its image size budget; everything else is `include`d |
 | `backend/pyproject.toml` | the service's own dependencies. The tool configuration is already correct and is the part worth copying verbatim — see below |
+| `backend/app/domain/exceptions.py` | which request fields a violation can name. The type itself, its place in `SILENT_500_TYPES` and the tests of both stay as they are |
 | `backend/app/interface/http/api_base.py` | the one line that is the service's identity |
 | `backend/app/interface/http/edge.py` | which routes are public, which rate-limit bucket a request falls into, what an absent `X-Request-ID` is answered with |
 | `backend/app/interface/http/errors.py` | `ERROR_CONTRACT`: which errors the service publishes and with what status |
@@ -31,11 +49,14 @@ What remains is genuinely per-service:
 | `backend/app/scripts/bootstrap.py` | the startup guards this service needs |
 | `backend/tests/integration/conftest.py` | the app role's name and password, and the tables test isolation truncates |
 
-Deliberately absent: any domain. No entities, no value objects, no use cases, no
-repositories — a template that guessed at those would be answering a question it cannot
-have been asked yet. Absent for the same reason: `tests/_support/fakes.py` and
-`builders.py` — port doubles and entity builders only exist once there are ports and
-entities.
+Deliberately absent: any domain beyond its exception type. No entities, no value objects, no
+use cases, no repositories — a template that guessed at those would be answering a question
+it cannot have been asked yet. The exception type is not a guess: the platform fixes its
+name, its base and its `field`, and it works only once `interface/http/errors.py` lists it in
+`SILENT_500_TYPES`. A service that declares it and forgets that line answers a defect with a
+traceback outside the JSON log, and nothing fails. Absent for the same reason as the domain:
+`tests/_support/fakes.py` and `builders.py` — port doubles and entity builders only exist
+once there are ports and entities.
 
 `docs/openapi.json` is generated (`make openapi`) and checked in, so `make openapi-check`
 — a CI gate — passes from the first commit rather than on the day someone remembers it.
@@ -60,6 +81,9 @@ wiring most likely to be got wrong:
 - `tests/_support/http.py` registers the service's exception handlers on a bare test app.
   Without it, a test that builds a minimal app gets `500` for every published error and
   quietly measures the wrong thing.
+- `tests/unit/interface/http/test_errors.py` checks both declarations in `errors.py`: every
+  published error answers its declared status, and an untranslated `DomainValidationError`
+  answers `500` with an empty body and its reason in the log.
 
 ## The tool configuration is the valuable part of `pyproject.toml`
 

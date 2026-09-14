@@ -666,6 +666,9 @@ hearing `429`.
 **The service declares.** One type for every invariant violation in `domain/`, in its own
 `domain/exceptions.py`: `DomainValidationError(ValueError)` with `field: str | None`. It is not
 extracted into a library, for the same reason as the base classes for value objects and entities.
+The service template ships it instead — a copy the service owns — already listed in
+`SILENT_500_TYPES` and with the tests of both: a service that declares the type and forgets to list
+it answers a defect with a traceback outside the JSON log, and nothing fails.
 
 **What `field` says** is read, not assumed:
 
@@ -921,7 +924,7 @@ subsequent service.
 | The shared make targets (`lint`, `format`, `typecheck`, `test`, `test-int`, `lint-imports`, `openapi`, `dev-*`, `migrate-*`, `ci-local`, `ci-image`, `ci-tf`) | `holahost/make/common.mk`, pulled in with `include` from a service's `Makefile` | implemented |
 | The platform's Terraform modules: `service-ecr` (the image repository and its lifecycle policy), `service-observability` (the log group, the SNS topic and its subscription, the filters and the alarm over the `op_completed` core) | `holahost/infra/modules/` | implemented |
 | The shared CI composite actions: `setup-python-toolchain`, `build-push-image`, `ssm-migrate-deploy`, `smoke-check`, `terraform-apply` | `.github/actions/` (the repository root — GitHub reads only that) | implemented |
-| The service template: the clean-architecture tree, `Dockerfile`, `docker-compose.yml`, `.env.example`, `alembic.ini`, a base `pyproject.toml` (`ruff`, `mypy` strict, the `import-linter` contract, `pytest`), a test skeleton (testcontainers + `alembic upgrade` + provisioning of the unprivileged role, a JWKS server and token minting, registration of the error handlers) and a generated `docs/openapi.json` | `holahost/templates/service/` | implemented; `make test`, `make test-int` and `make openapi-check` pass on the copied tree |
+| The service template: the clean-architecture tree, `Dockerfile`, `docker-compose.yml`, `.env.example`, `alembic.ini`, a base `pyproject.toml` (`ruff`, `mypy` strict, the `import-linter` contract, `pytest`), a test skeleton (testcontainers + `alembic upgrade` + provisioning of the unprivileged role, a JWKS server and token minting, registration of the error handlers), the domain exception type already listed in `SILENT_500_TYPES`, and a generated `docs/openapi.json` | `holahost/templates/service/` | implemented; `make test`, `make test-int` and `make openapi-check` pass on the copied tree |
 | `holahost-client` — the caller's discipline: obtaining and caching an s2s token, setting `X-Request-ID`, honouring `Retry-After`, parsing the error envelope into exceptions | `holahost/libs/holahost-client/` | placeholder, see below |
 | A reusable CI workflow (`workflow_call`) instead of a copy of the pipeline body in every stub | `.github/workflows/` | placeholder, see below |
 
