@@ -17,6 +17,9 @@ is absent or another subject's — with the same identity and the same `details`
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime
+
 from holahost_http import (
     InvalidPayloadError,
     MalformedRequestError,
@@ -24,11 +27,21 @@ from holahost_http import (
     PlatformError,
 )
 
+from domain.value_objects.budget_scope import BudgetScope
+from domain.value_objects.idempotency_state import IdempotencyState
+
 __all__ = [
     "ApplicationError",
+    "BudgetExhaustedError",
+    "ContentRefusedError",
+    "ContextOverflowError",
+    "DuplicateRequestError",
     "InvalidPayloadError",
     "MalformedRequestError",
     "NotFoundError",
+    "RequestTooSlowForSyncError",
+    "UnknownModelError",
+    "UpstreamLlmError",
 ]
 
 
@@ -44,15 +57,115 @@ class ApplicationError(PlatformError):
     """
 
 
-# One class per error the service can answer with. Give each a `details_dict()` where it
-# has a payload, and keep the key set fixed per identity — `None` for "not applicable"
-# rather than an absent key, so a consumer never has to know which raise site answered:
-#
-# class SomethingTooLargeError(ApplicationError):
-#     def __init__(self, limit: int, actual: int) -> None:
-#         super().__init__("something too large")
-#         self.limit = limit
-#         self.actual = actual
-#
-#     def details_dict(self) -> Mapping[str, object]:   # from collections.abc
-#         return {"limit": self.limit, "actual": self.actual}
+class UnknownModelError(ApplicationError):
+    """Nothing in the registry answers the requested alias or model identifier.
+
+    Also what an alias answers when every model it points at belongs to a disabled provider: to the
+    caller the two are the same fact, and `available_aliases` is the remedy for both.
+    """
+
+    def __init__(self, *, requested: str, available_aliases: list[str]) -> None:
+        super().__init__("unknown model")
+        self.requested = requested
+        self.available_aliases = available_aliases
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"requested": self.requested, "available_aliases": list(self.available_aliases)}
+
+
+class ContextOverflowError(ApplicationError):
+    """The input estimate plus `max_tokens` exceeds the model's context window.
+
+    `estimated` is that sum. The estimate is an upper bound, so a request near the limit may be
+    refused although it would fit; the remedy is a shorter input or a smaller `max_tokens`.
+    """
+
+    def __init__(self, *, max_context: int, estimated: int) -> None:
+        super().__init__("context overflow")
+        self.max_context = max_context
+        self.estimated = estimated
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"max_context": self.max_context, "estimated": self.estimated}
+
+
+class RequestTooSlowForSyncError(ApplicationError):
+    """A full-length answer would not finish in the time left to the request.
+
+    Refused before any provider is paid for an answer the gateway would cut off.
+    `max_tokens_allowed` is the largest value that would have fitted into `budget_seconds`.
+    """
+
+    def __init__(self, *, max_tokens_allowed: int, budget_seconds: float) -> None:
+        super().__init__("request too slow for the synchronous mode")
+        self.max_tokens_allowed = max_tokens_allowed
+        self.budget_seconds = budget_seconds
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {
+            "max_tokens_allowed": self.max_tokens_allowed,
+            "budget_seconds": self.budget_seconds,
+        }
+
+
+class DuplicateRequestError(ApplicationError):
+    """A request with the same `Idempotency-Key` is in flight or already completed.
+
+    The first answer's text is kept nowhere, so a repeat learns only the state — it is protected
+    from paying twice, not handed the result.
+    """
+
+    def __init__(self, *, state: IdempotencyState) -> None:
+        super().__init__("duplicate request")
+        self.state = state
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"state": self.state.value}
+
+
+class BudgetExhaustedError(ApplicationError):
+    """A spend ceiling is exhausted and the request cannot be served.
+
+    `scope` names the ceiling. `resets_at` is also kept as a `datetime`, because the response's
+    `Retry-After` is computed from it where the response is written.
+    """
+
+    def __init__(self, *, scope: BudgetScope, resets_at: datetime) -> None:
+        super().__init__("budget exhausted")
+        self.scope = scope
+        self.resets_at = resets_at
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"scope": self.scope.value, "resets_at": self.resets_at.isoformat()}
+
+
+class UpstreamLlmError(ApplicationError):
+    """Every candidate model failed transiently, or the time ran out between failures. Retryable.
+
+    `upstream_status` is the vendor status of the last transient failure — `None` when it was a
+    timeout.
+    """
+
+    def __init__(self, *, attempts: int, upstream_status: int | None) -> None:
+        super().__init__("upstream LLM failure")
+        self.attempts = attempts
+        self.upstream_status = upstream_status
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"attempts": self.attempts, "upstream_status": self.upstream_status}
+
+
+class ContentRefusedError(ApplicationError):
+    """The model declined to answer this content.
+
+    The call was paid for and recorded; the same content will be refused again. `provider` and
+    `model` name the one that refused — after a downgrade or failover it is not the one asked for.
+    """
+
+    def __init__(self, *, provider: str, model: str) -> None:
+        super().__init__("content refused")
+        self.provider = provider
+        self.model = model
+
+    def details_dict(self) -> Mapping[str, object]:
+        return {"provider": self.provider, "model": self.model}
