@@ -16,11 +16,12 @@ from domain.value_objects.usage import Usage
 
 @dataclass(frozen=True, eq=False)
 class UsageRecord:
-    """One confirmed successful provider call in the usage log.
+    """One provider call whose usage the provider confirmed, in the usage log.
 
-    Immutable and append-only, created only from a provider's confirmed response, and it carries
-    no request or response text. `provider` and `model` are the ones that answered, not the ones
-    requested; `downgraded` and `failed_over` say why the two may differ.
+    That is a successful answer or a content refusal: both are paid for, so both count against the
+    budget. Immutable and append-only, created only from a provider's confirmed figures, and it
+    carries no request or response text. `provider` and `model` are the ones that answered, not the
+    ones requested; `downgraded` and `failed_over` say why the two may differ.
 
     :param id: Self-generated, unique per generation.
     :param request_id: The request's `X-Request-ID`, for correlation with logs — not the identity
