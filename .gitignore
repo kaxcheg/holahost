@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-build/
 dist/
 
 # Virtual environments
@@ -34,8 +33,10 @@ htmlcov/
 
 # Local tooling state
 .build-state/
-.claude/
-CLAUDE.md
+# .claude (any depth): versioned by default; listed here is only what must not be —
+# personal settings and runtime state of Claude Code sessions.
+**/.claude/settings.local.json
+**/.claude/agent-memory/
 
 # Specification drafts kept locally; the published versions live in docs/
 **/ru_docs/

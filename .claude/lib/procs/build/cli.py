@@ -1,0 +1,84 @@
+"""`procs build …` — the deterministic sub-procedures of /build-start, /build-status and build-session.
+
+`route` and `status` are read-only and meant for a skill's `!` injection: they exit 0 for every domain outcome
+and carry «stop» in their output. `scaffold` and `migrate-session` write and are therefore run by the model.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Any
+
+from procs.build import route, status
+from procs.build.model import Layer
+from procs.core import paths
+
+
+def _project(args: argparse.Namespace) -> Path:
+    return Path(args.project) if args.project else paths.project_dir()
+
+
+def _cmd_route(args: argparse.Namespace) -> int:
+    project = _project(args)
+    # Arguments arrive on stdin through a quoted heredoc, so no shell ever interprets them.
+    line = " ".join(args.args) if args.args else sys.stdin.read()
+    decided = route.decide(project, line.replace("\n", " "))
+    sys.stdout.write(route.render(project, decided))
+    if args.headings and decided.spec:
+        sys.stdout.write("HEADINGS:\n" + route.headings_listing(project, decided.spec))
+    return 0
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    line = " ".join(args.args) if args.args else ("" if sys.stdin.isatty() else sys.stdin.read())
+    tokens = line.split()
+    sys.stdout.write(status.render(_project(args), tokens[0] if tokens else None))
+    return 0
+
+
+def _cmd_scaffold(args: argparse.Namespace) -> int:
+    try:
+        created = status.scaffold(_project(args), args.ticket, args.layer)
+    except FileNotFoundError as exc:
+        print(f"procs build scaffold: {exc}", file=sys.stderr)
+        return 1
+    for path in created:
+        print(f"created {path}")
+    if not created:
+        print(f"nothing created: .build-state/{args.ticket}/ already has its state files")
+    return 0
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    changed = status.migrate_session(_project(args), args.ticket)
+    print("inserted the Protocol ledger section" if changed else "unchanged: the session already has a ledger (or no template was found)")
+    return 0
+
+
+def register(sub: Any) -> None:
+    build = sub.add_parser("build", help="ticket routing, status and state files of the build family")
+    commands = build.add_subparsers(dest="command", required=True)
+
+    p = commands.add_parser("route", help="Path A/B decision, spec location and the sections to load")
+    p.add_argument("--project")
+    p.add_argument("--headings", action="store_true", help="append the spec's heading index")
+    p.add_argument("args", nargs="*", help="the /build-start arguments (default: read them from stdin)")
+    p.set_defaults(func=_cmd_route)
+
+    p = commands.add_parser("status", help="facts for /build-status")
+    p.add_argument("--project")
+    p.add_argument("args", nargs="*", help="optional ticket id (default: read it from stdin)")
+    p.set_defaults(func=_cmd_status)
+
+    p = commands.add_parser("scaffold", help="create session.md and clarifications.md from the skill's templates")
+    p.add_argument("--project")
+    p.add_argument("--layer", choices=[layer.value for layer in Layer], help="the LAYER line of /build-start")
+    p.add_argument("ticket")
+    p.set_defaults(func=_cmd_scaffold)
+
+    p = commands.add_parser("migrate-session", help="add the Protocol ledger to a session.md that predates it")
+    p.add_argument("--project")
+    p.add_argument("ticket")
+    p.set_defaults(func=_cmd_migrate)

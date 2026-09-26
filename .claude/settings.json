@@ -1,0 +1,161 @@
+{
+  "//": "The build procedure (skills build-start/-status/-commit/-session, agent test-runner) and its permissions. The session's model and effort are set here: a skill's frontmatter applies for one turn, these keys for the whole session in this directory. Subagent models are the ## Models table of the build-session skill; the agent-model hook rejects an Agent call without an explicit model. Personal rules and absolute paths go in settings.local.json (not versioned).",
+  "model": "opus",
+  "effortLevel": "xhigh",
+  "permissions": {
+    "allow": [
+      "Edit(/.build-state/**)",
+      "Edit(/src/**)",
+      "Edit(/app/**)",
+      "Edit(/backend/**)",
+      "Edit(/frontend/**)",
+      "Edit(/infra/**)",
+      "Edit(/tests/**)",
+      "Edit(/test/**)",
+      "Edit(/.env.example)",
+      "Edit(/docs/**)",
+      "WebFetch",
+      "WebSearch",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(python3 .claude/bin/procs build:*)",
+      "Bash(git branch:*)",
+      "Bash(git switch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+      "Bash(git stash:*)",
+      "Bash(git commit:*)",
+      "Bash(git fetch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "Bash(git -C:*)",
+      "Bash(gh pr *)",
+      "Bash(make:*)",
+      "Bash(task:*)",
+      "Bash(just:*)",
+      "Bash(pre-commit run:*)",
+      "Bash(docker compose:*)",
+      "Edit(/.github/**)",
+      "Edit(/Makefile)",
+      "Edit(/.pre-commit-config.yaml)",
+      "Edit(/commitlint.config.js)",
+      "Edit(/.gitleaks.toml)",
+      "Bash(cd:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(touch:*)",
+      "Bash(ln:*)",
+      "Bash(poetry run pytest:*)",
+      "Bash(poetry run ruff:*)",
+      "Bash(poetry run mypy:*)",
+      "Bash(poetry run python:*)",
+      "Bash(poetry run alembic revision:*)",
+      "Bash(poetry run alembic check:*)",
+      "Bash(poetry run alembic current:*)",
+      "Bash(poetry run alembic history:*)",
+      "Bash(poetry run alembic heads:*)",
+      "Bash(poetry run alembic show:*)",
+      "Bash(poetry run alembic branches:*)",
+      "Bash(poetry install:*)",
+      "Bash(poetry lock:*)",
+      "Bash(poetry check:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npx biome:*)",
+      "Bash(npx tsc:*)",
+      "Bash(biome:*)",
+      "Bash(tsc:*)",
+      "Bash(terraform init:*)",
+      "Bash(terraform plan:*)",
+      "Bash(terraform validate:*)",
+      "Bash(terraform fmt:*)",
+      "Bash(docker build:*)"
+    ],
+    "deny": [
+      "Bash(make migrate-staging:*)",
+      "Bash(make migrate-prod:*)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" ledger-context"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" ledger-context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" agent-model"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" context7-gate"
+          },
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" ledger-gate"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" branch-gate"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_context7_context7__query-docs",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" context7-mark"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook\" pre-compact",
+            "statusMessage": "Checking build session state..."
+          }
+        ]
+      }
+    ]
+  }
+}
