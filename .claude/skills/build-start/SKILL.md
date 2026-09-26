@@ -8,6 +8,14 @@ argument-hint: "[ticket-id ...] [layer] [spec path]"
 
 Entry point for build sessions. Loads context, then routes to Path A or B per `build-session` skill.
 
+## Step 0 — Session directory
+
+A build session runs from the service it builds: `.build-state/` and the spec are resolved from the session's
+directory. If the session's primary working directory is not `holahost/services/<svc>` of this repository — exactly
+that directory, not the repository root and not a subdirectory such as `backend/` — warn the user before anything
+else: "This session runs in `<dir>`; build for a service runs from `holahost/services/<svc>`, where its
+`.build-state/` and spec live." Continue only if the user confirms.
+
 ## Step 1 — Route (computed — do not re-derive it)
 
 ```!
