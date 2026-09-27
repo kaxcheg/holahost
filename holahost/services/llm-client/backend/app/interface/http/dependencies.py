@@ -22,6 +22,7 @@ from holahost_http import InMemoryRateLimiter, RateLimiter
 from pydantic import SecretStr
 from sqlalchemy import Engine
 
+from application.ports.generation import GenerationProvider
 from application.ports.idempotency import IdempotencyStore
 from application.ports.providers import ProvidersRepo
 from config.provider_keys import read_provider_keys
@@ -31,6 +32,8 @@ from domain.value_objects.budget_scope import BudgetScope
 from domain.value_objects.token_count import TokenCount
 from domain.value_objects.usage import Usage
 from infrastructure.idempotency.in_memory_idempotency_store import InMemoryIdempotencyStore
+from infrastructure.providers.dialects import DIALECTS
+from infrastructure.providers.langchain_generation_provider import build_generation_provider
 from infrastructure.registry.config_providers_repo import load_providers_repo
 from interface.http.edge import GENERATE_BUCKET, RATE_LIMIT_WINDOW_SECONDS
 
@@ -58,12 +61,20 @@ def get_registry() -> RegistryFile:
 
 @lru_cache
 def get_providers_repo() -> ProvidersRepo:
-    return load_providers_repo(get_registry())
+    return load_providers_repo(get_registry(), supported=DIALECTS)
 
 
 @lru_cache
 def get_provider_keys() -> Mapping[str, SecretStr]:
     return read_provider_keys(get_registry(), os.environ)
+
+
+@lru_cache
+def get_generation_provider() -> GenerationProvider:
+    # The repository first: it refuses an enabled provider with no adapter, which building the chat
+    # models would otherwise meet as a bare `KeyError`.
+    get_providers_repo()
+    return build_generation_provider(get_registry(), get_provider_keys())
 
 
 @lru_cache

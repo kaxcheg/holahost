@@ -8,12 +8,15 @@ from datetime import timedelta
 import pytest
 from holahost_http import RateLimitExceededError
 from tests._support.builders import make_usage
+from tests._support.registry import registry_data
 from tests._support.settings import set_settings_env
 
 from application.exceptions import DuplicateRequestError
+from config.registry import RegistryFile
 from domain.value_objects.budget_scope import BudgetScope
 from domain.value_objects.client_id import ClientId
 from domain.value_objects.idempotency_key import IdempotencyKey
+from infrastructure.registry.config_providers_repo import InvalidRegistryError
 from interface.http import dependencies
 from interface.http.edge import GENERATE_BUCKET
 
@@ -25,6 +28,7 @@ _GETTERS = (
     dependencies.get_budget_caps,
     dependencies.get_rate_limiter,
     dependencies.get_idempotency_store,
+    dependencies.get_generation_provider,
 )
 
 
@@ -95,3 +99,20 @@ class TestTheRegistry:
     def test_provider_keys_come_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
         assert dependencies.get_provider_keys()["anthropic"].get_secret_value() == "sk-test"
+
+    def test_the_generation_provider_is_built_for_the_shipped_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        assert dependencies.get_generation_provider() is dependencies.get_generation_provider()
+
+    def test_a_provider_without_an_adapter_stops_the_build_with_its_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            dependencies, "read_registry", lambda: RegistryFile.model_validate(registry_data())
+        )
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-a")
+        monkeypatch.setenv("OTHER_VENDOR_API_KEY", "sk-o")
+        with pytest.raises(InvalidRegistryError, match="no adapter"):
+            dependencies.get_generation_provider()

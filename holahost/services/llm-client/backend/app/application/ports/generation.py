@@ -61,7 +61,9 @@ class GenerationProvider(Protocol):
         :param max_tokens: The ceiling on the answer.
         :param temperature: Left out of the vendor call when `None`.
         :param stop: Left out of the vendor call when `None`.
-        :param timeout_s: The whole attempt; running past it is a transient failure.
+        :param timeout_s: The wait for the answer — the time pre-flight measured the generation
+            against; running past it is a transient failure. Setting up the call is bounded apart,
+            briefly, by the adapter.
         :param request_id: The request's `X-Request-ID`, propagated to the vendor where its protocol
             allows.
         :return: The answer.

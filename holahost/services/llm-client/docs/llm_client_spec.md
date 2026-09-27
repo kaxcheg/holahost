@@ -515,14 +515,33 @@ case rather than in the provider adapter. The adapter knows only "call this mode
 messages", and translates what the vendor answers into the port's terms: vendor errors into the
 port's three — `TransientProviderError`, `ProviderRejectedRequestError`, `ProviderRefusedContentError`
 (§8.0) — and the vendor's stop reason into `FinishReason`, through a mapping table of its own for each
-provider. For `anthropic`:
+provider.
+
+The adapter is one `GenerationProvider` over langchain chat models, plus a *dialect* per vendor: what
+differs between vendors — building the chat model, reading its stop reasons and its errors — is the
+dialect's. One chat model per registry model is built at startup, with the SDK's own retries off: the
+use case repeats, and an SDK repeating behind its back would spend the deadline twice. `max_tokens`,
+`temperature`, `stop` and the attempt's timeout are set per call; the timeout is the wait for the
+answer, and setting up the call is bounded apart (§3.7). An empty `system` sends no system block. An answer without the vendor's usage figures is a `ProviderRejectedRequestError` — a defect of
+the integration, never recorded as a zero spend.
+
+For `anthropic`:
 
 | `stop_reason` | Result |
 |---|---|
 | `end_turn`, `stop_sequence` | `FinishReason.stop` |
-| `max_tokens` | `FinishReason.max_tokens` |
+| `max_tokens`, `model_context_window_exceeded` | `FinishReason.max_tokens` — cut off by a limit either way; after pre-flight the second means a wrong `max_context` in the registry |
 | `refusal` (arrives with `200`) | `ProviderRefusedContentError`, carrying the `usage` the response confirmed |
-| `tool_use`, `pause_turn` | unreachable: tools are out of scope (§3.9) |
+| `tool_use`, `pause_turn`, or a value outside this table | `FinishReason.stop`, and a `vendor_stop_reason_unmapped` warning carrying `vendor_stop_reason`: the answer is paid for, and refusing it would lose the text and the accounting both |
+
+Its errors are read by the SDK's types:
+
+| Vendor error | Result |
+|---|---|
+| a status of `408`, `409`, `429` or any `5xx` (`529` overload included) | `TransientProviderError` with the status, and the `Retry-After` in seconds when sent (its HTTP-date form is left to the backoff formula) |
+| any other status | `ProviderRejectedRequestError` with the status |
+| a timeout or a failed connection | `TransientProviderError` without a status — both count as a timeout (§8.4) |
+| anything else raised by the call | `ProviderRejectedRequestError` without a status: a response the integration could not read, or a call built wrong |
 
 There are no `infrastructure/auth/` or `interface/http/middleware/` directories: `holahost-auth`
 hands over a ready-made middleware and `current_token`, so there is nothing to adapt, and the edge's
@@ -622,7 +641,8 @@ attempt are reported together once every entity is valid:
 - a model id under two providers; a downgrade target that does not exist;
 - an `api_key_ref` outside kebab-case, since the environment variable the key is read from is
   derived from it;
-- an enabled provider with no secret or no models; a model breaking its entity's invariants (§4.2);
+- an enabled provider with no secret, no models, or no adapter (§3.2); a model breaking its entity's
+  invariants (§4.2);
 - a model that cannot deliver its answer ceiling within one attempt — `min(max_output,
   MAX_OUTPUT_TOKENS) / tokens_per_second` above `PROVIDER_TIMEOUT` — since every request sending no
   `max_tokens` would then be refused before any call.
@@ -650,7 +670,7 @@ exists, load that does not fit the budget is not served by the service.
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| `PROVIDER_TIMEOUT` | 20 s per attempt, and never longer than the time left | a generation of `MAX_OUTPUT_TOKENS` fits with room to spare; more would not fit the overall budget. It also bounds what pre-flight accepts (§3.7.1): an answer no single attempt could finish is refused rather than paid for and cut off |
+| `PROVIDER_TIMEOUT` | 20 s for an attempt's answer, and never longer than the time left; setting up the call — connecting, sending the request, taking a pooled connection — is bounded apart, at 1 s a phase | a generation of `MAX_OUTPUT_TOKENS` fits with room to spare; more would not fit the overall budget. It also bounds what pre-flight accepts (§3.7.1): an answer no single attempt could finish is refused rather than paid for and cut off. The setup comes on top rather than out of the answer's share, which would cut off answers pre-flight accepted; at worst it takes 3 s of the 5 s `RETRY_TOTAL_BUDGET` leaves before the ceiling |
 | `RETRY_MAX_ATTEMPTS` | 2 (the first plus one repeat), per candidate model | a third repeat does not fit into 30 s |
 | `RETRY_BACKOFF_BASE` | 1 s, exponential, jitter ±20 % | the provider's `Retry-After`, when sent, takes priority; a pause that would not leave room for the attempt after it is not taken at all — the next candidate needs no wait |
 | `RETRY_TOTAL_BUDGET` | 25 s for the whole request, failover included; one deadline, taken on entering the use case | leaves 5 s for the network and serialisation before the integration ceiling |
@@ -1208,7 +1228,11 @@ class GenerationProvider(Protocol):
     # Generation = (text: str, usage: Usage, finish_reason: FinishReason) — the model that answered
     #              is the one the call named, so it is not returned a second time (§4.6)
     # request_id: the request's X-Request-ID, propagated to the vendor where its protocol allows
-    #             it (US-L13); there is no request-scoped context an adapter could read it from
+    #             it (US-L13); there is no request-scoped context an adapter could read it from.
+    #             `anthropic` takes no caller-chosen identifier it would record, so there it stays
+    #             in this service's own log lines
+    # timeout_s: the wait for the answer — what pre-flight measured the generation against; setting
+    #            up the call is bounded apart, briefly, by the adapter (§3.7)
     # raises: TransientProviderError (429, 5xx, overload, a timeout — retryable; carries the vendor
     #           status, absent on a timeout, and its Retry-After when it sent one),
     #         ProviderRejectedRequestError (the vendor refused the request itself: a revoked key, a
@@ -1376,7 +1400,9 @@ op_completed { <the platform core>,
 ```
 
 `provider_timeouts` counts the attempts cut off by the service's own timeout — calls most likely
-charged whose spend never reaches the usage log (B-12). It comes from the result, or from
+charged whose spend never reaches the usage log (B-12). A failed connection counts too, since it
+carries no status either: it is not charged for, so the figure runs slightly high, but it is the
+rarer of the two. It comes from the result, or from
 `UpstreamLlmError`, which carries it outside its published `details`. For a request whose usage
 record could not be written, `input_tokens`, `output_tokens`, `provider` and `model` come from
 `UsageNotRecordedError`: once the write has failed, it is the only place the confirmed spend
@@ -1715,7 +1741,6 @@ assistant (§1.3.4).
 | 6 | The threshold at which the budget check by aggregate stops fitting the time budget and E-5 is switched on — set by measurement rather than in advance |
 | 3 | The value of `BUDGET_CAP_DOWNGRADE_PER_CLIENT`: no caller uses the `downgrade` policy yet — fixed together with the first one that does, in the service's settings, which carry placeholders until then |
 | 3 | The input's share of the pre-flight time estimate: the term stays out until the prefill speed is measured alongside `MODEL_TOKENS_PER_SECOND`, since a guessed one either refuses requests that fit or does nothing (§3.7.1) |
-| 8 | A vendor stop reason outside the adapter's mapping table (§3.2) — decided together with the adapter |
 
 ## Stage 9. Architecture Decision Records
 
