@@ -1,4 +1,4 @@
-"""`/build-start` steps 1–3 as a computation: parse the arguments, admit the ticket, find the spec, plan the load.
+"""The Start of `/build-session` as a computation: parse the arguments, admit the ticket, find the spec, plan the load.
 
 What the procedure leaves to judgement stays out of here: whether a backlog group IS the requested layer, which
 user stories a ticket without a US id relates to, and any stage whose heading could not be told apart.
@@ -75,7 +75,7 @@ def decide(project: Path, line: str) -> Route:
         return Route(
             RouteKind.ASK,
             message=f"`{args.not_a_layer}` is not a layer ({LAYERS}). Ask which layer is meant, then re-run "
-            "`/build-start <ticket-id> [<ticket-id>...] <layer>`.",
+            "`/build-session <ticket-id> [<ticket-id>...] <layer>`.",
         )
     if args.ticket_id is None:
         return Route(RouteKind.ASK, message="No ticket id given: ask the user for ticket ID(s) and layer before proceeding.")
@@ -83,7 +83,7 @@ def decide(project: Path, line: str) -> Route:
     if (project / BUILD_STATE_DIR / ticket / SESSION_FILE).is_file():
         return Route(
             RouteKind.STOP, ticket, ids,
-            message=f"Ticket `{ticket}` already has state in {BUILD_STATE_DIR}/{ticket}/; /build-start does not resume a ticket.",
+            message=f"Ticket `{ticket}` already has state in {BUILD_STATE_DIR}/{ticket}/; /build-session does not resume a ticket.",
         )
     active = [session.ticket_of(s) for s in session.in_progress_sessions(project)]
     if active:
@@ -123,7 +123,7 @@ def decide(project: Path, line: str) -> Route:
 
 
 def render(project: Path, route: Route) -> str:
-    """The block injected into the /build-start skill. Plain text, stable for a given state of the project."""
+    """The block injected into the /build-session skill. Plain text, stable for a given state of the project."""
     out = [f"ROUTE: {route.kind.value.upper()}"]
     if route.message:
         out.append(f"MESSAGE: {route.message}")

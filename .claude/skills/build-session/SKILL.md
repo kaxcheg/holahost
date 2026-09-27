@@ -1,8 +1,10 @@
 ---
 name: build-session
 description: >
-  Use for any ticket work during the Build phase, once `/build-start` has loaded the spec
-  and the ticket: exploration, design, plan, implementation, validation.
+  The build protocol for one ticket, start to finish: admits the ticket, loads its spec sections, then
+  exploration, design, plan, implementation, validation.
+argument-hint: "<ticket-id ...> <layer> [spec path]"
+disable-model-invocation: true
 ---
 
 **RIGID skill — follow every step exactly, in order. No skipping, no adapting.**
@@ -22,7 +24,7 @@ the spec's Tech Constraints — this skill does not restate them.
 
 ## Source data
 
-Source Data (the spec `/build-start` located) is **read-only** and **provisional, not final**:
+Source Data (the spec located at Start) is **read-only** and **provisional, not final**:
 context, never the argument. "The spec says so" settles nothing — give the substantive reason
 (what breaks, for whom, when) or say plainly there is none and propose the spec change. Draft
 code snippets in it are intent to reason through, never to copy: validate against the codebase
@@ -90,20 +92,59 @@ implementing an external-library API call.
 A ticket runs start to finish in one session: nothing restores it in a new context. When the `context-watch` hook
 says auto-compaction is near, offer the user to save the state by hand; save only if they ask.
 
+### Start
+
+The session runs from the service it builds: `.build-state/` and the spec are resolved from its directory. If the
+session's primary working directory is not `holahost/services/<svc>` of this repository — exactly that directory,
+not the repository root and not a subdirectory such as `backend/` — warn the user before anything else and continue
+only if they confirm.
+
+The route (computed — do not re-derive it):
+
+```!
+python3 .claude/bin/procs build route --project "${CLAUDE_PROJECT_DIR}" <<'__PROCS_ARGS__'
+$ARGUMENTS
+__PROCS_ARGS__
+```
+
+- `ROUTE: STOP` → give the user the MESSAGE and stop.
+- `ROUTE: ASK` → ask the user what the MESSAGE names, then re-run `/build-session` with the answer.
+- `ROUTE: START` → load every range under SECTIONS TO READ **in full** — do not summarize, skip, or defer:
+  - `UNMATCHED` — no heading carries the stage's keywords: match the stage to a heading of the HEADINGS list by
+    meaning (case-insensitive; ignore numeric prefixes and `-`/`_`/space separators), tolerant of analogous
+    wording, and read it by its line-range. Sections absent from the spec are skipped (a small/abstract project may
+    omit Frontend, Detailed Flow, etc.). Conceptual (6) is never loaded — it is the un-signatured draft of
+    **Detailed Sequence Flow (9)**.
+  - `AMBIGUOUS` — several headings fit one stage: decide by their content; still unclear → ask the user.
+  - **Backlog (14)** — the entry of each ticket ID is printed under BACKLOG ENTRIES. Confirm every ID sits under
+    the `<layer>` group; one that does not → stop: "Ticket `<ID>` is in layer `<actual>`, not `<layer>`. Re-run
+    with matching IDs."
+  - **User Stories (3)** — a story the backlog entry names (`story <US-ID>`) is loaded in full with **all AC
+    items**; for `STORIES BY SCOPE`, find the stories in section 3 by the ticket's name/scope and load them with
+    all AC. `infra` / `ci-cd` tickets are technical — their requirements come from Infrastructure (12) / CI/CD
+    (13) / Tech Constraints (2), not from user stories.
+
+Forms: `/build-session T-05 domain` · `/build-session T-05 T-06 T-07 domain` ·
+`/build-session T-05 domain docs/my_spec.md`. Arguments: ticket ID(s), then `<layer>` ∈
+`domain | application | infrastructure | interface | frontend | infra | ci-cd`, optionally a spec path — the token containing a `/` or ending in `.md`; it overrides
+auto-location under `./docs/`. **Multiple ticket IDs** are concatenated with `-` into a single combined ID used for
+all state files and commands: `B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`. The backend layers (`domain |
+application | infrastructure | interface`) are the Clean Architecture decomposition — use them only when the spec's
+Tech Constraints chose Clean Architecture; otherwise treat the whole backend as `application`. `frontend | infra |
+ci-cd` map to the remaining Backlog groups.
+
 ### Setup
 
-1. Source Data and ticket loaded by `/build-start`.
-
-2. **The state files** — run `python3 .claude/bin/procs build scaffold <TICKET-ID>`: it creates
+1. **The state files** — run `python3 .claude/bin/procs build scaffold <TICKET-ID>`: it creates
    `.build-state/<TICKET-ID>/session.md` and `clarifications.md` from the templates (`## Ticket state`) with
    status `in_progress`, and never overwrites an existing file.
 
-3. **Explore** — launch 2–3 `feature-dev:code-explorer` agents in parallel (`## Subagents`,
+2. **Explore** — launch 2–3 `feature-dev:code-explorer` agents in parallel (`## Subagents`,
    `low_model`), each on a different aspect: entry points and direct dependencies of the ticket;
    similar features/patterns and how they are implemented; test coverage and test patterns of
    the affected modules. Read every key file they identify before the design dialogue.
 
-4. **Design exploration** — collaborative dialogue turning the ticket into an approved design.
+3. **Design exploration** — collaborative dialogue turning the ticket into an approved design.
    No code, no implementation skill, no plan writing until the user approves the design.
    - Clarify one question at a time: purpose, constraints, success criteria; multiple-choice when
      possible. Discrepancies and principal decisions as they arise → clarifications.md.
@@ -119,9 +160,9 @@ says auto-compaction is near, offer the user to save the state by hand; save onl
      (one plan or decomposition), ambiguity (two readings → pick one explicitly). Fix inline, no
      re-review.
 
-5. **Branch** — suggest a name per Branch Naming in `./CONTRIBUTING.md`, get approval, create it.
+4. **Branch** — suggest a name per Branch Naming in `./CONTRIBUTING.md`, get approval, create it.
 
-6. ⏹ **Testing approach** — assess the ticket, recommend with justification. The choice is
+5. ⏹ **Testing approach** — assess the ticket, recommend with justification. The choice is
    captured by the plan's task variant; → clarifications.md only if it diverges from an approach
    Source Data explicitly mandates.
    - **TDD** — domain logic, value objects, use cases, parsers, formatters: units with clear
@@ -131,7 +172,7 @@ says auto-compaction is near, offer the user to save the state by hand; save onl
      circular or meaningless here.
    - **Mixed** — TDD for the unit-testable parts, code-first for the rest.
 
-7. **Plan** — write `.build-state/<TICKET-ID>/plan.md` per `plan.template.md` (header, task
+6. **Plan** — write `.build-state/<TICKET-ID>/plan.md` per `plan.template.md` (header, task
    structure in the chosen testing variant, granularity and no-placeholder rules).
    - Scope check first: multiple independent subsystems → suggest one plan per subsystem, each
      producing working, testable software on its own.
@@ -141,7 +182,7 @@ says auto-compaction is near, offer the user to save the state by hand; save onl
    - Self-review before presenting: spec coverage (a task for every requirement of the approved
      design), placeholders, type and method-name consistency across tasks. Fix inline.
 
-8. Review the plan with the user → clarifications.md.
+7. Review the plan with the user → clarifications.md.
 
 ### Work
 
@@ -185,14 +226,14 @@ says auto-compaction is near, offer the user to save the state by hand; save onl
 
 | file | content | origin |
 |---|---|---|
-| `session.md` | status and the **protocol ledger** — what the guards read | `session.template.md`, Setup step 2 |
-| `clarifications.md` | principal Source Data discrepancies pending fold-back (`## Source data`) | `clarifications.template.md`, Setup step 2 |
+| `session.md` | status and the **protocol ledger** — what the guards read | `session.template.md`, Setup step 1 |
+| `clarifications.md` | principal Source Data discrepancies pending fold-back (`## Source data`) | `clarifications.template.md`, Setup step 1 |
 | `plan.md` | implementation plan | Plan step, per `plan.template.md` |
 | `context7.log` | every `query-docs` lookup made for the ticket — evidence for the Context7 gate | PostToolUse hook, automatic; never edited by hand |
 | `context-watch` | the session already told that auto-compaction is near | `context-watch` hook, automatic |
 
 Templates live next to this `SKILL.md`, in `.claude/skills/build-session/`, not the project root; the scaffold
-command (Setup step 2) copies them with `TICKET-ID` substituted. Completed tickets stay in
+command (Setup step 1) copies them with `TICKET-ID` substituted. Completed tickets stay in
 place with status `completed`.
 
 **Protocol ledger.** `session.md` carries one checkbox per ⏹ checkpoint and per user approval

@@ -1,4 +1,4 @@
-"""`procs build …` — the deterministic sub-procedures of /build-start, /build-commit and build-session.
+"""`procs build …` — the deterministic sub-procedures of /build-session and /build-commit.
 
 `route` and `status` are read-only and meant for a skill's `!` injection: they exit 0 for every domain outcome
 and carry «stop» in their output. `scaffold` writes and is therefore run by the model.
@@ -57,7 +57,7 @@ def register(sub: Any) -> None:
     p = commands.add_parser("route", help="start/stop/ask decision, spec location and the sections to load")
     p.add_argument("--project")
     p.add_argument("--headings", action="store_true", help="append the spec's heading index")
-    p.add_argument("args", nargs="*", help="the /build-start arguments (default: read them from stdin)")
+    p.add_argument("args", nargs="*", help="the /build-session arguments (default: read them from stdin)")
     p.set_defaults(func=_cmd_route)
 
     p = commands.add_parser("status", help="the tickets and which one is in progress, for /build-commit")

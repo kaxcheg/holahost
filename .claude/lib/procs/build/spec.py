@@ -1,4 +1,4 @@
-"""The project specification as `/build-start` needs it: where it is, which heading is which stage, what to load.
+"""The project specification as `/build-session` needs it: where it is, which heading is which stage, what to load.
 
 The matching of a stage to a heading is «tolerant of analogous wording» in the procedure, so this module never
 decides silently: it ranks candidates by keyword hits and reports a tie as ambiguous for the model to settle.

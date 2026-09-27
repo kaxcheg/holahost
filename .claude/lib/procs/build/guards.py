@@ -309,7 +309,7 @@ def branch_gate(stdin: str) -> Result:
     return (
         "",
         f"build-session ⏹ {tickets}: `git commit` on the default branch `{branch}` while a ticket is in_progress. "
-        "Ticket work is committed on its feature branch (build-session Setup, step 5; /build-commit applies to "
+        "Ticket work is committed on its feature branch (build-session Setup, step 4; /build-commit applies to "
         "feature branches only). Switch to the ticket branch, or commit outside the session if this is unrelated.\n",
         2,
     )

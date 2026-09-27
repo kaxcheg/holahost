@@ -45,7 +45,7 @@ Dispatch a `general-purpose` subagent with the Agent tool `model` set to `high_m
 built-in `code-review` skill with args `scope: the current git diff, plus these specs, each read in full: <SPEC>,
 <dependency specs>` at effort level `high` (or the level the user asked for), fix nothing, and return every finding
 verbatim — file, line, summary, failure scenario. Substitute real file paths before dispatching — never pass the
-placeholders or a description in their place: `<SPEC>` is the spec `/build-start` located; `<dependency specs>` are
+placeholders or a description in their place: `<SPEC>` is the spec `/build-session` located; `<dependency specs>` are
 the specs it references as dependencies (e.g. a platform frame spec, specs of the shared libraries it uses).
 Present the findings to the user unchanged; the user picks what to fix and what to skip. Apply only the chosen
 fixes, then repeat Step 1 and Step 2 on the updated diff — until the review reports nothing or the user accepts

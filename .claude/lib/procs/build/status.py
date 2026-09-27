@@ -24,7 +24,7 @@ def tickets(project: Path) -> list[str]:
 
 
 def _status(path: Path) -> str:
-    # One definition of «in progress» for the guards, /build-start and this view: the guards' status regex.
+    # One definition of «in progress» for the guards, /build-session and this view: the guards' status regex.
     if session.mentions_in_progress(session.read_text(path)):
         return Status.IN_PROGRESS.value
     parsed = session.parse(path)
