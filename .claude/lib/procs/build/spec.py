@@ -236,27 +236,48 @@ def _names(token: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![\w-]){re.escape(token)}(?![\w-])", re.IGNORECASE)
 
 
+_NUMBERED = re.compile(r"(.*\D)(\d+)")
+
+
 def split_combined(ticket: str, text: str, backlog: mdsections.Section) -> tuple[str, ...]:
-    """The individual ids behind a combined ticket id (`B-06-B-07` → `B-06`, `B-07`).
+    """The individual ids behind a combined ticket id: `B-06-B-07` → `B-06`, `B-07`; a range, an id followed by a
+    bare last number, `L-08-13` → `L-08`, `L-09` … `L-13` with the first number's zero padding.
 
     Ids contain `-` themselves, so the split is whatever partition the backlog confirms: consecutive pieces that
-    each name a backlog entry. No such partition — or the id is an entry as it stands — leaves the id whole.
+    each name a backlog entry, every id of a range included. An id carries a letter: a bare number is a range's end,
+    never an id of its own, though it would match a heading such as «Stage 13». No such partition — or the id is an
+    entry as it stands — leaves the id whole.
     """
     body = "\n".join(mdsections.section_lines(text, backlog, with_heading=True))
     pieces = ticket.split("-")
 
     def known(token: str) -> bool:
-        return _names(token).search(body) is not None
+        return any(ch.isalpha() for ch in token) and _names(token).search(body) is not None
+
+    def through(first: str, last: str) -> tuple[str, ...] | None:
+        numbered = _NUMBERED.fullmatch(first)
+        if numbered is None or not last.isdecimal():
+            return None
+        prefix, number = numbered.groups()
+        if int(last) <= int(number):
+            return None
+        ids = tuple(f"{prefix}{n:0{len(number)}d}" for n in range(int(number), int(last) + 1))
+        return ids if all(known(one) for one in ids) else None
 
     def partition(start: int) -> tuple[str, ...] | None:
         if start == len(pieces):
             return ()
         for end in range(start + 1, len(pieces) + 1):
             head = "-".join(pieces[start:end])
-            if known(head):
-                rest = partition(end)
+            if not known(head):
+                continue
+            options = [((head,), end)]
+            if end < len(pieces) and (span := through(head, pieces[end])) is not None:
+                options.append((span, end + 1))
+            for ids, after in options:
+                rest = partition(after)
                 if rest is not None:
-                    return (head, *rest)
+                    return (*ids, *rest)
         return None
 
     if known(ticket):
@@ -282,7 +303,7 @@ def group_layers(group: str | None) -> frozenset[Layer]:
         return frozenset()
     if backend:
         return frozenset({layer}) & BACKEND_LAYERS
-    return _INFRA_PAIR if layer in _INFRA_PAIR else frozenset({layer})
+    return _INFRA_PAIR if layer is Layer.INFRASTRUCTURE else frozenset({layer})
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,7 +3,7 @@ name: build-session
 description: >
   The build protocol for one or several tickets, start to finish: admits the ticket, loads its spec sections, then
   exploration, design, plan, implementation, validation.
-argument-hint: "<ticket-id ...> <layer> [spec path]"
+argument-hint: "<ticket-id ...> [layer] [spec path]"
 disable-model-invocation: true
 ---
 
@@ -118,12 +118,15 @@ __PROCS_ARGS__
     all AC. `infra` / `ci-cd` tickets are technical — their requirements come from Infrastructure (12) / CI/CD
     (13) / Tech Constraints (2), not from user stories.
 
-Forms: `/build-session T-05 domain` · `/build-session T-05 T-06 T-07 domain` ·
-`/build-session T-05 domain docs/my_spec.md`. Arguments: ticket ID(s), then `<layer>` ∈
-`domain | application | infrastructure | interface | frontend | infra | ci-cd`, optionally a spec path — the token
-containing a `/` or ending in `.md`; without it the spec is the one whose Backlog lists the ticket. **Multiple
+Forms: `/build-session T-05 domain` · `/build-session T-05 T-06 T-07 domain` · `/build-session T-05-07 domain` ·
+`/build-session T-05` · `/build-session T-05 domain docs/my_spec.md`. Arguments: ticket ID(s), then optionally
+`<layer>` ∈ `domain | application | infrastructure | interface | frontend | infra | ci-cd`, optionally a spec path —
+the token containing a `/` or ending in `.md`; without it the spec is the one whose Backlog lists the ticket. Without
+a layer it is the one the Backlog group of the tickets names; a group that names none, or could be two (a bare
+`Infrastructure`), routes to ASK. **Multiple
 ticket IDs** are concatenated with `-` into a single combined ID used for all state files and commands:
-`B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`. The backend layers (`domain |
+`B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`. **A range** is an ID followed by a bare last number: `T-05-07`
+stands for `T-05` through `T-07` and is itself the `<TICKET-ID>`. The backend layers (`domain |
 application | infrastructure | interface`) are the Clean Architecture decomposition — use them only when the spec's
 Tech Constraints chose Clean Architecture; otherwise treat the whole backend as `application`. `frontend | infra |
 ci-cd` map to the remaining Backlog groups.

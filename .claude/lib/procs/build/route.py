@@ -41,7 +41,8 @@ class Args:
 def parse_args(line: str) -> Args:
     """A token with a `/` or ending in `.md` is the spec path — ticket ids and layers never look like that.
     Of the rest, a final token naming a layer is the layer; everything before it is ticket ids. A final token after
-    a ticket id that carries no digit is a mistyped layer (`T-05 domian`), not one more ticket."""
+    a ticket id that carries no digit is a mistyped layer (`T-05 domian`), not one more ticket. No layer token leaves
+    the layer to the backlog (`decide`)."""
     tokens = line.split()
     specs = tuple(t for t in tokens if "/" in t or t.endswith(".md"))
     rest = [t for t in tokens if t not in specs]
@@ -62,6 +63,7 @@ class Route:
     spec: str | None = None
     spec_source: str | None = None  # argument | backlog
     message: str | None = None
+    layer_source: str | None = None  # argument | backlog
 
 
 def decide(project: Path, line: str) -> Route:
@@ -92,9 +94,6 @@ def decide(project: Path, line: str) -> Route:
             message=f"Ticket(s) {', '.join(active)} still in_progress: the guards count every in_progress ticket, so its "
             "approvals would open the gates for this one. Set `Status: completed` in its session.md, then re-run.",
         )
-    if layer is None:
-        return Route(RouteKind.ASK, ticket, ids, message=f"No layer given for `{ticket}`. Ask for the layer.")
-
     spec_source = "argument"
     if spec_path is None:
         located = spec.locate(project, ids)
@@ -102,24 +101,44 @@ def decide(project: Path, line: str) -> Route:
             return Route(RouteKind.STOP, ticket, ids, layer, message=located.message)
         spec_path, spec_source = located.path, "backlog"
 
-    # The backlog settles two things that need no judgement: the ids behind a combined ticket id, and a ticket filed
-    # under another layer's group.
+    # The backlog settles what needs no judgement: the ids behind a combined ticket id, the layer when none is given,
+    # and a ticket filed under another layer's group.
     text = session.read_text(project / spec_path)
     backlog = spec.match_stages(text)[spec.Stage.BACKLOG].best
     hits: list[spec.BacklogHit] = []
     if backlog is not None:
         ids = tuple(piece for one in ids for piece in spec.split_combined(one, text, backlog.section))
         hits = spec.backlog_hits(text, backlog.section, ids)
+    # The layers each ticket's backlog group can stand for, when every entry of the ticket agrees. Only a group that
+    # names exactly one layer settles it beyond doubt: a bare `Infrastructure` or free wording is the user's to name.
+    filed: dict[str, frozenset[Layer]] = {}
     for one in ids:
-        # The layers its backlog group can stand for, when every entry of the ticket agrees. Only a group that
-        # names exactly one layer contradicts the request beyond doubt.
         options = {spec.group_layers(h.group) for h in hits if h.ticket == one}
-        stands_for = next(iter(options)) if len(options) == 1 else frozenset()
+        filed[one] = next(iter(options)) if len(options) == 1 else frozenset()
+    layer_source = "argument"
+    if layer is None:
+        settled = {one: next(iter(stands_for)) for one, stands_for in filed.items() if len(stands_for) == 1}
+        unsettled = [
+            f"`{one}` — {' or '.join(f'`{option.value}`' for option in sorted(stands_for)) or 'no layer'}"
+            for one, stands_for in filed.items()
+            if one not in settled
+        ]
+        if unsettled:
+            return Route(
+                RouteKind.ASK, ticket, ids,
+                message=f"No layer given, and the backlog group does not settle it: {', '.join(unsettled)}. Ask for the "
+                f"layer ({LAYERS}).",
+            )
+        if len(set(settled.values())) > 1:
+            spread = ", ".join(f"`{one}` — `{found.value}`" for one, found in settled.items())
+            return Route(RouteKind.STOP, ticket, ids, message=f"The tickets sit in different layers: {spread}. Re-run with IDs of one layer.")
+        layer, layer_source = next(iter(settled.values())), "backlog"
+    for one, stands_for in filed.items():
         if len(stands_for) == 1 and layer not in stands_for:
             actual = next(iter(stands_for))
             message = f"Ticket `{one}` is in layer `{actual.value}`, not `{layer.value}`. Re-run with matching IDs."
             return Route(RouteKind.STOP, ticket, ids, layer, spec_path, spec_source, message)
-    return Route(RouteKind.START, ticket, ids, layer, spec_path, spec_source)
+    return Route(RouteKind.START, ticket, ids, layer, spec_path, spec_source, layer_source=layer_source)
 
 
 def render(project: Path, route: Route) -> str:
@@ -133,7 +152,7 @@ def render(project: Path, route: Route) -> str:
     if route.kind in (RouteKind.STOP, RouteKind.ASK):
         return "\n".join(out) + "\n"
     assert route.spec is not None and route.layer is not None
-    out.append(f"LAYER: {route.layer.value}")
+    out.append(f"LAYER: {route.layer.value} (from {route.layer_source})")
     out.append(f"SPEC: {route.spec} (from {route.spec_source})")
     text = session.read_text(project / route.spec)
     matches = spec.match_stages(text)

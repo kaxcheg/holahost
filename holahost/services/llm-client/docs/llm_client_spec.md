@@ -1430,7 +1430,7 @@ The service skeleton — a copy of `holahost/templates/service` — arrives with
 - `L-16` `GET /api/llm-client/health`, with no provider calls
 - `L-17` The composition root
 
-### Infrastructure
+### Infra
 
 - `L-18` The Dockerfile and `docker-compose.yml` from the template, adapted — the application and
   Postgres with a volume

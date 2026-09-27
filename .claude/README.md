@@ -9,7 +9,7 @@ hooks and permissions live in this repository's `.claude/` and take effect only 
 |---|---|
 | `settings.json` | the session's model and effort (`opus` / `xhigh`), toolchain permissions, guard hooks |
 | `settings.local.json` | personal rules and absolute paths; not versioned |
-| `skills/build-session/` | `/build-session <ticket-id…> <layer>` — the protocol, from the route (START / STOP / ASK) and the spec sections on; next to it the state and plan templates; the subagents' `## Models` table |
+| `skills/build-session/` | `/build-session <ticket-id…> [layer]` — the protocol, from the route (START / STOP / ASK) and the spec sections on; next to it the state and plan templates; the subagents' `## Models` table |
 | `skills/build-commit/` | `/build-commit` — tests, review, local checks, commit, push, PR, CI, squash-merge |
 | `agents/test-runner.md` | a subagent; its `model` is only the default, a dispatch always passes `model` explicitly |
 | `bin/procs` | CLI of the build domain: `python3 .claude/bin/procs build …` from the project root — exactly the spelling the rule in `settings.json` names |
