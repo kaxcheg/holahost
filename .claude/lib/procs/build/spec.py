@@ -16,7 +16,8 @@ from procs.build.model import Layer
 from procs.core import mdsections
 
 SPEC_NAME = re.compile(r"spec|specification|solution[_-]?design|спек", re.IGNORECASE)
-NO_SPEC = "No spec file found under ./docs/ (expected a file with `spec` in the name)."
+NO_SPEC = "No spec under a `docs/` directory lists the ticket in its Backlog (a spec has `spec` in its file name)."
+_SKIP_DIRS = frozenset({"node_modules", "__pycache__"})  # and every hidden directory
 _US_ID = re.compile(r"\bUS-[\w-]*\d[\w-]*")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -96,19 +97,28 @@ class SpecLocation:
     candidates: tuple[str, ...] = ()
 
 
-def locate(project: Path) -> SpecLocation:
-    """`ls docs/ 2>/dev/null | grep -iE 'spec|specification|solution[_-]?design|спек'`: exactly one entry, or a stop."""
-    docs = project / "docs"
-    try:
-        names = sorted(name for name in os.listdir(docs) if not name.startswith(".") and SPEC_NAME.search(name))
-    except OSError:
-        names = []
-    if not names:
+def locate(project: Path, ticket_ids: tuple[str, ...]) -> SpecLocation:
+    """The spec under any `docs/` directory of the project whose Backlog lists one of the tickets: exactly one, or a
+    stop. Ticket ids carry their service's prefix, so the id alone tells the specs apart."""
+    found: list[str] = []
+    for root, dirs, files in os.walk(project):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in _SKIP_DIRS)
+        if os.path.basename(root) != "docs":
+            continue
+        for name in sorted(f for f in files if not f.startswith(".") and SPEC_NAME.search(f)):
+            path = os.path.join(root, name)
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+            backlog = match_stages(text)[Stage.BACKLOG].best
+            if backlog is None:
+                continue
+            ids = tuple(piece for one in ticket_ids for piece in split_combined(one, text, backlog.section))
+            if backlog_hits(text, backlog.section, ids):
+                found.append(os.path.relpath(path, project))
+    if not found:
         return SpecLocation(None, NO_SPEC)
-    if len(names) > 1:
-        listing = ", ".join(f"docs/{name}" for name in names)
-        return SpecLocation(None, f"Several spec files under ./docs/: {listing}. Ask which spec file to use.", tuple(names))
-    return SpecLocation(f"docs/{names[0]}", None)
+    if len(found) > 1:
+        return SpecLocation(None, f"Several specs list the ticket: {', '.join(found)}. Ask which spec file to use.", tuple(found))
+    return SpecLocation(found[0], None)
 
 
 @dataclass(frozen=True, slots=True)

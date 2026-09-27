@@ -1,19 +1,11 @@
 {
-  "//": "The build procedure (skills build-session/-commit, agent test-runner) and its permissions. The session's model and effort are set here: a skill's frontmatter applies for one turn, these keys for the whole session in this directory. Subagent models are the ## Models table of the build-session skill; the agent-model hook rejects an Agent call without an explicit model. Personal rules and absolute paths go in settings.local.json (not versioned).",
+  "//": "The build procedure (skills build-session/-commit, agent test-runner) and its permissions. The session's model and effort are set here: a skill's frontmatter applies for one turn, these keys for the whole session in this directory. Subagent models are the ## Models table of the build-session skill; the agent-model hook rejects an Agent call whose model differs from its row. Personal rules and absolute paths go in settings.local.json (not versioned).",
   "model": "opus",
   "effortLevel": "xhigh",
   "permissions": {
     "allow": [
       "Edit(/.build-state/**)",
-      "Edit(/src/**)",
-      "Edit(/app/**)",
-      "Edit(/backend/**)",
-      "Edit(/frontend/**)",
-      "Edit(/infra/**)",
-      "Edit(/tests/**)",
-      "Edit(/test/**)",
-      "Edit(/.env.example)",
-      "Edit(/docs/**)",
+      "Edit(/holahost/**)",
       "WebFetch",
       "WebSearch",
       "mcp__plugin_context7_context7__resolve-library-id",

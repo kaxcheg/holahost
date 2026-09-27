@@ -19,14 +19,13 @@ from typing import Any
 
 from procs.build import session
 from procs.build.model import CONTEXT7_LOG, CONTEXT_WATCH, Context7Lookup
-from procs.core import ledger, paths
+from procs.core import ledger, mdsections, paths
 
 Result = tuple[str, str, int]
 Guard = Callable[[str], Result]
 SILENT: Result = ("", "", 0)
 
-_MODELS_ROW = re.compile(r"^\|\s*`(low_model|high_model)`\s*\|\s*`([^`]+)`", re.M)
-FALLBACK_MODELS = {"sonnet": "low_model", "fable": "high_model"}
+_MODELS_ROW = re.compile(r"^\|\s*`([^`]+)`[^|]*\|\s*`([^`]+)`", re.M)
 GATED_TICKET_FILES = ("plan.md",)
 
 
@@ -104,25 +103,16 @@ def ledger_context(stdin: str) -> Result:
 DESIGN_APPROVED, PLAN_APPROVED = "design approved", "plan approved"
 
 
-def allowed_models() -> dict[str, str]:
-    """value → setting name, read from the `## Models` table of the build-session SKILL.md.
-
-    The table lives in the project's `.claude/skills/build-session/SKILL.md`, so that skill stays the single owner of
-    the mapping. A file without the table falls back to the built-in pair.
-    """
-    candidates = [str(paths.skill_dir("build-session") / "SKILL.md")]
-    allowed: dict[str, str] = {}
-    for path in candidates:
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as fh:
-                for match in _MODELS_ROW.finditer(fh.read()):
-                    allowed[match.group(2)] = match.group(1)
-            break
-    return allowed or dict(FALLBACK_MODELS)
+def required_models() -> dict[str, str]:
+    """subagent type → model, from the `## Models` table of the build-session SKILL.md — its single owner."""
+    text = session.read_text(paths.skill_dir("build-session") / "SKILL.md")
+    section = mdsections.find_section(text, "Models", max_level=2)
+    body = "\n".join(mdsections.section_lines(text, section)) if section else ""
+    return {match.group(1): match.group(2) for match in _MODELS_ROW.finditer(body)}
 
 
 def agent_model(stdin: str) -> Result:
-    """PreToolUse Agent|Task: a dispatch must carry an explicit, allowed `model` while a ticket is in progress."""
+    """PreToolUse Agent|Task: a dispatch carries exactly the `model` of its type's row while a ticket is in progress."""
     if _enter_project() is None:
         return SILENT
     payload = _payload(stdin)
@@ -133,15 +123,16 @@ def agent_model(stdin: str) -> Result:
     tool_input: dict[str, Any] = payload.get("tool_input") or {}
     if tool_input.get("subagent_type") == "fork":
         return SILENT  # a fork always runs on the parent model; the parameter is ignored
-    allowed = allowed_models()
+    required = required_models()
+    agent = tool_input.get("subagent_type") or "general-purpose"  # the Agent tool's default type
     model = tool_input.get("model")
-    if model in allowed:
+    if model is not None and required.get(agent) == model:
         return SILENT
-    listing = ", ".join(f"{name}={value}" for value, name in allowed.items())
+    listing = ", ".join(f"{name}={value}" for name, value in required.items())
     return (
         "",
-        "build-session ## Models: Agent dispatch blocked — pass the model explicitly, never inherit the main-loop "
-        f"model. Allowed: {listing}. Got model={model!r} (subagent_type={tool_input.get('subagent_type')!r}).\n",
+        f"build-session ## Models: Agent dispatch blocked — `{agent}` runs on {required.get(agent) or 'nothing: it has no row'}, "
+        f"got model={model!r}. The table: {listing}. A type without a row is not dispatched until the user adds one.\n",
         2,
     )
 
@@ -309,7 +300,7 @@ def branch_gate(stdin: str) -> Result:
     return (
         "",
         f"build-session ⏹ {tickets}: `git commit` on the default branch `{branch}` while a ticket is in_progress. "
-        "Ticket work is committed on its feature branch (build-session Setup, step 4; /build-commit applies to "
+        "Ticket work is committed on its feature branch (build-session Setup, step 5; /build-commit applies to "
         "feature branches only). Switch to the ticket branch, or commit outside the session if this is unrelated.\n",
         2,
     )

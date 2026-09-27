@@ -50,14 +50,6 @@ class Session:
 
 
 @dataclass(frozen=True, slots=True)
-class ModelSetting:
-    """One row of the `## Models` table of the build-session skill, the single owner of the mapping."""
-
-    name: str  # low_model | high_model
-    value: str  # the `model` parameter an Agent dispatch must carry
-
-
-@dataclass(frozen=True, slots=True)
 class Context7Lookup:
     at: dt.datetime
     library_id: str

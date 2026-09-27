@@ -33,18 +33,17 @@ If argument provided (`/build-commit TICKET-42`) — use it. If not — use the 
 If multiple `in_progress` tickets — ask which one. If zero — report no active tickets.
 Verify there are uncommitted changes (`git status`).
 
-Models: per build-session `## Models`. Never let a subagent inherit the main-loop model.
+Subagent models: build-session `## Models`.
 
 ## Step 1 — Tests
 
-Run `test-runner` (`model` = `low_model`). Process results. If errors — propose fixes. Repeat until green.
+Run `test-runner`. Process results. If errors — propose fixes. Repeat until green.
 
 ## Step 2 — Code Review
 
-Dispatch a `general-purpose` subagent with the Agent tool `model` set to `high_model`. Its task: invoke the
-built-in `code-review` skill with args `scope: the current git diff, plus these specs, each read in full: <SPEC>,
-<dependency specs>` at effort level `high` (or the level the user asked for), fix nothing, and return every finding
-verbatim — file, line, summary, failure scenario. Substitute real file paths before dispatching — never pass the
+Run `code-review` through the `general-purpose` dispatch of build-session `## Models`, with args `scope: the current
+git diff, plus these specs, each read in full: <SPEC>, <dependency specs>` at effort level `high` (or the level the
+user asked for). Substitute real file paths before dispatching — never pass the
 placeholders or a description in their place: `<SPEC>` is the spec `/build-session` located; `<dependency specs>` are
 the specs it references as dependencies (e.g. a platform frame spec, specs of the shared libraries it uses).
 Present the findings to the user unchanged; the user picks what to fix and what to skip. Apply only the chosen

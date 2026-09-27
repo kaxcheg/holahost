@@ -21,7 +21,7 @@ hooks and permissions live in this repository's `.claude/` and take effect only 
 - Model and effort are the `model` / `effortLevel` keys in `settings.json`: they apply for the whole session. A skill's
   frontmatter (`model`, `effort`, `allowed-tools`) applies for one turn only, so it is not used here.
 - Subagent models are the `## Models` table in `skills/build-session/SKILL.md`; the `agent-model` hook blocks an Agent
-  call without an explicit `model` from that table while a ticket is `in_progress`.
+  call whose `model` differs from its row, or whose type has no row, while a ticket is `in_progress`.
 - The gate on what goes into a commit is in the global `~/.claude/settings.json`: `git add` is under `deny`, a human
   stages (`skills/build-commit/SKILL.md`, step 4).
 

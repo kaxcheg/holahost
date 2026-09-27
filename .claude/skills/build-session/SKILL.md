@@ -1,7 +1,7 @@
 ---
 name: build-session
 description: >
-  The build protocol for one ticket, start to finish: admits the ticket, loads its spec sections, then
+  The build protocol for one or several tickets, start to finish: admits the ticket, loads its spec sections, then
   exploration, design, plan, implementation, validation.
 argument-hint: "<ticket-id ...> <layer> [spec path]"
 disable-model-invocation: true
@@ -49,22 +49,21 @@ apply this rule.
 
 ## Models
 
-Two named settings. Every Agent-tool dispatch passes one of them as the explicit `model`
-parameter — never omit it: an omitted model inherits the main-loop model, which wastes cost and,
-on the 1M-context variant, trips a credit gate that fails the subagent outright.
+The main loop — this skill and `/build-commit` — runs on the session model (`"model"` in `.claude/settings.json`).
+Subagents run on the model of their row, edited by hand for the task at hand; every dispatch passes it as `model`,
+and the `agent-model` guard blocks one that differs from its row or whose type has no row.
 
-| setting | value | dispatched with it |
-|---|---|---|
-| `low_model` | `sonnet` | `test-runner`, `feature-dev:code-explorer` |
-| `high_model` | `fable` | `feature-dev:code-architect`, `code-review` (inside a `general-purpose` subagent) |
+| agent | model |
+|---|---|
+| `test-runner` | `sonnet` |
+| `feature-dev:code-explorer` | `sonnet` |
+| `feature-dev:code-architect` | `fable` |
+| `general-purpose` — runs `code-review` | `fable` |
 
-`code-review` is a built-in skill, not an agent: it runs on the model of whoever invokes it. To
-run it on `high_model` regardless of the session model, dispatch a `general-purpose` subagent
-with `model: high_model` whose whole task is to invoke the `code-review` skill with the given
-args (scope, specs, effort level), fix nothing, and return every finding verbatim — file, line,
-summary, failure scenario. The main loop presents that report to the user unchanged. Such a
-subagent has the `Skill` tool with `code-review` available but no findings UI, so its text report
-is the deliverable.
+`code-review` is a built-in skill, not an agent: it runs on the model of whoever invokes it. To run it on its row's
+model, dispatch a `general-purpose` subagent whose whole task is to invoke the `code-review` skill with the given
+args (scope, specs, effort level), fix nothing, and return every finding verbatim — file, line, summary, failure
+scenario. Present that report to the user unchanged.
 
 ## Subagents
 
@@ -94,11 +93,6 @@ says auto-compaction is near, offer the user to save the state by hand; save onl
 
 ### Start
 
-The session runs from the service it builds: `.build-state/` and the spec are resolved from its directory. If the
-session's primary working directory is not `holahost/services/<svc>` of this repository — exactly that directory,
-not the repository root and not a subdirectory such as `backend/` — warn the user before anything else and continue
-only if they confirm.
-
 The route (computed — do not re-derive it):
 
 ```!
@@ -126,9 +120,10 @@ __PROCS_ARGS__
 
 Forms: `/build-session T-05 domain` · `/build-session T-05 T-06 T-07 domain` ·
 `/build-session T-05 domain docs/my_spec.md`. Arguments: ticket ID(s), then `<layer>` ∈
-`domain | application | infrastructure | interface | frontend | infra | ci-cd`, optionally a spec path — the token containing a `/` or ending in `.md`; it overrides
-auto-location under `./docs/`. **Multiple ticket IDs** are concatenated with `-` into a single combined ID used for
-all state files and commands: `B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`. The backend layers (`domain |
+`domain | application | infrastructure | interface | frontend | infra | ci-cd`, optionally a spec path — the token
+containing a `/` or ending in `.md`; without it the spec is the one whose Backlog lists the ticket. **Multiple
+ticket IDs** are concatenated with `-` into a single combined ID used for all state files and commands:
+`B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`. The backend layers (`domain |
 application | infrastructure | interface`) are the Clean Architecture decomposition — use them only when the spec's
 Tech Constraints chose Clean Architecture; otherwise treat the whole backend as `application`. `frontend | infra |
 ci-cd` map to the remaining Backlog groups.
@@ -139,19 +134,23 @@ ci-cd` map to the remaining Backlog groups.
    `.build-state/<TICKET-ID>/session.md` and `clarifications.md` from the templates (`## Ticket state`) with
    status `in_progress`, and never overwrites an existing file.
 
-2. **Explore** — launch 2–3 `feature-dev:code-explorer` agents in parallel (`## Subagents`,
-   `low_model`), each on a different aspect: entry points and direct dependencies of the ticket;
+2. ⏹ **Spec review** — run `code-review` (the `general-purpose` dispatch of `## Models`) at effort `high` with the
+   spec as a path target, scoped to the ranges loaded at Start: contradictions, gaps and ambiguities that would
+   mislead this ticket's work. Present the findings unchanged → clarifications.md.
+
+3. **Explore** — launch 2–3 `feature-dev:code-explorer` agents in parallel (`## Subagents`), each on a different
+   aspect: entry points and direct dependencies of the ticket;
    similar features/patterns and how they are implemented; test coverage and test patterns of
    the affected modules. Read every key file they identify before the design dialogue.
 
-3. **Design exploration** — collaborative dialogue turning the ticket into an approved design.
+4. **Design exploration** — collaborative dialogue turning the ticket into an approved design.
    No code, no implementation skill, no plan writing until the user approves the design.
    - Clarify one question at a time: purpose, constraints, success criteria; multiple-choice when
      possible. Discrepancies and principal decisions as they arise → clarifications.md.
    - ⏹ **Context7 — design**: every framework/library the design will touch, before proposing
      approaches.
    - Propose 2–3 approaches with trade-offs, recommended option first. For a broad design space
-     dispatch 3 parallel `feature-dev:code-architect` agents (`high_model`): minimal changes
+     dispatch 3 parallel `feature-dev:code-architect` agents: minimal changes
      (smallest footprint, maximum reuse) / clean architecture (maintainability, abstractions) /
      pragmatic balance (speed + quality, fits team context).
    - Present the design in sections scaled to complexity (architecture, components, data flow,
@@ -160,9 +159,9 @@ ci-cd` map to the remaining Backlog groups.
      (one plan or decomposition), ambiguity (two readings → pick one explicitly). Fix inline, no
      re-review.
 
-4. **Branch** — suggest a name per Branch Naming in `./CONTRIBUTING.md`, get approval, create it.
+5. **Branch** — suggest a name per Branch Naming in `./CONTRIBUTING.md`, get approval, create it.
 
-5. ⏹ **Testing approach** — assess the ticket, recommend with justification. The choice is
+6. ⏹ **Testing approach** — assess the ticket, recommend with justification. The choice is
    captured by the plan's task variant; → clarifications.md only if it diverges from an approach
    Source Data explicitly mandates.
    - **TDD** — domain logic, value objects, use cases, parsers, formatters: units with clear
@@ -172,7 +171,7 @@ ci-cd` map to the remaining Backlog groups.
      circular or meaningless here.
    - **Mixed** — TDD for the unit-testable parts, code-first for the rest.
 
-6. **Plan** — write `.build-state/<TICKET-ID>/plan.md` per `plan.template.md` (header, task
+7. **Plan** — write `.build-state/<TICKET-ID>/plan.md` per `plan.template.md` (header, task
    structure in the chosen testing variant, granularity and no-placeholder rules).
    - Scope check first: multiple independent subsystems → suggest one plan per subsystem, each
      producing working, testable software on its own.
@@ -182,7 +181,7 @@ ci-cd` map to the remaining Backlog groups.
    - Self-review before presenting: spec coverage (a task for every requirement of the approved
      design), placeholders, type and method-name consistency across tasks. Fix inline.
 
-7. Review the plan with the user → clarifications.md.
+8. Review the plan with the user → clarifications.md.
 
 ### Work
 
@@ -200,7 +199,7 @@ ci-cd` map to the remaining Backlog groups.
    - Intermediate validation: the project's test and static-type commands from the spec's Tech
      Constraints / CI/CD sections; the formatter/linter may run via a PostToolUse hook or
      pre-commit.
-   - Re-run `feature-dev:code-explorer` (`low_model`) when the codebase changed and dependencies
+   - Re-run `feature-dev:code-explorer` when the codebase changed and dependencies
      need re-checking.
 5. **User review** — present the completed work → clarifications.md; proceed on approval.
 6. ⏹ **Prose pass** — strip the record of how the work happened. Comments, docstrings, specs and

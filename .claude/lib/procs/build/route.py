@@ -60,7 +60,7 @@ class Route:
     ticket_ids: tuple[str, ...] = ()
     layer: Layer | None = None
     spec: str | None = None
-    spec_source: str | None = None  # argument | docs/
+    spec_source: str | None = None  # argument | backlog
     message: str | None = None
 
 
@@ -97,10 +97,10 @@ def decide(project: Path, line: str) -> Route:
 
     spec_source = "argument"
     if spec_path is None:
-        located = spec.locate(project)
+        located = spec.locate(project, ids)
         if located.path is None:
             return Route(RouteKind.STOP, ticket, ids, layer, message=located.message)
-        spec_path, spec_source = located.path, "docs/"
+        spec_path, spec_source = located.path, "backlog"
 
     # The backlog settles two things that need no judgement: the ids behind a combined ticket id, and a ticket filed
     # under another layer's group.

@@ -3,6 +3,7 @@
 - **Status:** in_progress | completed
 
 ## Protocol ledger
+- [ ] spec review — <n> findings
 - [ ] context7: design — <libraries>
 - [ ] design approved
 - [ ] testing approach — TDD | code-first | mixed
