@@ -22,6 +22,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
+from tests._support.settings import SERVICE_ENV
 
 from interface.http.api_base import SERVICE_NAME
 
@@ -112,6 +113,9 @@ def client(pg_dsn: str, jwks_url: str) -> Iterator[TestClient]:
         mp.setenv("EXPECTED_ISSUER", _ISSUER)
         mp.setenv("EXPECTED_AUDIENCE", SERVICE_NAME)
         mp.setenv("JWT_CLOCK_SKEW_SECONDS", "30")
+        for variable, value in SERVICE_ENV.items():
+            mp.setenv(variable, value)
+        mp.setenv("ANTHROPIC_API_KEY", "sk-e2e-test-only")
 
         # Import (not call) bootstrap — the module-level `app = bootstrap()` already runs it
         # exactly once, on this import, which is why the variables must still be set here.

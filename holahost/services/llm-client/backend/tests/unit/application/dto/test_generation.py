@@ -50,6 +50,7 @@ class TestGenerateResult:
             downgraded=False,
             failed_over=False,
             attempts=1,
+            provider_timeouts=0,
             provider_ms=900,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):

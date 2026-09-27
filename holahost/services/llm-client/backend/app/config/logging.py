@@ -18,7 +18,22 @@ import logging
 from holahost_observability import DisallowedLogFieldError, log_event
 from holahost_observability import configure_logging as _configure_logging
 
-SERVICE_LOG_FIELDS: frozenset[str] = frozenset()
+SERVICE_LOG_FIELDS: frozenset[str] = frozenset(
+    {
+        "requested_model",
+        "provider",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "provider_ms",
+        "attempts",
+        "provider_timeouts",
+        "downgraded",
+        "failed_over",
+        "preflight_rejected",
+        "vendor_stop_reason",
+    }
+)
 """Fields only this service emits. The platform's own (`request_id`, `client_id`, `sub`,
 `route`, `outcome`, `duration_ms`, `error_reason`) come from `CORE_LOG_FIELDS` and are not
 repeated here.

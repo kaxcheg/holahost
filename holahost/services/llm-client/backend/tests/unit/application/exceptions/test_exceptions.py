@@ -21,7 +21,9 @@ from application.exceptions import (
     RequestTooSlowForSyncError,
     UnknownModelError,
     UpstreamLlmError,
+    UsageNotRecordedError,
 )
+from application.ports.exceptions import IntegrityError
 from domain.value_objects.budget_scope import BudgetScope
 from domain.value_objects.idempotency_state import IdempotencyState
 
@@ -86,13 +88,18 @@ class TestBudgetExhaustedError:
 
 class TestUpstreamLlmError:
     def test_wire_shape(self) -> None:
-        error = UpstreamLlmError(attempts=2, upstream_status=529)
+        error = UpstreamLlmError(attempts=2, upstream_status=529, provider_timeouts=0)
         assert error.code == "UpstreamLlmError"
         assert error.details_dict() == {"attempts": 2, "upstream_status": 529}
 
     def test_a_timeout_has_no_upstream_status(self) -> None:
-        error = UpstreamLlmError(attempts=1, upstream_status=None)
+        error = UpstreamLlmError(attempts=1, upstream_status=None, provider_timeouts=0)
         assert error.details_dict() == {"attempts": 1, "upstream_status": None}
+
+    def test_timeouts_stay_out_of_the_wire_shape(self) -> None:
+        error = UpstreamLlmError(attempts=2, upstream_status=None, provider_timeouts=2)
+        assert error.details_dict() == {"attempts": 2, "upstream_status": None}
+        assert error.provider_timeouts == 2
 
 
 class TestContentRefusedError:
@@ -100,6 +107,32 @@ class TestContentRefusedError:
         error = ContentRefusedError(provider="anthropic", model="claude-haiku-4-5")
         assert error.code == "ContentRefusedError"
         assert error.details_dict() == {"provider": "anthropic", "model": "claude-haiku-4-5"}
+
+
+class TestUsageNotRecordedError:
+    def _error(self) -> UsageNotRecordedError:
+        return UsageNotRecordedError(
+            input_tokens=120,
+            output_tokens=30,
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            cause=IntegrityError(),
+        )
+
+    def test_is_published_by_no_contract(self) -> None:
+        error = self._error()
+        assert error.code == "UsageNotRecordedError"
+        assert error.details_dict() == {}
+
+    def test_keeps_the_confirmed_spend(self) -> None:
+        error = self._error()
+        assert (error.input_tokens, error.output_tokens) == (120, 30)
+        assert (error.provider, error.model) == ("anthropic", "claude-haiku-4-5")
+
+    def test_names_the_storage_failure_for_the_log(self) -> None:
+        # The storage failures carry no message of their own: without the name, a defect would
+        # read the same as an outage.
+        assert str(self._error()) == "usage not recorded: IntegrityError"
 
 
 class TestEveryErrorIsTheServices:
@@ -112,7 +145,10 @@ class TestEveryErrorIsTheServices:
             BudgetExhaustedError(
                 scope=BudgetScope.CLIENT, resets_at=datetime(2026, 9, 15, tzinfo=UTC)
             ),
-            UpstreamLlmError(attempts=1, upstream_status=None),
+            UpstreamLlmError(attempts=1, upstream_status=None, provider_timeouts=0),
             ContentRefusedError(provider="p", model="m"),
+            UsageNotRecordedError(
+                input_tokens=1, output_tokens=1, provider="p", model="m", cause=IntegrityError()
+            ),
         ]
         assert len({error.code for error in errors}) == len(errors)

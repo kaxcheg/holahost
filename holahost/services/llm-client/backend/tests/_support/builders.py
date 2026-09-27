@@ -10,11 +10,14 @@ from application.ports.generation import Generation
 from domain.entities.budget import Budget
 from domain.entities.model import Model
 from domain.entities.provider import Provider
+from domain.entities.usage_record import UsageRecord
 from domain.value_objects.budget_scope import BudgetScope
 from domain.value_objects.client_id import ClientId
 from domain.value_objects.finish_reason import FinishReason
+from domain.value_objects.generation_id import GenerationId
 from domain.value_objects.model_id import ModelId
 from domain.value_objects.provider_name import ProviderName
+from domain.value_objects.subject import Subject
 from domain.value_objects.token_count import TokenCount
 from domain.value_objects.usage import Usage
 
@@ -94,6 +97,30 @@ def make_generation(
     )
 
 
+def make_record(
+    *,
+    client_id: str = CLIENT,
+    provider: str = "anthropic",
+    usage: Usage | None = None,
+    downgraded: bool = False,
+    created_at: datetime | None = None,
+) -> UsageRecord:
+    """A usage record, created now unless told otherwise."""
+    return UsageRecord(
+        id=GenerationId.new(),
+        request_id="req-1",
+        client_id=ClientId(client_id),
+        subject=Subject(client_id),
+        provider=ProviderName(provider),
+        model=ModelId("claude-haiku-4-5"),
+        usage=usage if usage is not None else make_usage(),
+        latency_ms=900,
+        downgraded=downgraded,
+        failed_over=False,
+        created_at=created_at if created_at is not None else datetime.now(tz=UTC),
+    )
+
+
 def make_cmd(
     *,
     model_ref: str = "fast",
@@ -147,5 +174,6 @@ __all__ = [
     "make_generation",
     "make_model",
     "make_provider",
+    "make_record",
     "make_usage",
 ]

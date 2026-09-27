@@ -69,7 +69,7 @@ stateDiagram-v2
     resolved --> rejected_context: the estimated input exceeds the model's max_context
     resolved --> budget_ok: neither the caller's nor the provider's budget is exhausted
     resolved --> exhausted: the budget is exhausted
-    exhausted --> rejected_budget: the provider's budget, or the caller's under the reject policy
+    exhausted --> rejected_budget: every candidate's provider budget, or the caller's under the reject policy
     exhausted --> downgraded: the caller's budget under the downgrade policy
     downgraded --> budget_ok: the cheaper model, charged to the caller's downgrade pool
     downgraded --> rejected_budget: no cheaper model, or its pool or provider budget is exhausted
@@ -98,7 +98,7 @@ stateDiagram-v2
 | `accepted` | the alias or `model_id` resolves to an available model | `resolved` | — |
 | `accepted` | the alias or `model_id` is unknown, or the provider is disabled | `rejected_model` | 400 `UnknownModelError` |
 | `resolved` | the input is longer than the model's `max_context` | `rejected_context` | 422 `ContextOverflowError` |
-| `resolved` | the provider's budget is exhausted, or the caller's own under policy `reject` | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
+| `resolved` | the provider budget of every candidate is exhausted, or the caller's own under policy `reject` | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
 | `resolved` | the caller's own budget is exhausted, policy `downgrade`, a target can serve the request and neither the caller's downgrade pool nor that target's provider budget is exhausted | `budget_ok` | — (the actual model comes back in the response) |
 | `downgraded` | no target can serve the request, or the caller's downgrade pool is exhausted too | `rejected_budget` | 429 `BudgetExhaustedError` plus the reset time |
 | `calling` | the provider answered `200` | `completed` → `accounted` | 200 + text + usage + the actual provider and model |
@@ -168,7 +168,7 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
 | `BUDGET_WINDOW`, `BUDGET_CAP_PER_CLIENT`, `BUDGET_CAP_DOWNGRADE_PER_CLIENT`, `BUDGET_CAP_PER_PROVIDER` | the budget's window and ceilings |
 | `ON_BUDGET_EXHAUSTED`, `DOWNGRADE_TARGETS` | the caller's policy on exhaustion of its own budget and the cheaper models it falls back to |
 | `GENERATION_P95_BUDGET` | the target p95 of generation time |
-| `RATE_LIMIT_DEFAULT` | the per-service limit per `client_id`+`sub` pair |
+| `RATE_LIMIT_GENERATE` | the generation limit: per calling integration for a service token, per user for an exchanged one |
 | `JWT_CLOCK_SKEW` | the clock-skew allowance when checking `exp`/`iat` |
 | an error's `code` | the error class's name; the list and the body are Stage 7 |
 
@@ -261,9 +261,11 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
 
 **AC:**
 - The budget check happens **before** the provider is called.
-- The `BUDGET_CAP_PER_CLIENT` or `BUDGET_CAP_PER_PROVIDER` ceiling being exhausted under the `reject`
-  policy → `429 BudgetExhaustedError`, with which ceiling was exhausted and the start time of the
-  next window in `details`.
+- The `BUDGET_CAP_PER_CLIENT` ceiling exhausted under the `reject` policy, or the
+  `BUDGET_CAP_PER_PROVIDER` ceiling exhausted for the provider of every candidate → `429
+  BudgetExhaustedError`, with which ceiling was exhausted and the start time of the next window in
+  `details`. A candidate whose provider alone is out of budget is passed over, as in failover
+  (US-L04).
 - A budget refusal creates no usage record.
 - One caller exhausting its budget does not affect the others — the ceilings are independent.
 - The start of a new `BUDGET_WINDOW` restores access with no manual action.
@@ -277,9 +279,12 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
   the request to `DOWNGRADE_TARGETS` rather than refusing it: the targets are tried in order, and one
   that cannot serve the request — its context, the time left, or its provider's budget — is passed
   over, as a failover candidate is.
+- A target the request could already be answered by — one of its own candidates — is passed over
+  too: serving it from the downgrade pool would only hand the caller a second budget for the same
+  model.
 - A downgraded request is charged to a pool of its own, `BUDGET_CAP_DOWNGRADE_PER_CLIENT`, not to the
   exhausted one (B-4).
-- Exhaustion of the provider's budget is refused whatever the policy.
+- Exhaustion of the providers' budgets for every candidate is refused whatever the policy.
 - The cheaper model is set by a setting separate from `MODEL_ALIASES`; changing the alias table does
   not affect it.
 - The response carries the actual model, so the caller can tell degradation from normality without
@@ -354,6 +359,8 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
 - The limit is applied after `holahost-auth` and before the handler; the key is `(bucket,
   is_service)` over `client_id`/`sub`. The mechanism is `holahost_http.RateLimitMiddleware` with
   `InMemoryRateLimiter`; the service declares the buckets and the ceilings.
+- `POST /api/llm-client/generate` falls into the bucket `generate` with the `RATE_LIMIT_GENERATE`
+  ceilings; health is not limited.
 - Exceeding it → `429` with `Retry-After`.
 - The counters live in process memory and are not persisted — a restart zeroes the window. That is
   acceptable: the limit protects the service from overload. The budget (US-L05), by contrast, is
@@ -553,7 +560,7 @@ models is configuration, not persistent state (§3.6).
 |---|---|---|
 | Usage records (the log) | Postgres, append-only | indefinitely; pruning is an extension |
 | The budget's state | nowhere: an aggregate over the usage log for the current window | computed on every check (§6.1) |
-| Idempotency keys | process memory | until `IDEMPOTENCY_KEY_TTL` expires, or until a restart |
+| Idempotency keys | process memory | until `IDEMPOTENCY_KEY_TTL` expires, or until a restart; the volume is bounded by one TTL's traffic, and a live key is never evicted — that would quietly lift the protection against paying twice |
 | The registry of providers, models and aliases | the service's git config | changed by a rollout (§3.6) |
 | Provider keys | Secrets Manager (staging/prod), `.env.dev` (dev) | rotation is replacing the value plus a restart |
 | The texts of prompts and answers | **nowhere** | they live only in the request's memory |
@@ -576,10 +583,12 @@ config" is worse than a short restart.
 providers:
   anthropic:
     enabled: true
-    api_key_ref: "holahost/<env>/llm-client/anthropic-api-key"   # the secret's name in SM
-    models:
-      claude-sonnet-4-6:  { max_context: 200000, max_output: 8192, price_in: …, price_out: … }
-      claude-haiku-4-5:   { max_context: 200000, max_output: 8192, price_in: …, price_out: … }
+    api_key_ref: anthropic-api-key   # the secret's name: holahost/<env>/llm-client/<ref> in SM
+    models:                          # `deprecated: true` optionally marks a model (§4.2)
+      claude-sonnet-4-6:  { max_context: 200000, max_output: 8192, price_in: …, price_out: …,
+                            tokens_per_second: … }
+      claude-haiku-4-5:   { max_context: 200000, max_output: 8192, price_in: …, price_out: …,
+                            tokens_per_second: … }
 
 aliases:                             # an alias is an ordered list: the first candidate is called,
   default: [{ provider: anthropic, model: claude-sonnet-4-6 }]      # the rest are tried on failover
@@ -599,9 +608,30 @@ which of another vendor's models stands in for this one cannot be derived from t
 alias names the equivalence explicitly; a request naming a `model_id` resolves to that model alone and
 is never answered by another vendor's (US-L04).
 
-An incorrect config — an alias pointing at a non-existent model, an alias with no candidates, an
-enabled provider with no secret or no models — means the service does not start and writes the reason
-(US-L14).
+An incorrect config means the service does not start and writes the reason (US-L14). The same
+procedure checks it at startup and in CI (Stage 12). The file's own rules are reported at once; an
+entity's broken invariant stops the check at the first one found, and the models too slow for one
+attempt are reported together once every entity is valid:
+- a key the file's schema does not know — a misspelt one is an error, not a setting left at its
+  default;
+- an alias with no candidates, or pointing at a non-existent or deprecated model; an alias named
+  like a model id, since a request names either and one string meaning both would resolve by
+  accident;
+- a model listed twice in one alias, where the repeat would be a failover to the model that has
+  just failed, or twice among the downgrade targets;
+- a model id under two providers; a downgrade target that does not exist;
+- an `api_key_ref` outside kebab-case, since the environment variable the key is read from is
+  derived from it;
+- an enabled provider with no secret or no models; a model breaking its entity's invariants (§4.2);
+- a model that cannot deliver its answer ceiling within one attempt — `min(max_output,
+  MAX_OUTPUT_TOKENS) / tokens_per_second` above `PROVIDER_TIMEOUT` — since every request sending no
+  `max_tokens` would then be refused before any call.
+
+A provider's key is read once, at startup. On staging and prod the bootstrap fetches the secret of
+every enabled provider and hands it on through the environment variable named after its reference —
+`anthropic-api-key` → `ANTHROPIC_API_KEY`; on dev that variable comes from the `.env` file. A missing
+key stops the startup. The keys never pass through the service's typed settings: only the
+generation adapter needs them, and every other holder of the settings would see them too.
 
 The exhaustion policy (`ON_BUDGET_EXHAUSTED`) is a caller's setting — a default overridden per
 `client_id` — not an attribute of a budget: a provider's budget is shared by callers whose policies
@@ -633,12 +663,27 @@ exists, load that does not fit the budget is not served by the service.
 | `BUDGET_CAP_DOWNGRADE_PER_CLIENT` | input and output tokens per day, counted separately; the value is a deferred decision | the pool downgraded requests are charged to (US-L06) |
 | `ON_BUDGET_EXHAUSTED` | `reject` by default, overridden per `client_id`; applies to the caller's own budget only | a silent downgrade by default should not come as a surprise |
 | `DOWNGRADE_TARGETS` | an ordered list in the config, applied only under the `downgrade` policy | separate from the alias table (ADR B-4); tried in order, and a target that cannot serve the request is passed over |
-| `MODEL_TOKENS_PER_SECOND` | a conservative estimate of generation speed, set in the config per model | an input to the pre-flight check (§3.7.1) |
+| `MODEL_TOKENS_PER_SECOND` | a conservative estimate of generation speed, set in the config per model | an input to the pre-flight check (§3.7.1); a model whose answer ceiling does not fit one attempt at this speed keeps the service from starting (§3.6) |
 | `IDEMPOTENCY_KEY_TTL` | 15 minutes | the window in which a repeat with the same key is recognised as a duplicate |
-| `RATE_LIMIT_DEFAULT` | 600 req/hour per `client_id`+`sub` pair | the default from the framework specification |
+| `RATE_LIMIT_GENERATE` | bucket `generate`: 600 req/hour for a service token — one counter for the whole calling integration — and 60 req/hour per user of an exchanged token | generation is paid and holds a thread for the whole wait on the vendor, so it is priced apart from the framework's `ingest` and `read`; one number for both token kinds would starve a busy integration or hand each of its users the whole integration's allowance |
 | `GENERATION_P95_BUDGET` | 15 s | the path with no retries |
 | `JWT_CLOCK_SKEW` | 30 s | from the framework specification |
 | Database query timeout | 5 s | usage accounting must not hold a thread longer than the generation itself |
+
+Where a parameter is declared follows who applies its rule, not where its figure came from:
+- the figures derived from the gateway's ceiling — `PROVIDER_TIMEOUT`, `RETRY_*`,
+  `MAX_OUTPUT_TOKENS`, `MAX_INPUT_BYTES`, `GENERATION_P95_BUDGET` — are application constants
+  (`application/limits.py`). Dev has no gateway, yet its figures are the same: the service does not
+  branch on environment (§3.1), or dev would accept load that prod refuses;
+- the vendor's facts — `MODEL_ALIASES`, `FALLBACK_CHAIN`, `DOWNGRADE_TARGETS`,
+  `MODEL_TOKENS_PER_SECOND`, a model's limits and prices — are in the registry (§3.6): they change
+  when a vendor ships or retires a model;
+- money and fairness — `BUDGET_CAP_*`, `RATE_LIMIT_GENERATE`, `IDEMPOTENCY_KEY_TTL` — are the
+  service's settings: they say how much one deployment may spend, and staging rightly spends less
+  than prod. `ON_BUDGET_EXHAUSTED` belongs here by nature but sits in the registry: it maps
+  `client_id` to a policy, which environment variables express badly;
+- `BUDGET_WINDOW` is the domain's: a window other than a UTC day changes the aggregate's query, not
+  a number.
 
 #### 3.7.1 What makes the synchronous mode predictable
 
@@ -800,7 +845,7 @@ implementing it, not a reason to consider it something else.
 |---|---|---|
 | `scope` | an enumeration | `client` (the caller's own spend), `client_downgrade` (the caller's downgraded requests — a pool of its own, US-L06), `provider` |
 | `key` | `ClientId \| ProviderName` | `ClientId` for both client scopes, `ProviderName` for `provider` |
-| `window_start` | `datetime` (UTC) | the start of the current day; the boundary is set by the query, not by a stored field |
+| `window_start` | `datetime` (UTC) | midnight UTC of the current day, computed by the repository and bound into the aggregate's query (§6.1); not a stored field |
 | `spent` | `Usage` | an aggregate over the usage log: input and output separately |
 | `caps` | `Usage` | the window's ceilings from the config |
 
@@ -880,8 +925,9 @@ spend are not in this iteration's scope (E-4).
   identifier), `system: str`, `messages: list[(role: str, text: str)]`, `max_tokens: int | None`,
   `temperature: float | None`, `stop: list[str] | None`, `idempotency_key: str | None`
 - **Output:** `text: str`, `input_tokens: int`, `output_tokens: int`, `provider: str`, `model: str`,
-  `finish_reason: str`, `downgraded: bool`, `failed_over: bool`, plus `attempts: int` and
-  `provider_ms: int` — not part of the response, but what the completion event reports (§8.4)
+  `finish_reason: str`, `downgraded: bool`, `failed_over: bool`, plus `attempts: int`,
+  `provider_timeouts: int` and `provider_ms: int` — not part of the response, but what the
+  completion event reports (§8.4)
 - **Flow:** resolves `model` to the candidate models that may answer it and rejects unknown ones;
   checks the idempotency key, the context against `max_context`, and the pre-flight time estimate;
   compares against the caller's and the provider's budgets, applying the `reject` or `downgrade`
@@ -903,7 +949,8 @@ idempotency keys live in process memory (B-9); prompts and answers are stored no
 
 ```sql
 -- The usage log: one row per provider call with confirmed usage — an answer, or a content refusal.
--- Append-only: the contract provides for neither updates nor deletions.
+-- Append-only: the contract provides for neither updates nor deletions. The database does not forbid
+-- them — the app role holds ordinary DML grants — so the rule is the port's contract (§8.0).
 -- It is also the source of truth for the budget: spend in a window = an aggregate over this table.
 CREATE TABLE usage_records (
     id            uuid        PRIMARY KEY,
@@ -918,12 +965,12 @@ CREATE TABLE usage_records (
     downgraded    boolean     NOT NULL,
     failed_over   boolean     NOT NULL,
     created_at    timestamptz NOT NULL,
-    CONSTRAINT usage_tokens_non_negative  CHECK (input_tokens >= 0 AND output_tokens >= 0),
-    CONSTRAINT usage_latency_non_negative CHECK (latency_ms >= 0)
+    CONSTRAINT ck_usage_records_tokens_non_negative  CHECK (input_tokens >= 0 AND output_tokens >= 0),
+    CONSTRAINT ck_usage_records_latency_non_negative CHECK (latency_ms >= 0)
 );
 
-CREATE INDEX idx_usage_records_client_created   ON usage_records (client_id, created_at DESC);
-CREATE INDEX idx_usage_records_provider_created ON usage_records (provider, created_at DESC);
+CREATE INDEX ix_usage_records_client_id_created_at ON usage_records (client_id, created_at);
+CREATE INDEX ix_usage_records_provider_created_at  ON usage_records (provider, created_at);
 ```
 
 ### 6.1 The budget is computed, not stored
@@ -934,8 +981,13 @@ What has been spent in the current window is an aggregate over the usage log:
 SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0)
   FROM usage_records
  WHERE client_id = :client_id
-   AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC');
+   AND created_at >= :window_start;
 ```
+
+`:window_start` is midnight UTC of the current day, computed by the service and bound as a parameter
+rather than derived from the database's `now()`: the same value becomes `Budget.window_start` and
+its `resets_at`, so the aggregate and the `Retry-After` agree by construction, whatever time zone
+the session runs in.
 
 The caller's two pools do not overlap: the `client` scope adds `AND NOT downgraded`, the
 `client_downgrade` scope `AND downgraded` (US-L06); the `provider` scope aggregates symmetrically by
@@ -957,13 +1009,14 @@ extension E-5, and it is switched on from a measurement rather than in advance.
 | The log carries the actual provider and model | what was requested is recoverable from the logs, while the money was spent on what actually answered; `downgraded`/`failed_over` show that the requested and the actual diverged |
 | Idempotency keys are not in the schema | B-9: they protect against double payment while the process is alive; a restart aborts the generation itself, and there is nothing left to remember |
 | Indexes on `(client_id, created_at)` and `(provider, created_at)` | the two dimensions in which spend is asked about: "how much did the caller spend" and "how much went to the provider". They also serve the budget check |
+| Constraint and index names follow the schema's naming convention (`pk_`/`ck_`/`ix_` + table + columns) | a table built by a migration and one built from the schema in a test get the same names, so a later migration has a name to drop. No index is descending: Postgres reads a B-tree in both directions |
 | The usage log is not pruned | it is the entire history of spend; pruning and aggregating completed days is a question that will arise together with E-5 |
 
 ### 6.3 How the schema serves the operations
 
 | Operation | What happens in the database |
 |---|---|
-| Checking the budget | an aggregate over an index per checked scope for the current day: the caller's own pool and the provider, plus the caller's downgrade pool and the targets' providers when the policy moves the request. A failover candidate's provider is read only if failover actually happens, so the ordinary call stays at two aggregates |
+| Checking the budget | an aggregate over an index per checked scope for the current day: the caller's own pool and the provider, plus the caller's downgrade pool and the targets' providers when the policy moves the request. A later candidate's provider is read only when failover happens or the providers before it are out of budget, so the ordinary call stays at two aggregates |
 | A call with confirmed usage — an answer, or a content refusal | one `INSERT` into the usage log |
 | A call that produced no confirmed usage | nothing: no row, no counter |
 | Accepting and completing a request with an idempotency key | no database access — the key's state is in process memory |
@@ -1003,7 +1056,7 @@ POST /api/llm-client/generate
 Idempotency-Key: 7c1f…            # optional
 
 {
-  "model": "fast",                 // an alias from the config, or a model identifier
+  "model": "quality",              // an alias from the config, or a model identifier
   "system": "You are …",
   "messages": [
     { "role": "user", "content": "A guest asks: what time is check-in?" }
@@ -1081,12 +1134,18 @@ data.
 | `DuplicateRequestError` | 409 | the `Idempotency-Key` is already in flight or already completed | `state` (`in_flight`/`completed`) | no |
 | `BudgetExhaustedError` | 429 | a ceiling is exhausted and the request cannot be served (US-L05, US-L06); `Retry-After` is mandatory | `scope` (`client`/`client_downgrade`/`provider`), `resets_at` (ISO 8601) | yes, after `resets_at` |
 | `ContentRefusedError` | 422 | the model declined to answer this content | `provider`, `model` | no — the same content is refused again |
-| `UpstreamLlmError` | 502 | every candidate model failed transiently, or the time ran out between failures | `attempts`, `upstream_status` (absent on a timeout) | yes |
+| `UpstreamLlmError` | 502 | every candidate model failed transiently, or the time ran out between failures | `attempts`, `upstream_status` (`null` on a timeout) | yes |
 
 `ContentRefusedError` is a `422` rather than a `502`: the vendor answered, and what could not be
 processed is the caller's content. `provider` and `model` name the one that refused, which after a
 downgrade or a failover is not the one asked for. The call is paid for, so it produces a usage record
 like any other confirmed spend (§4.4).
+
+`RequestTooSlowForSyncError` also answers a request whose time ran out on slow budget reads before
+the first attempt could start: an overloaded database then looks like a request too large for the
+synchronous mode, with a `max_tokens_allowed` down to 0. It is not told apart deliberately — the
+reads would have to eat most of the time budget, and so rare a case is not worth an error of its
+own.
 
 A request the vendor itself rejects — a revoked key, a model missing at the vendor, a call the adapter
 built wrong — publishes no error of its own: the cause is this service's, the caller can do nothing
@@ -1100,7 +1159,7 @@ one fact in N documents turns it into N facts that drift apart.
 | Class | HTTP | Where from |
 |---|---|---|
 | `MalformedRequestError` | 422 | `RequestIdMiddleware` — `X-Request-ID` is missing |
-| `InvalidPayloadError` | 422 | a rejected field — from the framework's validation, and from the use case, which judges the same fields itself rather than trusting that every command came through the schema: an empty `messages`, an unknown role, `max_tokens` outside 1…`MAX_OUTPUT_TOKENS`, a key outside 1…128. `details` carries `field`, `limit` |
+| `InvalidPayloadError` | 422 | a rejected field — from the framework's validation, and from the use case, which judges the same fields itself rather than trusting that every command came through the schema: an empty `messages`, an unknown role, `max_tokens` below 1 (a value above `MAX_OUTPUT_TOKENS` is truncated, §7.2), a key outside 1…128. `details` carries `field`, `limit` |
 | `PayloadTooLargeError` | 413 | `BodySizeLimitMiddleware` — the body exceeds the transport ceiling |
 | `RateLimitExceededError` | 429 | `RateLimitMiddleware` — the per-caller limit was exceeded; `Retry-After` comes from the exception |
 | `InternalError` | 500 | anything not in the service's contract: an empty body, with the reason only in the log |
@@ -1166,7 +1225,9 @@ class BudgetRepo(Protocol):
     def provider_state(self, provider: ProviderName) -> Budget: ...
     # Two methods rather than one with a scope and a string key: the key's type follows from the
     # scope, and a mismatch is then a type error rather than an invariant violation at runtime.
-    # raises: StorageUnavailableError, ConcurrentUpdateError
+    # raises: StorageUnavailableError, ConcurrentUpdateError,
+    #         IntegrityError (the app role lacks the grant to read the log — a deploy defect;
+    #           holahost-db classes a privilege refusal with the integrity violations)
     # lock: **deliberately not taken** — the subject cannot be held for the duration of a generation,
     #       which takes seconds. Hence the accepted overspend within a single call (§1.3.3): two
     #       simultaneous generations will both see the remainder and both spend it
@@ -1217,13 +1278,14 @@ translation of vendor errors are shared platform-wide.
 
 Every method declares its `raises`; an implementation raises nothing beyond what is declared, and the
 calling code is obliged either to handle what is declared or to pass it up deliberately. The storage
-failures are split by reaction, and two of the three reach this service. `ConcurrentUpdateError` is
-one of them although there are no competing row updates here: `holahost-db` sets a statement timeout
+failures are split by reaction, and all three reach this service. `ConcurrentUpdateError` does
+although there are no competing row updates here: `holahost-db` sets a statement timeout
 and classes a cancelled statement with lock-wait timeouts, so a budget aggregate or an insert that
 outran the timeout arrives as that type. The use case passes it up from a budget read — repeating a
 five-second aggregate would spend the request's time budget — and retries the transaction around the
 usage record, whose insert is idempotent and whose spend is already paid for. `IntegrityError` stays a
-defect. Methods working with shared state also declare a concurrency contract: it states a business
+defect: on the usage record a `CHECK` the entity should have prevented, on a budget read a missing
+grant. Methods working with shared state also declare a concurrency contract: it states a business
 requirement ("a duplicate does not pass twice", "overspend within a single call is accepted"), while
 the mechanism that enforces it is the implementation's choice.
 
@@ -1267,12 +1329,12 @@ resulting stack, outermost first:
 | 1.4 | `max_tokens = min(cmd.max_tokens or model.max_output, MAX_OUTPUT_TOKENS, model.max_output)` | computed per model: a downgrade target or a failover candidate may have a lower ceiling of its own |
 | 1.5 | `estimate_input_tokens(system, messages) + max_tokens` → compared against `model.max_context` | exceeding it → `ContextOverflowError` |
 | 1.6 | `max_tokens / model.tokens_per_second` → compared against `min(time left, PROVIDER_TIMEOUT)` | does not fit → `RequestTooSlowForSyncError` |
-| 1.7 | `BudgetRepo.provider_state(provider)`, then `BudgetRepo.client_state("client", client_id)` | one short transaction; the provider's budget exhausted → `BudgetExhaustedError`, whatever the policy |
-| 1.8 | the caller's own budget exhausted: under `reject` → `BudgetExhaustedError`; under `downgrade` → `BudgetRepo.client_state("client_downgrade", client_id)`, then `ProvidersRepo.downgrade_targets()` filtered by steps 1.5, 1.6 and each target's provider budget | the pool exhausted → `BudgetExhaustedError` on `client_downgrade`; no target left → `BudgetExhaustedError` on `client`, because the caller never asked for the cheaper model and its limits are not the caller's to fix |
+| 1.7 | `BudgetRepo.provider_state(provider)` of the first candidate, then `BudgetRepo.client_state("client", client_id)` | one short transaction; the first candidate's provider out of budget is passed over as in failover — the next candidates' providers are read until one can serve — and only when none is left → `BudgetExhaustedError` on `provider`, whatever the policy |
+| 1.8 | the caller's own budget exhausted: under `reject` → `BudgetExhaustedError`; under `downgrade` → `BudgetRepo.client_state("client_downgrade", client_id)`, then `ProvidersRepo.downgrade_targets()` without the request's own candidates, filtered by steps 1.5, 1.6 and each target's provider budget | the pool exhausted → `BudgetExhaustedError` on `client_downgrade`; no target left → `BudgetExhaustedError` on `client`, because the caller never asked for the cheaper model and its limits are not the caller's to fix |
 | 1.9 | a loop over the candidates: `GenerationProvider.generate(model, …, timeout_s=min(time left, PROVIDER_TIMEOUT)) -> Generation` | an attempt starts only while a full answer still fits the time left; `TransientProviderError` → a repeat with backoff within `RETRY_MAX_ATTEMPTS` per candidate; a rejected request → the next candidate at once; a candidate that does not fit is passed over; candidates exhausted → `UpstreamLlmError`, or the rejection itself when no transient failure happened |
 | 1.10 | `UsageRecord.create(request_id, client_id, subject, provider, model, usage, latency, downgraded, failed_over)` | for an answer and for a content refusal alike — both are paid for; the record's `id` is generated here |
-| 1.11 | `with UnitOfWork(): UsageRepo.add(record)`, retried on `ConcurrentUpdateError`; then `IdempotencyStore.complete(...)` | the key is completed once the spend is fixed or its write has failed; a failure before that → `IdempotencyStore.release(...)`, and no usage record |
-| 1.12 | `GenerateResult(text, usage, provider, model, finish_reason, downgraded, failed_over, attempts, provider_ms)` | `attempts` and `provider_ms` feed the completion event (§8.4), not the response |
+| 1.11 | `with UnitOfWork(): UsageRepo.add(record)`, retried on `ConcurrentUpdateError`; then `IdempotencyStore.complete(...)` | the key is completed once the spend is fixed or its write has failed; a write failed for good → `UsageNotRecordedError`; a failure before that → `IdempotencyStore.release(...)`, and no usage record |
+| 1.12 | `GenerateResult(text, usage, provider, model, finish_reason, downgraded, failed_over, attempts, provider_timeouts, provider_ms)` | `attempts`, `provider_timeouts` and `provider_ms` feed the completion event (§8.4), not the response |
 
 The checks run cheapest-first (§5): everything that can be refused without reaching outside is refused
 before the provider is called. Writing the usage record is the last action, and only a call the
@@ -1286,9 +1348,9 @@ provider confirmed usage for reaches it.
 | `TransientProviderError` | the use case, step 1.9 | a repeat with backoff, then the next candidate; exhaustion → `502 UpstreamLlmError` |
 | `ProviderRefusedContentError` | the use case, step 1.9 | no repeat and no failover — the cause is the content, not the vendor. The confirmed usage is recorded, then `422 ContentRefusedError` |
 | `ProviderRejectedRequestError` | the use case, step 1.9 | no repeat; the next candidate at once, because the cause is this service's key, adapter or config at that one vendor. Every candidate rejecting it is a defect: the exception passes through and is answered `500` with the reason in the log |
-| `StorageUnavailableError` / `ConcurrentUpdateError` on a budget read | **a deliberate pass-through** | outward a `500`. Skipping the check and generating anyway is not an option: without the budget check the call would mean unaccounted spend, and repeating a five-second aggregate would spend the request's time budget |
-| `ConcurrentUpdateError` on `UsageRepo.add` | the use case, step 1.11 | the transaction is retried — the insert is idempotent by the record's `id`, and the generation is already paid for, so losing the record is the worst outcome |
-| `StorageUnavailableError` / `IntegrityError` on `UsageRepo.add` | **a deliberate pass-through** | outward a `500`, even though the generation has already been paid for. Returning the text with the spend unsaved is worse: it silently breaks the accounting. The spend stays in the event log (§8.4) |
+| `StorageUnavailableError` / `ConcurrentUpdateError` / `IntegrityError` on a budget read | **a deliberate pass-through** | outward a `500`. Skipping the check and generating anyway is not an option: without the budget check the call would mean unaccounted spend, and repeating a five-second aggregate would spend the request's time budget. `IntegrityError` here is a missing grant, a deploy defect |
+| `ConcurrentUpdateError` on `UsageRepo.add` | the use case, step 1.11 | the transaction is retried — the insert is idempotent by the record's `id`, and the generation is already paid for, so losing the record is the worst outcome. The retry is bounded by its count (three attempts) and by each attempt's own timeouts — a 2 s lock wait, a 5 s statement — not by the request's deadline: the caller loses the text whatever happens next, and stopping at the deadline would lose the record as well. Generations compete for no row here — the log is append-only and every `id` is fresh — so what raises it is a table held by DDL or maintenance, or an overloaded database. Past the retries it is handled as the row below |
+| `StorageUnavailableError` / `IntegrityError` on `UsageRepo.add` | the use case, step 1.11 | raised as `UsageNotRecordedError`, carrying the spend the provider confirmed, with the storage failure as its cause; outward a `500`, even though the generation has already been paid for. Returning the text with the spend unsaved is worse: it silently breaks the accounting. The router writes the carried figures into `op_completed` (§8.4), so the spend reaches the event log even when it misses the usage log |
 | `RateLimitExceededError` | the platform middleware, before the use case | `429` + `Retry-After` from the exception; the refusal event is written by `holahost_http.log_rejection` |
 
 Separately, the fate of the idempotency key after a successful `begin`: it is **released** while
@@ -1309,12 +1371,21 @@ beyond the core; the metrics themselves are collected in the "Metrics" section a
 op_completed { <the platform core>,
                requested_model, provider, model,
                input_tokens, output_tokens,
-               provider_ms, attempts,
+               provider_ms, attempts, provider_timeouts,
                downgraded, failed_over, preflight_rejected }
 ```
 
+`provider_timeouts` counts the attempts cut off by the service's own timeout — calls most likely
+charged whose spend never reaches the usage log (B-12). It comes from the result, or from
+`UpstreamLlmError`, which carries it outside its published `details`. For a request whose usage
+record could not be written, `input_tokens`, `output_tokens`, `provider` and `model` come from
+`UsageNotRecordedError`: once the write has failed, it is the only place the confirmed spend
+survives.
+
 The service's own fields are declared as a list in `config/logging.py` and passed to
-`configure_logging`; the core comes from `holahost-observability` and is not repeated here. Refusals
+`configure_logging`; the core comes from `holahost-observability` and is not repeated here. Beyond
+`op_completed`, the list carries `vendor_stop_reason`, for the adapter's warning about a vendor stop
+reason outside its table (§3.2). Refusals
 before routing — answered by middleware without entering the handler — are written by
 `holahost_http.log_rejection`, so there is an event even for a request that never reached the use case.
 
@@ -1480,7 +1551,7 @@ metric as health.
 | Generation success rate | metric math `success ÷ (success + failure)` | the service | yes | catches degradation that no single class of refusal shows |
 | Share of upstream failures | `outcome = UpstreamLlmError` | the service | yes | exhaustion of the attempts and of the alias's candidates |
 | Distribution of `attempts` | `attempts` | the service | no | the provider's health; steady growth is a reason to revisit `RETRY_*` |
-| Share of provider timeouts | `outcome = UpstreamLlmError` with `attempts` at the maximum | the service | no | estimates the spend that bypassed the log (B-12) |
+| Provider timeouts | `sum(provider_timeouts)` over the period | the service | no | estimates the spend that bypassed the log (B-12); attempts at the maximum would count `429` and `5xx`, which cost nothing, as well |
 | Pre-flight refusal rate | `preflight_rejected` | the service | no | a noticeable share means the synchronous mode has stopped covering the load — the trigger for E-3 |
 | Authorization refusal rate | `outcome = 401` / `403` | the module | no | a spike means a caller is misconfigured |
 | Limit refusal rate | `outcome = RateLimitExceededError` | the module | no | confirms that `RATE_LIMIT_*` is adequate |
@@ -1642,7 +1713,7 @@ assistant (§1.3.4).
 | 1 | The service's entry in `auth`'s git config: the service's `client_id`, the list of callers with `llm-client` in `allowed_audiences`, and their tokens' TTLs — Stage 11 |
 | 3 | The value of `MODEL_TOKENS_PER_SECOND` for each model: taken from a measurement on the target instance rather than from the provider's documentation — fixed at first implementation |
 | 6 | The threshold at which the budget check by aggregate stops fitting the time budget and E-5 is switched on — set by measurement rather than in advance |
-| 3 | The value of `BUDGET_CAP_DOWNGRADE_PER_CLIENT`: no caller uses the `downgrade` policy yet — fixed together with the first one that does, in the registry configuration |
+| 3 | The value of `BUDGET_CAP_DOWNGRADE_PER_CLIENT`: no caller uses the `downgrade` policy yet — fixed together with the first one that does, in the service's settings, which carry placeholders until then |
 | 3 | The input's share of the pre-flight time estimate: the term stays out until the prefill speed is measured alongside `MODEL_TOKENS_PER_SECOND`, since a guessed one either refuses requests that fit or does nothing (§3.7.1) |
 | 8 | A vendor stop reason outside the adapter's mapping table (§3.2) — decided together with the adapter |
 
@@ -1693,7 +1764,8 @@ every scenario — some callers would prefer a cheaper answer to no answer.
 Decision: the behaviour on exhaustion of a caller's own budget is set by that caller's `reject |
 downgrade` policy; `downgrade` moves the request to a cheaper model set by a **separate setting**,
 independent of the logical alias table, and charges it to a **pool of its own** per caller; the actual
-model is returned in the response. A provider's exhausted budget is refused whatever the policy.
+model is returned in the response. A provider's exhausted budget is not the caller's to downgrade:
+the request moves on to the next candidate, and is refused, whatever the policy, when none is left.
 Rejected: `reject` only (it turns the budget into an emergency stop); a silent downgrade without
 returning the actual model (the caller cannot tell degradation from normality); downgrading by
 re-pointing an alias (it mixes two independent settings — "which model is responsible for what" and

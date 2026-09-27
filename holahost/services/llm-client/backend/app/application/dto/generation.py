@@ -52,8 +52,8 @@ class GenerateResult:
     """A generation's output.
 
     `provider` and `model` are the ones that answered: `downgraded` and `failed_over` say why they
-    may differ from what was asked for. `attempts` and `provider_ms` are not part of the response —
-    they are what the completion event reports.
+    may differ from what was asked for. `attempts`, `provider_timeouts` and `provider_ms` are not
+    part of the response — they are what the completion event reports.
 
     :param text: The answer.
     :param input_tokens: The provider's count.
@@ -64,6 +64,8 @@ class GenerateResult:
     :param downgraded: The budget policy moved the request to the cheaper model.
     :param failed_over: A candidate other than the first answered.
     :param attempts: Provider calls made, across every candidate.
+    :param provider_timeouts: Attempts cut off by the service's own timeout — most likely charged by
+        the provider without the spend reaching the usage log.
     :param provider_ms: Time spent inside provider calls, across every attempt.
     """
 
@@ -76,4 +78,5 @@ class GenerateResult:
     downgraded: bool
     failed_over: bool
     attempts: int
+    provider_timeouts: int
     provider_ms: int

@@ -19,7 +19,9 @@ class BudgetRepo(Protocol):
     is accepted. Call inside an open unit of work.
 
     A read that outruns the statement timeout arrives as `ConcurrentUpdateError`: the platform
-    classes a cancelled statement with lock-wait timeouts, whose transaction is already gone.
+    classes a cancelled statement with lock-wait timeouts, whose transaction is already gone. A read
+    the database refuses for a missing grant arrives as `IntegrityError`, the platform's type for a
+    privilege refusal — a deploy defect.
     """
 
     def client_state(
@@ -37,6 +39,7 @@ class BudgetRepo(Protocol):
         :return: The budget for the current window.
         :raises StorageUnavailableError: the database is unreachable or timed out.
         :raises ConcurrentUpdateError: the aggregate was cancelled by the statement timeout.
+        :raises IntegrityError: the app role lacks the grant to read the usage log.
         """
         ...
 
@@ -47,5 +50,6 @@ class BudgetRepo(Protocol):
         :return: The budget for the current window.
         :raises StorageUnavailableError: the database is unreachable or timed out.
         :raises ConcurrentUpdateError: the aggregate was cancelled by the statement timeout.
+        :raises IntegrityError: the app role lacks the grant to read the usage log.
         """
         ...

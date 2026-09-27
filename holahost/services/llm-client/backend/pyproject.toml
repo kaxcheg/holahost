@@ -24,6 +24,7 @@ python = ">=3.12,<4.0"
 fastapi = "^0.115"
 uvicorn = {extras = ["standard"], version = "^0.34"}
 pydantic-settings = "^2.7"
+pyyaml = "^6.0"
 boto3 = "^1.35"
 # Drop the four lines below for a service that stores nothing.
 sqlalchemy = "^2.0"
@@ -41,6 +42,7 @@ mypy = "^1.13"
 import-linter = "^2.1"
 testcontainers = {extras = ["postgres"], version = "^4.9"}
 boto3-stubs = {extras = ["secretsmanager"], version = "^1.35"}
+types-pyyaml = "^6.0"
 httpx = "^0.28"
 
 [tool.pytest.ini_options]

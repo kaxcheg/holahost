@@ -69,6 +69,23 @@ class TestAttempts:
             h.use_case.execute(make_cmd())
         assert exc.value.upstream_status is None
 
+    def test_attempts_cut_off_by_the_timeout_are_counted(self) -> None:
+        h = build_use_case(
+            script={HAIKU.id.value: [fails(_overloaded(None)), fails(_overloaded(None))]}
+        )
+        with pytest.raises(UpstreamLlmError) as exc:
+            h.use_case.execute(make_cmd())
+        assert exc.value.provider_timeouts == 2
+        assert exc.value.details_dict() == {"attempts": 2, "upstream_status": None}
+
+    def test_a_timeout_before_an_answer_is_counted_too(self) -> None:
+        h = build_use_case(script={HAIKU.id.value: [fails(_overloaded(None)), ok()]})
+        assert h.use_case.execute(make_cmd()).provider_timeouts == 1
+
+    def test_a_vendor_status_is_not_a_timeout(self) -> None:
+        h = build_use_case(script={HAIKU.id.value: [fails(_overloaded(529)), ok()]})
+        assert h.use_case.execute(make_cmd()).provider_timeouts == 0
+
     def test_a_rejected_request_is_not_repeated(self) -> None:
         h = build_use_case(
             script={HAIKU.id.value: [fails(ProviderRejectedRequestError("revoked", status=401))]}
