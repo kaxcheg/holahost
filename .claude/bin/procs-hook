@@ -18,6 +18,26 @@ BUILD_GUARDS = (
     "ledger-gate",
     "branch-gate",
 )
+STATE_DEPTH = 3  # the bound of `procs.build.session.state_roots`, which owns where ticket state lives
+
+
+def has_state(project: str) -> bool:
+    """A `.build-state/` at the project root or up to STATE_DEPTH directories down, hidden ones skipped."""
+    level = [project]
+    for depth in range(STATE_DEPTH + 1):
+        if any(os.path.isdir(os.path.join(d, ".build-state")) for d in level):
+            return True
+        if depth == STATE_DEPTH:
+            break
+        deeper: list[str] = []
+        for d in level:
+            try:
+                with os.scandir(d) as entries:
+                    deeper.extend(e.path for e in entries if e.is_dir() and not e.name.startswith(".") and e.name != "node_modules")
+            except OSError:
+                continue
+        level = deeper
+    return False
 
 
 def main() -> int:
@@ -25,10 +45,8 @@ def main() -> int:
     config = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
     if os.environ.get("PROCS_GUARDS") == "off" or os.path.exists(os.path.join(config, "procs.guards.off")):
         return 0
-    if guard in BUILD_GUARDS:
-        project = os.environ.get("CLAUDE_PROJECT_DIR") or "."
-        if not os.path.isdir(os.path.join(project, ".build-state")):
-            return 0
+    if guard in BUILD_GUARDS and not has_state(os.environ.get("CLAUDE_PROJECT_DIR") or "."):
+        return 0
     here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     sys.path.insert(0, os.path.join(here, "lib"))
     from procs.guards import run

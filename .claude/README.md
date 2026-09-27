@@ -29,7 +29,7 @@ hooks and permissions live in this repository's `.claude/` and take effect only 
 
 Guards only, immediately and everywhere: `touch ~/.claude/procs.guards.off` (or `PROCS_GUARDS=off` in the environment).
 The file is checked first thing in `bin/procs-hook`, before the library is imported. Without a `.build-state/`
-directory the guards stay silent.
+directory — at the project root or up to three levels down, next to a spec's `docs/` — the guards stay silent.
 
 ## Checks after edits
 

@@ -28,7 +28,7 @@ def skill_dir(skill: str) -> Path:
 def project_dir() -> Path:
     """The session's project root: `$CLAUDE_PROJECT_DIR`, else the current directory.
 
-    The harness keeps the variable at the session root while the model's cwd moves, which is why state that lives
-    at the project root (`.build-state/`) is anchored on it and not on `cwd`.
+    The harness keeps the variable at the session root while the model's cwd moves, which is why the search for
+    ticket state (`.build-state/`) is anchored on it and not on `cwd`.
     """
     return Path(os.environ.get("CLAUDE_PROJECT_DIR") or ".")

@@ -39,14 +39,14 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_scaffold(args: argparse.Namespace) -> int:
     try:
-        created = status.scaffold(_project(args), args.ticket)
-    except FileNotFoundError as exc:
+        created = status.scaffold(_project(args), args.state)
+    except (FileNotFoundError, ValueError) as exc:
         print(f"procs build scaffold: {exc}", file=sys.stderr)
         return 1
     for path in created:
         print(f"created {path}")
     if not created:
-        print(f"nothing created: .build-state/{args.ticket}/ already has its state files")
+        print(f"nothing created: {args.state}/ already has its state files")
     return 0
 
 
@@ -67,5 +67,5 @@ def register(sub: Any) -> None:
 
     p = commands.add_parser("scaffold", help="create session.md and clarifications.md from the skill's templates")
     p.add_argument("--project")
-    p.add_argument("ticket")
+    p.add_argument("state", help="the ticket's state directory, as the route's STATE line prints it")
     p.set_defaults(func=_cmd_scaffold)

@@ -6,13 +6,14 @@ user stories a ticket without a US id relates to, and any stage whose heading co
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from pathlib import Path
 
 from procs.build import session, spec
-from procs.build.model import BUILD_STATE_DIR, SESSION_FILE, Layer
+from procs.build.model import SESSION_FILE, Layer
 from procs.core import mdsections
 
 
@@ -64,6 +65,7 @@ class Route:
     spec_source: str | None = None  # argument | backlog
     message: str | None = None
     layer_source: str | None = None  # argument | backlog
+    state: str | None = None  # the ticket's state directory, relative to the project
 
 
 def decide(project: Path, line: str) -> Route:
@@ -82,24 +84,25 @@ def decide(project: Path, line: str) -> Route:
     if args.ticket_id is None:
         return Route(RouteKind.ASK, message="No ticket id given: ask the user for ticket ID(s) and layer before proceeding.")
     ticket, ids, layer = args.ticket_id, args.ticket_ids, args.layer
-    if (project / BUILD_STATE_DIR / ticket / SESSION_FILE).is_file():
-        return Route(
-            RouteKind.STOP, ticket, ids,
-            message=f"Ticket `{ticket}` already has state in {BUILD_STATE_DIR}/{ticket}/; /build-session does not resume a ticket.",
-        )
-    active = [session.ticket_of(s) for s in session.in_progress_sessions(project)]
-    if active:
-        return Route(
-            RouteKind.STOP, ticket, ids,
-            message=f"Ticket(s) {', '.join(active)} still in_progress: the guards count every in_progress ticket, so its "
-            "approvals would open the gates for this one. Set `Status: completed` in its session.md, then re-run.",
-        )
     spec_source = "argument"
     if spec_path is None:
         located = spec.locate(project, ids)
         if located.path is None:
             return Route(RouteKind.STOP, ticket, ids, layer, message=located.message)
         spec_path, spec_source = located.path, "backlog"
+    state = session.state_dir(spec_path, ticket)
+    if (project / state / SESSION_FILE).is_file():
+        return Route(
+            RouteKind.STOP, ticket, ids,
+            message=f"Ticket `{ticket}` already has state in {state}/; /build-session does not resume a ticket.",
+        )
+    active = [os.path.dirname(s) for s in session.in_progress_sessions(project)]
+    if active:
+        return Route(
+            RouteKind.STOP, ticket, ids,
+            message=f"Still in_progress: {', '.join(active)}. The guards count every in_progress ticket, so its "
+            "approvals would open the gates for this one. Set `Status: completed` in its session.md, then re-run.",
+        )
 
     # The backlog settles what needs no judgement: the ids behind a combined ticket id, the layer when none is given,
     # and a ticket filed under another layer's group.
@@ -138,7 +141,7 @@ def decide(project: Path, line: str) -> Route:
             actual = next(iter(stands_for))
             message = f"Ticket `{one}` is in layer `{actual.value}`, not `{layer.value}`. Re-run with matching IDs."
             return Route(RouteKind.STOP, ticket, ids, layer, spec_path, spec_source, message)
-    return Route(RouteKind.START, ticket, ids, layer, spec_path, spec_source, layer_source=layer_source)
+    return Route(RouteKind.START, ticket, ids, layer, spec_path, spec_source, layer_source=layer_source, state=state)
 
 
 def render(project: Path, route: Route) -> str:
@@ -154,6 +157,7 @@ def render(project: Path, route: Route) -> str:
     assert route.spec is not None and route.layer is not None
     out.append(f"LAYER: {route.layer.value} (from {route.layer_source})")
     out.append(f"SPEC: {route.spec} (from {route.spec_source})")
+    out.append(f"STATE: {route.state}")
     text = session.read_text(project / route.spec)
     matches = spec.match_stages(text)
     backlog = matches[spec.Stage.BACKLOG]

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from procs.build import session
-from procs.build.model import CONTEXT7_LOG, CONTEXT_WATCH, Context7Lookup
+from procs.build.model import BUILD_STATE_DIR, CONTEXT7_LOG, CONTEXT_WATCH, Context7Lookup
 from procs.core import ledger, mdsections, paths
 
 Result = tuple[str, str, int]
@@ -150,29 +150,26 @@ def context7_gate(stdin: str) -> Result:
     sessions = _enter_project()
     if sessions is None:
         return SILENT
-    tool_input = _tool_input(stdin)
-    path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
-    root = os.getcwd()
-    absolute = os.path.abspath(path) if path else ""
-    if not absolute.startswith(root + os.sep):
+    parts = _project_relative(_tool_input(stdin))
+    if parts is None:
         return SILENT
-    rel = os.path.relpath(absolute, root)
-    parts = rel.split(os.sep)
-    if parts[0] == ".claude":
-        return SILENT
-    tickets = {session.ticket_of(s): os.path.dirname(s) for s in sessions}
-    if parts[0] == ".build-state":
-        if len(parts) < 3 or parts[2] not in GATED_TICKET_FILES or parts[1] not in tickets:
+    rel = os.sep.join(parts)
+    directories = [os.path.dirname(s) for s in sessions]
+    inside = _in_state(parts)
+    if inside is not None:
+        directory, name = inside
+        if name not in GATED_TICKET_FILES or directory not in directories:
             return SILENT
-        need = {parts[1]: tickets[parts[1]]}
+        need = [directory]
     else:
-        need = tickets  # a project file: a lookup recorded for any in_progress ticket suffices
-    if any(_logged(directory) for directory in need.values()):
+        need = directories  # a project file: a lookup recorded for any in_progress ticket suffices
+    if any(_logged(directory) for directory in need):
         return SILENT
-    logs = ", ".join(os.path.join(directory, CONTEXT7_LOG) for directory in need.values())
+    tickets = ", ".join(os.path.basename(directory) for directory in need)
+    logs = ", ".join(os.path.join(directory, CONTEXT7_LOG) for directory in need)
     return (
         "",
-        f"build-session ⏹ Context7 checkpoint not met for {', '.join(need)}: nothing recorded in {logs}. Run "
+        f"build-session ⏹ Context7 checkpoint not met for {tickets}: nothing recorded in {logs}. Run "
         "resolve-library-id → query-docs for every library this work touches (build-session ## Context7), tick the "
         f"ledger line in session.md, then retry writing {rel}.\n",
         2,
@@ -191,6 +188,17 @@ def _project_relative(tool_input: dict[str, Any]) -> list[str] | None:
     return None if parts[0] == ".claude" else parts
 
 
+def _in_state(parts: list[str]) -> tuple[str, str] | None:
+    """For a path under a `.build-state/`, the ticket directory (project-relative) and the file's name in it — two
+    empty strings when the path is not a ticket's own file; None for a path outside every state directory."""
+    if BUILD_STATE_DIR not in parts:
+        return None
+    at = parts.index(BUILD_STATE_DIR)
+    if len(parts) != at + 3:
+        return ("", "")
+    return (os.sep.join(parts[: at + 2]), parts[at + 2])
+
+
 def ledger_gate(stdin: str) -> Result:
     """PreToolUse Write|Edit|NotebookEdit: «an unticked checkpoint blocks the step after it», for the two approvals.
 
@@ -205,22 +213,24 @@ def ledger_gate(stdin: str) -> Result:
     parts = _project_relative(_tool_input(stdin))
     if parts is None:
         return SILENT
-    ledgers = {session.ticket_of(s): ledger.Ledger.parse(session.read_text(s)) for s in sessions}
+    ledgers = {os.path.dirname(s): ledger.Ledger.parse(session.read_text(s)) for s in sessions}
     rel = os.sep.join(parts)
-    if parts[0] == ".build-state":
-        if len(parts) < 3 or parts[2] not in GATED_TICKET_FILES or parts[1] not in ledgers:
+    inside = _in_state(parts)
+    if inside is not None:
+        directory, name = inside
+        if name not in GATED_TICKET_FILES or directory not in ledgers:
             return SILENT
         needed = DESIGN_APPROVED
-        parsed = ledgers[parts[1]]
+        parsed = ledgers[directory]
         if parsed is None or parsed.is_done(needed) is not False:
             return SILENT
-        blocked = [parts[1]]
+        blocked = [os.path.basename(directory)]
     else:
         needed = PLAN_APPROVED
         states = [parsed.is_done(needed) for parsed in ledgers.values() if parsed is not None]
         if not states or any(state is not False for state in states):
             return SILENT
-        blocked = [ticket for ticket, parsed in ledgers.items() if parsed is not None]
+        blocked = [os.path.basename(directory) for directory, parsed in ledgers.items() if parsed is not None]
     return (
         "",
         f"build-session ⏹ {', '.join(blocked)}: «{needed}» is not ticked in the Protocol ledger, and {rel} belongs to "

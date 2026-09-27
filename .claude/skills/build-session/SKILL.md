@@ -133,9 +133,9 @@ ci-cd` map to the remaining Backlog groups.
 
 ### Setup
 
-1. **The state files** — run `python3 .claude/bin/procs build scaffold <TICKET-ID>`: it creates
-   `.build-state/<TICKET-ID>/session.md` and `clarifications.md` from the templates (`## Ticket state`) with
-   status `in_progress`, and never overwrites an existing file.
+1. **The state files** — run `python3 .claude/bin/procs build scaffold <STATE>` with the route's `STATE`: it
+   creates `<STATE>/session.md` and `clarifications.md` from the templates (`## Ticket state`) with status
+   `in_progress`, and never overwrites an existing file.
 
 2. ⏹ **Spec review** — run `code-review` (the `general-purpose` dispatch of `## Models`) at effort `high` with the
    spec as a path target, scoped to the ranges loaded at Start: contradictions, gaps and ambiguities that would
@@ -174,7 +174,7 @@ ci-cd` map to the remaining Backlog groups.
      circular or meaningless here.
    - **Mixed** — TDD for the unit-testable parts, code-first for the rest.
 
-7. **Plan** — write `.build-state/<TICKET-ID>/plan.md` per `plan.template.md` (header, task
+7. **Plan** — write `<STATE>/plan.md` per `plan.template.md` (header, task
    structure in the chosen testing variant, granularity and no-placeholder rules).
    - Scope check first: multiple independent subsystems → suggest one plan per subsystem, each
      producing working, testable software on its own.
@@ -224,7 +224,10 @@ ci-cd` map to the remaining Backlog groups.
 9. `session.md`: status `completed`. Optionally `/revise-claude-md` when the ticket surfaced
    non-obvious project learnings; skip if routine.
 
-## Ticket state — `.build-state/<TICKET-ID>/`
+## Ticket state — `<STATE>/`
+
+`<STATE>` is `.build-state/<TICKET-ID>/` in the directory that holds the spec's `docs/` — for a service,
+`holahost/services/<svc>/.build-state/<TICKET-ID>/`. The route prints it as `STATE`.
 
 | file | content | origin |
 |---|---|---|

@@ -1,4 +1,4 @@
-# Plan template — `.build-state/<TICKET-ID>/plan.md`
+# Plan template — `<STATE>/plan.md`
 
 Read at the Plan step of the build-session protocol. Use the project's language, test framework
 and run commands from the spec's Tech Constraints (stack) and CI/CD (test/lint/type commands)

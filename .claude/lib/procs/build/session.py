@@ -1,9 +1,9 @@
-"""Ticket sessions on disk: which tickets are in progress, and what a session.md says.
+"""Ticket sessions on disk: where a ticket's state lives, which tickets are in progress, what a session.md says.
 
-`in_progress_sessions` is the one owner of the question every build guard and command asks first. It answers
-exactly as the original hooks did with
-`grep -liE 'status:\\*{0,2}[[:space:]]*in_progress' .build-state/*/session.md`:
-a session counts when ANY line matches, case-insensitively, with or without the bold marks.
+A ticket's state sits next to its spec's `docs/`: `holahost/services/<svc>/.build-state/<ticket>/`. `state_roots`
+finds every such `.build-state/` of the project, and `in_progress_sessions` is the one owner of the question every
+build guard and command asks first: a session counts when ANY line matches
+`status:\\*{0,2}[[:space:]]*in_progress`, case-insensitively, with or without the bold marks.
 """
 
 from __future__ import annotations
@@ -15,6 +15,10 @@ from pathlib import Path
 from procs.build.model import BUILD_STATE_DIR, SESSION_FILE, Session, Status
 
 STATUS_IN_PROGRESS = re.compile(r"status:\*{0,2}[ \t\r\f\v]*in_progress", re.IGNORECASE)
+# The deepest directory a spec's `docs/` hangs from: `holahost/services/<svc>`. `bin/procs-hook` repeats the bound in
+# its self-gate, which must not import the library.
+STATE_DEPTH = 3
+_SKIP_DIRS = frozenset({"node_modules", "__pycache__"})  # and every hidden directory
 
 _FIELD = re.compile(r"^\s*-\s*\*\*(?P<key>[^*:]+):\*\*\s*(?P<value>.*?)\s*$")
 _BARE_STATUS = re.compile(r"^\s*status:\s*(?P<value>\S.*?)\s*$", re.IGNORECASE)
@@ -29,27 +33,66 @@ def mentions_in_progress(text: str) -> bool:
     return any(STATUS_IN_PROGRESS.search(line) for line in text.split("\n"))
 
 
-def in_progress_sessions(project: str | Path = ".") -> list[str]:
-    """Paths `.build-state/<ticket>/session.md` relative to `project`, in the byte order a C-locale glob yields.
+def state_dir(spec_path: str, ticket: str) -> str:
+    """Where a ticket's state lives, relative to the project: `.build-state/<ticket>` in the directory that holds the
+    spec's nearest `docs/`, or at the project root for a spec outside any `docs/`."""
+    parts = Path(spec_path).parts[:-1]
+    owner = parts[: len(parts) - 1 - parts[::-1].index("docs")] if "docs" in parts else ()
+    return os.path.join(*owner, BUILD_STATE_DIR, ticket)
 
-    Like the shell glob it replaces, it skips hidden ticket directories and anything that is not a readable file.
-    """
-    base = os.path.join(str(project), BUILD_STATE_DIR)
-    try:
-        names = sorted(name for name in os.listdir(base) if not name.startswith("."))
-    except OSError:
-        return []
+
+def state_roots(project: str | Path = ".") -> list[str]:
+    """Every `.build-state/` of the project, relative to it: at the root and in directories up to STATE_DEPTH levels
+    down, past hidden directories and dependency trees."""
     found: list[str] = []
-    for name in names:
-        full = os.path.join(base, name, SESSION_FILE)
-        if not os.path.isfile(full):
-            continue
+    level = [""]
+    for depth in range(STATE_DEPTH + 1):
+        deeper: list[str] = []
+        for rel in level:
+            if os.path.isdir(os.path.join(project, rel, BUILD_STATE_DIR)):
+                found.append(os.path.join(rel, BUILD_STATE_DIR))
+            if depth == STATE_DEPTH:
+                continue
+            try:
+                with os.scandir(os.path.join(project, rel)) as entries:
+                    deeper.extend(
+                        os.path.join(rel, e.name)
+                        for e in entries
+                        if e.is_dir() and not e.name.startswith(".") and e.name not in _SKIP_DIRS
+                    )
+            except OSError:
+                continue
+        level = sorted(deeper)
+    return sorted(found)
+
+
+def all_sessions(project: str | Path = ".") -> list[str]:
+    """Paths `<root>/<ticket>/session.md` relative to `project`, over every state root, in byte order within each.
+    Hidden ticket directories and anything that is not a file are skipped."""
+    found: list[str] = []
+    for root in state_roots(project):
         try:
-            text = read_text(full)
+            names = sorted(name for name in os.listdir(os.path.join(project, root)) if not name.startswith("."))
+        except OSError:
+            continue
+        found.extend(
+            os.path.join(root, name, SESSION_FILE)
+            for name in names
+            if os.path.isfile(os.path.join(project, root, name, SESSION_FILE))
+        )
+    return found
+
+
+def in_progress_sessions(project: str | Path = ".") -> list[str]:
+    """The sessions of `all_sessions` whose session.md is readable and says `in_progress`."""
+    found: list[str] = []
+    for path in all_sessions(project):
+        try:
+            text = read_text(os.path.join(project, path))
         except OSError:
             continue
         if mentions_in_progress(text):
-            found.append(os.path.join(BUILD_STATE_DIR, name, SESSION_FILE))
+            found.append(path)
     return found
 
 

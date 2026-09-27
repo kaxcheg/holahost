@@ -15,14 +15,6 @@ SESSION_TEMPLATE = "session.template.md"
 CLARIFICATIONS_TEMPLATE = "clarifications.template.md"
 
 
-def tickets(project: Path) -> list[str]:
-    base = project / BUILD_STATE_DIR
-    try:
-        return sorted(n for n in os.listdir(base) if not n.startswith(".") and (base / n / SESSION_FILE).is_file())
-    except OSError:
-        return []
-
-
 def _status(path: Path) -> str:
     # One definition of «in progress» for the guards, /build-session and this view: the guards' status regex.
     if session.mentions_in_progress(session.read_text(path)):
@@ -32,18 +24,16 @@ def _status(path: Path) -> str:
 
 
 def render(project: Path, ticket: str | None) -> str:
-    names = [ticket] if ticket else tickets(project)
-    if not names:
-        return "NO TICKETS: .build-state/ has no session.md\n"
+    """Every ticket of every `.build-state/`, or the one named, with its status and state directory."""
+    paths = [p for p in session.all_sessions(project) if ticket is None or session.ticket_of(p) == ticket]
+    if not paths:
+        return f"TICKET {ticket}: NOT FOUND (no .build-state/{ticket}/session.md)\n" if ticket else "NO TICKETS: no .build-state/ has a session.md\n"
     out: list[str] = []
     active: list[str] = []
-    for name in names:
-        path = project / BUILD_STATE_DIR / name / SESSION_FILE
-        if not path.is_file():
-            out.append(f"TICKET {name}: NOT FOUND (.build-state/{name}/session.md is absent)")
-            continue
-        status = _status(path)
-        out.append(f"TICKET {name}: status={status}")
+    for path in paths:
+        name = session.ticket_of(path)
+        status = _status(project / path)
+        out.append(f"TICKET {name}: status={status} ({os.path.dirname(path)})")
         if status == Status.IN_PROGRESS.value:
             active.append(name)
     if not ticket:
@@ -60,15 +50,19 @@ def template_dir(project: Path) -> Path | None:
     return candidate if (candidate / SESSION_TEMPLATE).is_file() else None
 
 
-def scaffold(project: Path, ticket: str) -> list[str]:
-    """Create session.md and clarifications.md from the templates with `TICKET-ID` substituted.
+def scaffold(project: Path, state: str) -> list[str]:
+    """Create session.md and clarifications.md in `state` — the `STATE` the route printed, `<…>/.build-state/<ticket>` —
+    from the templates with `TICKET-ID` substituted.
 
     Existing files are never overwritten. Status is `in_progress` from creation, as the protocol requires.
     """
     templates = template_dir(project)
     if templates is None:
         raise FileNotFoundError("session templates not found next to the skill: " + str(paths.skill_dir("build-session")))
-    target = project / BUILD_STATE_DIR / ticket
+    target = project / state
+    if target.parent.name != BUILD_STATE_DIR:
+        raise ValueError(f"{state} is not a ticket directory under a {BUILD_STATE_DIR}/: pass the route's STATE")
+    ticket = target.name
     target.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
     for template, name in ((SESSION_TEMPLATE, SESSION_FILE), (CLARIFICATIONS_TEMPLATE, "clarifications.md")):
