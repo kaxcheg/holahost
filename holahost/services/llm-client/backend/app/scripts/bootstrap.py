@@ -15,7 +15,7 @@ from config.provider_keys import key_variable
 from interface.http.api_base import SERVICE_NAME
 from interface.http.app import create_app
 from interface.http.dependencies import (
-    get_provider_keys,
+    get_generation_provider,
     get_providers_repo,
     get_registry,
     get_settings,
@@ -60,9 +60,9 @@ def bootstrap() -> FastAPI:
 
     start = time.monotonic()
     get_settings()  # fail fast on missing/invalid config before touching anything else
-    # The provider keys, for the same reason: an environment missing one stops here, not on the
-    # first generation.
-    get_provider_keys()
+    # The provider keys and the chat models built from them, for the same reason: an environment
+    # missing a key stops here, not on the first generation.
+    get_generation_provider()
 
     app = create_app()
     log_event("startup_completed", duration_ms=(time.monotonic() - start) * 1000)

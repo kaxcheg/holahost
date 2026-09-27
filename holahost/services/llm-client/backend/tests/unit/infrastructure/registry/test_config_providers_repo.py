@@ -10,6 +10,7 @@ from tests._support.registry import model_entry, ref, registry_data
 
 from config.registry import RegistryFile, read_registry
 from domain.entities.model import Model
+from infrastructure.providers.dialects import DIALECTS
 from infrastructure.registry.config_providers_repo import (
     ConfigProvidersRepo,
     InvalidRegistryError,
@@ -18,7 +19,9 @@ from infrastructure.registry.config_providers_repo import (
 
 
 def _load(data: dict[str, Any]) -> ConfigProvidersRepo:
-    return load_providers_repo(RegistryFile.model_validate(data))
+    return load_providers_repo(
+        RegistryFile.model_validate(data), supported={"anthropic", "other-vendor"}
+    )
 
 
 def _ids(models: list[Model]) -> list[str]:
@@ -109,6 +112,21 @@ class TestTheDomainsChecks:
         assert _load(data).resolve("fast")[0].max_output == 500
 
 
+class TestAdapters:
+    def test_an_enabled_provider_without_an_adapter_stops_the_load(self) -> None:
+        with pytest.raises(
+            InvalidRegistryError, match="no adapter for enabled provider: other-vendor"
+        ):
+            load_providers_repo(
+                RegistryFile.model_validate(registry_data()), supported={"anthropic"}
+            )
+
+    def test_a_disabled_one_needs_none(self) -> None:
+        data = registry_data()
+        data["providers"]["other-vendor"]["enabled"] = False
+        load_providers_repo(RegistryFile.model_validate(data), supported={"anthropic"})
+
+
 class TestTheShippedRegistry:
     def test_it_loads(self) -> None:
-        assert load_providers_repo(read_registry()).resolve("default")
+        assert load_providers_repo(read_registry(), supported=DIALECTS).resolve("default")

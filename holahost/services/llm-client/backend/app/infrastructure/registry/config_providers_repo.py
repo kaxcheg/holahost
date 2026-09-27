@@ -6,7 +6,7 @@ is a rollout — so every method reads them without a lock, and none of them can
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 from application.estimates import generation_seconds, output_ceiling
 from application.limits import PROVIDER_TIMEOUT_SECONDS
@@ -51,16 +51,27 @@ class ConfigProvidersRepo:
         return sorted(alias for alias, chain in self._aliases.items() if chain)
 
 
-def load_providers_repo(registry: RegistryFile) -> ConfigProvidersRepo:
+def load_providers_repo(
+    registry: RegistryFile, *, supported: Collection[str]
+) -> ConfigProvidersRepo:
     """Build the registry's domain objects and check what only they can settle.
 
     The same procedure serves startup and CI's config validation, so a registry passing one passes
     the other.
 
-    :raises InvalidRegistryError: a provider or model breaks its entity's invariant, or a model
-        cannot deliver its answer ceiling within one attempt — then every request sending no
-        `max_tokens` would be refused before any call.
+    :param supported: The providers the service has an adapter for.
+    :raises InvalidRegistryError: an enabled provider has no adapter; a provider or model breaks its
+        entity's invariant; or a model cannot deliver its answer ceiling within one attempt — then
+        every request sending no `max_tokens` would be refused before any call.
     """
+    unsupported = sorted(
+        name
+        for name, entry in registry.providers.items()
+        if entry.enabled and name not in supported
+    )
+    if unsupported:
+        raise InvalidRegistryError(f"no adapter for enabled provider: {', '.join(unsupported)}")
+
     models: dict[str, Model] = {}
     for name, entry in registry.providers.items():
         try:
