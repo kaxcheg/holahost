@@ -88,8 +88,24 @@ implementing an external-library API call.
 
 ## Session Protocol
 
-A ticket runs start to finish in one session: nothing restores it in a new context. When the `context-watch` hook
-says auto-compaction is near, offer the user to save the state by hand; save only if they ask.
+A ticket runs start to finish in one session: nothing restores it in a new context. Compaction keeps the session
+but not its detail, so it follows `### Compaction`.
+
+### Compaction
+
+On a manual `/compact`, or when the `context-watch` hook says auto-compaction is near, offer it at the next clean
+point: a checkpoint or a plan task just finished, nothing half-edited, no agent running.
+
+Before — the user runs `/compact` only after both:
+1. The ledger is ticked with evidence, the finished `plan.md` steps are `[x]`, and every principal decision of the
+   dialogue is in `clarifications.md`.
+2. `session.md` has a `## Resume` section, rewritten each time: the protocol step and plan task, the branch and what
+   is uncommitted, the route's `SECTIONS TO READ` ranges, and whatever the next step needs that no file holds.
+
+After, before anything else:
+1. Re-read this `SKILL.md` in full, then `session.md`, `clarifications.md`, `plan.md`, and the spec ranges from
+   `## Resume` in full.
+2. Check the branch and `git status` against `## Resume`, tell the user the step you resume at, then continue.
 
 ### Start
 

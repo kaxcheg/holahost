@@ -388,9 +388,9 @@ def context_watch(stdin: str) -> Result:
         fill = f"{used // 1000}k of {at // 1000}k"
         model_text = (
             f"build-session: context {fill} — auto-compaction is near and the ticket is not restored after it. "
-            "Tell the user and, at the next safe point, offer to save the state by hand."
+            "Tell the user and, at the next clean point, offer build-session's `### Compaction` procedure."
         )
-        user_text = f"build: context {fill} — auto-compaction is near; save the state by hand if needed."
+        user_text = f"build: context {fill} — auto-compaction is near; compact at a clean point (build-session)."
         output = {
             "hookSpecificOutput": {"hookEventName": payload["hook_event_name"], "additionalContext": model_text},
             "systemMessage": user_text,
