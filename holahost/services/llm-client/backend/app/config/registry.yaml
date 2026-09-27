@@ -1,0 +1,39 @@
+# The registry of providers, models and aliases — read and checked at startup by config/registry.py
+# and infrastructure/registry. A change is a rollout: the running service never re-reads this file.
+#
+# `api_key_ref` names the provider key's secret, holahost/<env>/llm-client/<ref> in Secrets Manager;
+# the variable the key is read from follows from it — config/provider_keys.py.
+#
+# `tokens_per_second` is a conservative generation speed; the pre-flight check divides `max_tokens`
+# by it, and every model must deliver its answer ceiling within one attempt (application/limits.py)
+# or the service does not start. The figures are placeholders until measured on the target instance.
+providers:
+  anthropic:
+    enabled: true
+    api_key_ref: anthropic-api-key
+    models:
+      claude-sonnet-4-6:
+        max_context: 200000
+        max_output: 8192
+        price_in: "3"
+        price_out: "15"
+        tokens_per_second: 60
+      claude-haiku-4-5:
+        max_context: 200000
+        max_output: 8192
+        price_in: "1"
+        price_out: "5"
+        tokens_per_second: 120
+
+# An alias is an ordered chain: the first candidate is called, the rest are failover.
+aliases:
+  default: [{ provider: anthropic, model: claude-sonnet-4-6 }]
+  quality: [{ provider: anthropic, model: claude-sonnet-4-6 }]
+  fast: [{ provider: anthropic, model: claude-haiku-4-5 }]
+
+# Where the `downgrade` policy moves a request whose caller's own budget is exhausted, in order.
+downgrade_targets: [{ provider: anthropic, model: claude-haiku-4-5 }]
+
+on_budget_exhausted:
+  default: reject
+  overrides: {}

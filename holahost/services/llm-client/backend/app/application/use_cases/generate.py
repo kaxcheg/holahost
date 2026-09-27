@@ -22,6 +22,7 @@ from application.exceptions import (
     RequestTooSlowForSyncError,
     UnknownModelError,
     UpstreamLlmError,
+    UsageNotRecordedError,
 )
 from application.limits import (
     MAX_OUTPUT_TOKENS,
@@ -33,8 +34,11 @@ from application.limits import (
 )
 from application.ports.budgets import BudgetRepo
 from application.ports.exceptions import (
+    ConcurrentUpdateError,
+    IntegrityError,
     ProviderRefusedContentError,
     ProviderRejectedRequestError,
+    StorageUnavailableError,
     TransientProviderError,
 )
 from application.ports.generation import GenerationProvider
@@ -74,6 +78,7 @@ class _Call:
     attempts: int
     provider_seconds: float
     transient_failures: int
+    provider_timeouts: int
     last_transient_status: int | None
     rejection: ProviderRejectedRequestError | None
     provider_budgets: dict[ProviderName, Budget]
@@ -127,10 +132,13 @@ class GenerateUseCase:
         :raises ContentRefusedError: the model declined the content; the spend is recorded.
         :raises ProviderRejectedRequestError: every candidate's vendor rejected the request — a
             defect of this service's configuration or adapter, passed through to be answered `500`.
-        :raises StorageUnavailableError: conscious pass-through from a budget read or the record.
-        :raises ConcurrentUpdateError: from a budget read, passed through — repeating a cancelled
-            aggregate would spend the time budget; from the record, only after its retries.
-        :raises IntegrityError: conscious pass-through from the record — a defect.
+        :raises UsageNotRecordedError: a paid call's record could not be written — carries the
+            confirmed spend for the completion event; answered `500`.
+        :raises StorageUnavailableError: conscious pass-through from a budget read.
+        :raises ConcurrentUpdateError: conscious pass-through from a budget read — repeating a
+            cancelled aggregate would spend the time budget.
+        :raises IntegrityError: conscious pass-through from a budget read — the app role lacks a
+            grant, a deploy defect.
         """
         deadline = self.monotonic() + RETRY_TOTAL_BUDGET_SECONDS
         client_id = ClientId(cmd.client_id)
@@ -159,6 +167,7 @@ class GenerateUseCase:
             attempts=0,
             provider_seconds=0.0,
             transient_failures=0,
+            provider_timeouts=0,
             last_transient_status=None,
             rejection=None,
             provider_budgets={},
@@ -197,12 +206,22 @@ class GenerateUseCase:
 
         One short transaction for every read: none of it may stay open across a provider call.
 
+        A candidate's provider is read only when the ones before it are out of budget, so an
+        ordinary call stays at two aggregates.
+
         :return: The candidates to call — the requested ones, or the downgrade targets.
         """
         with self.uow:
-            provider_budget = self._provider_budget(call, candidates[0].provider.name)
-            if provider_budget.is_exhausted:
-                raise _exhausted(provider_budget)  # whatever the client's policy
+            first = self._provider_budget(call, candidates[0].provider.name)
+            if first.is_exhausted and not any(
+                self._fits(call, model)
+                and not self._provider_budget(call, model.provider.name).is_exhausted
+                for model in candidates[1:]
+            ):
+                # A provider out of budget is passed over, as one that failed is: what cannot
+                # answer is a provider, not the request. Refused only when no candidate is left —
+                # and then whatever the client's policy.
+                raise _exhausted(first)
             client_budget = self.budget_repo.client_state(BudgetScope.CLIENT, call.client_id)
             if not client_budget.is_exhausted:
                 return candidates
@@ -216,7 +235,10 @@ class GenerateUseCase:
             targets = [
                 target
                 for target in self.providers.downgrade_targets()
-                if self._fits(call, target)
+                # A model the request could already be answered by is no downgrade: it would
+                # only hand the caller a second budget for the same model.
+                if target not in candidates
+                and self._fits(call, target)
                 and not self._provider_budget(call, target.provider.name).is_exhausted
             ]
             if not targets:
@@ -235,7 +257,7 @@ class GenerateUseCase:
 
     def _call_candidates(self, call: _Call, candidates: list[Model]) -> GenerateResult:
         for index, model in enumerate(candidates):
-            if index > 0 and not self._usable_fallback(call, model):
+            if not self._usable(call, model):
                 continue
             result = self._attempt(call, model, failed_over=index > 0)
             if result is not None:
@@ -243,7 +265,9 @@ class GenerateUseCase:
 
         if call.transient_failures > 0:
             raise UpstreamLlmError(
-                attempts=call.attempts, upstream_status=call.last_transient_status
+                attempts=call.attempts,
+                upstream_status=call.last_transient_status,
+                provider_timeouts=call.provider_timeouts,
             )
         if call.rejection is not None:
             raise call.rejection
@@ -261,13 +285,13 @@ class GenerateUseCase:
         attempt_budget = min(self._remaining(call), PROVIDER_TIMEOUT_SECONDS)
         return generation_seconds(max_tokens, model) <= attempt_budget
 
-    def _usable_fallback(self, call: _Call, model: Model) -> bool:
-        """Whether a failover candidate can take the request.
+    def _usable(self, call: _Call, model: Model) -> bool:
+        """Whether a candidate can take the request.
 
         A candidate that cannot is skipped rather than refused: the request is not what failed, a
         provider is, and a context or budget refusal would send the caller after the wrong cause.
-        Its provider's budget is read only now, so a call that never fails over stays at the
-        budget reads of the main path.
+        A provider's budget not read with the budget check is read only now, so a call that never
+        fails over stays at the budget reads of the main path.
         """
         if not self._fits(call, model):
             return False
@@ -307,6 +331,8 @@ class GenerateUseCase:
                 call.provider_seconds += self.monotonic() - started
                 call.transient_failures += 1
                 call.last_transient_status = error.status
+                if error.status is None:
+                    call.provider_timeouts += 1
                 if attempt == RETRY_MAX_ATTEMPTS:
                     return None
                 # Clamped: a vendor's `Retry-After` may arrive as a date already past, and a
@@ -343,6 +369,7 @@ class GenerateUseCase:
                     downgraded=call.downgraded,
                     failed_over=failed_over,
                     attempts=call.attempts,
+                    provider_timeouts=call.provider_timeouts,
                     provider_ms=round(call.provider_seconds * 1000),
                 )
         return None
@@ -384,6 +411,14 @@ class GenerateUseCase:
 
         try:
             retry_on_concurrent_update(write)
+        except (StorageUnavailableError, ConcurrentUpdateError, IntegrityError) as error:
+            raise UsageNotRecordedError(
+                input_tokens=usage.input_tokens.value,
+                output_tokens=usage.output_tokens.value,
+                provider=model.provider.name.value,
+                model=model.id.value,
+                cause=error,
+            ) from error
         finally:
             # Completed even when the write failed: the provider has charged for this answer, and
             # a key released here would let the repeat pay for it a second time.

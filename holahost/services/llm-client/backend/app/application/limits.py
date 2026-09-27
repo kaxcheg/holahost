@@ -1,9 +1,11 @@
 """The ceilings a generation runs under.
 
-Application constants rather than settings: every time figure below is derived from the API
-Gateway's 30 s integration ceiling, and the output ceiling from what fits into it, so no environment
-may disagree about them. They describe the synchronous mode's boundary, not a promise — a
+Every time figure below is derived from the API Gateway's 30 s integration ceiling, and the output
+ceiling from what fits into it. They describe the synchronous mode's boundary, not a promise — a
 generation that does not fit is refused or cut rather than allowed to outlive the gateway.
+
+Application constants rather than settings, although dev has no gateway at all: the service does
+not branch on environment, or dev would accept load that prod refuses.
 """
 
 from __future__ import annotations

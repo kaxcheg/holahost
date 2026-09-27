@@ -1,4 +1,4 @@
-"""Process entrypoint: secrets -> settings -> logging -> guards -> app, in that order.
+"""Process entrypoint: registry -> secrets -> logging -> settings and keys -> app, in that order.
 
 Exposes `app` at module level for uvicorn (`uvicorn scripts.bootstrap:app`).
 """
@@ -11,9 +11,15 @@ import time
 from fastapi import FastAPI
 
 from config.logging import configure_logging, log_event
+from config.provider_keys import key_variable
 from interface.http.api_base import SERVICE_NAME
 from interface.http.app import create_app
-from interface.http.dependencies import get_settings
+from interface.http.dependencies import (
+    get_provider_keys,
+    get_providers_repo,
+    get_registry,
+    get_settings,
+)
 
 
 def _fetch_secrets_if_needed() -> None:
@@ -23,9 +29,10 @@ def _fetch_secrets_if_needed() -> None:
     start, by the instance role.
 
     A restart alone does not complete every rotation: for a credential the service merely
-    *presents*, it does. For one with a second party holding a copy — a database role's
-    password, a provider's key — the second party has to be brought into line by a deploy
-    step, and the rotation finishes on the next deploy rather than on a restart.
+    *presents* — a provider's key, issued by the vendor before it reaches Secrets Manager — it
+    does. For one with a second party holding a copy — the database role's password — the
+    second party has to be brought into line by a deploy step, and the rotation finishes on the
+    next deploy rather than on a restart.
     """
     env = os.environ.get("ENV", "dev")
     if env == "dev":
@@ -35,22 +42,27 @@ def _fetch_secrets_if_needed() -> None:
     # AWS_REGION read directly rather than through Settings: needed before Settings can be
     # constructed. Secret ids are service-scoped: holahost/<env>/llm-client/<name>.
     client = boto3.session.Session().client("secretsmanager", region_name=os.environ["AWS_REGION"])
-    for variable, secret in {"POSTGRES_PASSWORD": "db-password"}.items():
+    # The database password, and one key per enabled provider of the registry, under its
+    # `api_key_ref`.
+    secrets = {"POSTGRES_PASSWORD": "db-password"}
+    secrets.update({key_variable(ref): ref for ref in get_registry().enabled_key_refs().values()})
+    for variable, secret in secrets.items():
         value = client.get_secret_value(SecretId=f"holahost/{env}/{SERVICE_NAME}/{secret}")
         os.environ[variable] = value["SecretString"]
 
 
 def bootstrap() -> FastAPI:
+    # The registry first, checked whole: the secrets fetched next are the ones it names, so a
+    # broken one stops the start with its own error before any secret is asked for.
+    get_providers_repo()
     _fetch_secrets_if_needed()
     configure_logging()
 
     start = time.monotonic()
     get_settings()  # fail fast on missing/invalid config before touching anything else
-
-    # Startup guards go here: anything whose failure would otherwise be invisible until a
-    # request hits it, and which one query or one check can rule out. `holahost_db`'s
-    # `assert_rls_is_enforced(get_engine())` is the usual one for a service whose isolation
-    # rests on row-level security.
+    # The provider keys, for the same reason: an environment missing one stops here, not on the
+    # first generation.
+    get_provider_keys()
 
     app = create_app()
     log_event("startup_completed", duration_ms=(time.monotonic() - start) * 1000)

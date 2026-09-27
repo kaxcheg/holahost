@@ -9,6 +9,7 @@ from tests._support.builders import (
     ANTHROPIC,
     CLIENT,
     FALLBACK,
+    HAIKU,
     OTHER_VENDOR,
     SONNET,
     WINDOW_START,
@@ -19,7 +20,11 @@ from tests._support.builders import (
 from tests._support.generate import build_use_case, ok
 
 from application.exceptions import BudgetExhaustedError, RequestTooSlowForSyncError
-from application.ports.exceptions import ConcurrentUpdateError, StorageUnavailableError
+from application.ports.exceptions import (
+    ConcurrentUpdateError,
+    IntegrityError,
+    StorageUnavailableError,
+)
 from domain.value_objects.budget_policy import BudgetPolicy
 from domain.value_objects.budget_scope import BudgetScope
 from domain.value_objects.client_id import ClientId
@@ -42,6 +47,52 @@ class TestProviderBudget:
         assert exc.value.resets_at == WINDOW_START + timedelta(days=1)
         assert h.budgets.reads == [(BudgetScope.PROVIDER, "anthropic")]
         assert h.generation.calls == []
+
+    def test_an_exhausted_first_provider_is_passed_over(self) -> None:
+        h = build_use_case(
+            routes={"fast": [HAIKU, FALLBACK]},
+            budgets=[exhausted_budget(BudgetScope.PROVIDER, ANTHROPIC.name)],
+            script={FALLBACK.id.value: [ok()]},
+        )
+
+        result = h.use_case.execute(make_cmd())
+
+        assert (result.model, result.failed_over) == ("other-vendor-mini", True)
+        assert h.generation.called_models() == ["other-vendor-mini"]
+        assert h.budgets.reads == [
+            (BudgetScope.PROVIDER, "anthropic"),
+            (BudgetScope.PROVIDER, "other-vendor"),
+            (BudgetScope.CLIENT, CLIENT),
+        ]
+
+    def test_every_candidates_provider_exhausted_is_refused(self) -> None:
+        h = build_use_case(
+            routes={"fast": [HAIKU, FALLBACK]},
+            budgets=[
+                exhausted_budget(BudgetScope.PROVIDER, ANTHROPIC.name),
+                exhausted_budget(BudgetScope.PROVIDER, OTHER_VENDOR.name),
+            ],
+        )
+
+        with pytest.raises(BudgetExhaustedError) as exc:
+            h.use_case.execute(make_cmd())
+
+        assert exc.value.scope is BudgetScope.PROVIDER
+        assert h.generation.calls == []
+
+    def test_a_candidate_that_cannot_serve_does_not_rescue_an_exhausted_first(self) -> None:
+        small = make_model(
+            "other-vendor-mini", provider=OTHER_VENDOR, max_context=1050, max_output=1000
+        )
+        h = build_use_case(
+            routes={"fast": [HAIKU, small]},
+            budgets=[exhausted_budget(BudgetScope.PROVIDER, ANTHROPIC.name)],
+        )
+
+        with pytest.raises(BudgetExhaustedError) as exc:
+            h.use_case.execute(make_cmd())
+
+        assert exc.value.scope is BudgetScope.PROVIDER
 
 
 class TestClientBudget:
@@ -163,6 +214,33 @@ class TestDowngrade:
         assert exc.value.scope is BudgetScope.CLIENT
         assert h.generation.calls == []
 
+    def test_a_target_among_the_requests_own_candidates_is_passed_over(self) -> None:
+        h = build_use_case(
+            budgets=[exhausted_budget(BudgetScope.CLIENT, _CLIENT_ID)],
+            default_policy=BudgetPolicy.DOWNGRADE,
+            downgrade=[HAIKU, SONNET],
+            script={SONNET.id.value: [ok()]},
+        )
+
+        result = h.use_case.execute(make_cmd())
+
+        assert (result.model, result.downgraded) == ("claude-sonnet-4-6", True)
+        assert h.generation.called_models() == ["claude-sonnet-4-6"]
+
+    def test_the_requested_model_as_the_only_target_is_no_downgrade(self) -> None:
+        # Serving haiku again from the downgrade pool would only be a second budget for it.
+        h = build_use_case(
+            budgets=[exhausted_budget(BudgetScope.CLIENT, _CLIENT_ID)],
+            default_policy=BudgetPolicy.DOWNGRADE,
+            downgrade=[HAIKU],
+        )
+
+        with pytest.raises(BudgetExhaustedError) as exc:
+            h.use_case.execute(make_cmd())
+
+        assert exc.value.scope is BudgetScope.CLIENT
+        assert h.generation.calls == []
+
     def test_a_downgraded_answer_is_recorded_as_such(self) -> None:
         h = build_use_case(
             budgets=[exhausted_budget(BudgetScope.CLIENT, _CLIENT_ID)],
@@ -228,5 +306,11 @@ class TestTransactions:
     def test_a_cancelled_aggregate_passes_through(self) -> None:
         h = build_use_case(budget_error=ConcurrentUpdateError())
         with pytest.raises(ConcurrentUpdateError):
+            h.use_case.execute(make_cmd())
+        assert h.generation.calls == []
+
+    def test_a_missing_grant_passes_through(self) -> None:
+        h = build_use_case(budget_error=IntegrityError())
+        with pytest.raises(IntegrityError):
             h.use_case.execute(make_cmd())
         assert h.generation.calls == []

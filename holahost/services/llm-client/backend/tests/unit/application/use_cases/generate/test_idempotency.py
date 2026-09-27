@@ -18,6 +18,7 @@ from application.exceptions import (
     ContentRefusedError,
     DuplicateRequestError,
     UpstreamLlmError,
+    UsageNotRecordedError,
 )
 from application.ports.exceptions import (
     ProviderRefusedContentError,
@@ -78,7 +79,7 @@ class TestAnsweredRequests:
         # repeat buy the same answer a second time, for as long as the database is down.
         h = build_use_case(usage_errors=[StorageUnavailableError()])
 
-        with pytest.raises(StorageUnavailableError):
+        with pytest.raises(UsageNotRecordedError):
             h.use_case.execute(make_cmd(idempotency_key="k-1"))
 
         assert h.idempotency.completed == [(CLIENT, "k-1", make_usage())]

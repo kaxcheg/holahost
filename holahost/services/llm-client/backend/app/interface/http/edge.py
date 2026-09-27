@@ -24,6 +24,12 @@ HEALTH_PATH = f"{API_BASE_URL}/health"
 # while the .env files went on claiming the old figures.
 RATE_LIMIT_WINDOW_SECONDS = 3600
 
+GENERATE_BUCKET = "generate"
+"""Generation — paid, and holding a pool thread for the whole wait on the vendor: the service's most
+expensive operation, priced apart from the framework's `ingest` and `read`."""
+
+_GENERATE_PATH = f"{API_BASE_URL}/generate"
+
 # A transport limit: it bounds the whole HTTP body, multipart framing included, and only
 # decides how much the edge reads before anyone can look. A service that also checks the
 # thing *inside* the body derives this from that limit with `body_cap_for_upload`, and
@@ -50,5 +56,5 @@ def bucket_for(method: str, path: str) -> str | None:
     Matches on prefix because it runs before routing, where a path parameter is not parsed
     yet — the same reason the limiter can be consulted while the body is still on the wire.
     """
-    del method, path
-    return None
+    del method
+    return GENERATE_BUCKET if path.startswith(_GENERATE_PATH) else None

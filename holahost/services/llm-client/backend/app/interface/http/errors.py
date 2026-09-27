@@ -20,6 +20,12 @@ from __future__ import annotations
 
 from holahost_http import ErrorContract, InvalidPayloadError, NotFoundError
 
+from application.ports.exceptions import (
+    ConcurrentUpdateError,
+    IntegrityError,
+    ProviderRejectedRequestError,
+    StorageUnavailableError,
+)
 from domain.exceptions import DomainValidationError
 
 ERROR_CONTRACT: ErrorContract = {
@@ -32,7 +38,13 @@ ERROR_CONTRACT: ErrorContract = {
 framing, while 422 (RFC 4918 §11.2) is a syntactically correct request whose content could
 not be processed. Reserve 400 for an HTTP framing violation."""
 
-SILENT_500_TYPES: tuple[type[Exception], ...] = (DomainValidationError,)
+SILENT_500_TYPES: tuple[type[Exception], ...] = (
+    DomainValidationError,
+    StorageUnavailableError,
+    ConcurrentUpdateError,
+    IntegrityError,
+    ProviderRejectedRequestError,
+)
 """Answered `500` with an empty body, through an ordinary handler.
 
 A domain invariant that reached the interface layer untranslated is a defect either way: an
@@ -41,4 +53,6 @@ it a published error did not produce one. Named rather than left to the bare-`Ex
 handler, which Starlette binds to `ServerErrorMiddleware` — that one re-raises after writing
 the response, so uvicorn prints an unstructured traceback outside the JSON log and outside
 its scrubbing. Another type joins only for the same reason: it must never reach a caller,
-and its reason must still reach the log."""
+and its reason must still reach the log. The use case lets four such through on purpose: the
+storage failures of a budget read, whose driver message may name the host or the table, and every
+candidate's vendor rejecting the request, whose message is the vendor's."""

@@ -3,8 +3,9 @@
 The machinery is `holahost_http.register_error_handlers`' and is tested there: the MRO walk,
 the closed vocabulary, the bare-`Exception` path and its header echo, the log level following
 the status. What is left here is what this service decides — which errors it publishes and
-with what status, and that its own untranslated domain-invariant violation is answered `500`
-rather than reaching Starlette's re-raising handler.
+with what status, and that its own untranslated domain-invariant violation, and the storage
+failures it passes through on purpose, are answered `500` rather than reaching Starlette's
+re-raising handler.
 """
 
 import pytest
@@ -13,6 +14,12 @@ from fastapi.testclient import TestClient
 from holahost_http import InvalidPayloadError, NotFoundError, RequestIdMiddleware
 from tests._support.http import register_test_handlers
 
+from application.ports.exceptions import (
+    ConcurrentUpdateError,
+    IntegrityError,
+    ProviderRejectedRequestError,
+    StorageUnavailableError,
+)
 from config.logging import configure_logging
 from domain.exceptions import DomainValidationError
 from interface.http.errors import ERROR_CONTRACT
@@ -43,6 +50,22 @@ def _build_app() -> FastAPI:
     def untranslated_field_error() -> None:
         # The other half: the caller's to fix, but the use case did not translate it.
         raise DomainValidationError("Name must not be empty", field="name")
+
+    @app.get("/storage-unavailable")
+    def storage_unavailable() -> None:
+        raise StorageUnavailableError("connection to server at 10.0.0.5 failed")
+
+    @app.get("/concurrent-update")
+    def concurrent_update() -> None:
+        raise ConcurrentUpdateError("canceling statement due to statement timeout")
+
+    @app.get("/missing-grant")
+    def missing_grant() -> None:
+        raise IntegrityError("permission denied for table usage_records")
+
+    @app.get("/vendor-rejection")
+    def vendor_rejection() -> None:
+        raise ProviderRejectedRequestError("invalid x-api-key sk-ant-1234", status=401)
 
     return app
 
@@ -99,3 +122,22 @@ class TestDomainValidationErrorIsInternal:
 
         assert response.status_code == 500
         assert response.json()["error"]["details"] == {}
+
+
+class TestPassedThroughFailuresAreInternal:
+    """What the use case lets through on purpose, to be answered `500`: a budget read's storage
+    failure — retrying within the request is pointless, and generating without the check would
+    be unaccounted spend — and every candidate's vendor rejecting the request, which is this
+    service's own defect."""
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/storage-unavailable", "/concurrent-update", "/missing-grant", "/vendor-rejection"],
+    )
+    def test_is_500_without_leaking(self, path: str) -> None:
+        response = _client().get(path)
+
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "InternalError"
+        for fragment in ("10.0.0.5", "statement", "usage_records", "sk-ant"):
+            assert fragment not in response.text

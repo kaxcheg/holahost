@@ -99,6 +99,7 @@ class TestHappyPath:
             downgraded=False,
             failed_over=False,
             attempts=1,
+            provider_timeouts=0,
             provider_ms=1000,
         )
 

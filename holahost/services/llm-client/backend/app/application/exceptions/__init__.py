@@ -42,6 +42,7 @@ __all__ = [
     "RequestTooSlowForSyncError",
     "UnknownModelError",
     "UpstreamLlmError",
+    "UsageNotRecordedError",
 ]
 
 
@@ -143,13 +144,17 @@ class UpstreamLlmError(ApplicationError):
     """Every candidate model failed transiently, or the time ran out between failures. Retryable.
 
     `upstream_status` is the vendor status of the last transient failure — `None` when it was a
-    timeout.
+    timeout. `provider_timeouts` counts the attempts cut off by the service's own timeout; it feeds
+    the completion event, not `details`.
     """
 
-    def __init__(self, *, attempts: int, upstream_status: int | None) -> None:
+    def __init__(
+        self, *, attempts: int, upstream_status: int | None, provider_timeouts: int
+    ) -> None:
         super().__init__("upstream LLM failure")
         self.attempts = attempts
         self.upstream_status = upstream_status
+        self.provider_timeouts = provider_timeouts
 
     def details_dict(self) -> Mapping[str, object]:
         return {"attempts": self.attempts, "upstream_status": self.upstream_status}
@@ -169,3 +174,23 @@ class ContentRefusedError(ApplicationError):
 
     def details_dict(self) -> Mapping[str, object]:
         return {"provider": self.provider, "model": self.model}
+
+
+class UsageNotRecordedError(ApplicationError):
+    """A paid call's usage record could not be written.
+
+    Published by no contract, so it is answered `500` — but it carries the spend the provider
+    confirmed, so the completion event can still report what was charged: once the write has failed
+    this is the only place the figures survive. Raised from the storage failure, which stays its
+    cause and is named in the message: those failures carry no message of their own, and without
+    the name a defect would read in the log the same as an outage.
+    """
+
+    def __init__(
+        self, *, input_tokens: int, output_tokens: int, provider: str, model: str, cause: Exception
+    ) -> None:
+        super().__init__(f"usage not recorded: {type(cause).__name__}")
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.provider = provider
+        self.model = model

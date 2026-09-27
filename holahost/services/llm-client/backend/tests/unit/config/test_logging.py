@@ -30,6 +30,25 @@ class TestTheServicesOwnFields:
             duration_ms=41.2,
         )
 
+    def test_the_services_own_fields_are_accepted(self) -> None:
+        configure_logging()
+
+        log_event(
+            "op_completed",
+            requested_model="fast",
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            input_tokens=120,
+            output_tokens=30,
+            provider_ms=900,
+            attempts=1,
+            provider_timeouts=0,
+            downgraded=False,
+            failed_over=False,
+            preflight_rejected=False,
+            vendor_stop_reason="pause_turn",
+        )
+
     def test_content_is_refused(self) -> None:
         """The protection is structural: nothing inspects a value, so what keeps document
         text, prompt text, a query or a token body out of the log is that their field names
@@ -44,3 +63,11 @@ class TestTheServicesOwnFields:
             log_event("op_completed", query="leaked")
         with pytest.raises(DisallowedLogFieldError):
             log_event("op_completed", token="leaked")
+        with pytest.raises(DisallowedLogFieldError):
+            log_event("op_completed", system="leaked")
+        with pytest.raises(DisallowedLogFieldError):
+            log_event("op_completed", messages="leaked")
+        with pytest.raises(DisallowedLogFieldError):
+            log_event("op_completed", text="leaked")
+        with pytest.raises(DisallowedLogFieldError):
+            log_event("op_completed", api_key="leaked")

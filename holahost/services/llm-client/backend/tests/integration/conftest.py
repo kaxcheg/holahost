@@ -8,8 +8,9 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from holahost_db import SqlAlchemyUnitOfWork
+from sqlalchemy import create_engine, text
 from testcontainers.community.postgres import PostgresContainer
-from tests._support.db import build_test_uow
+from tests._support.db import build_test_uow, superuser_env
 
 from scripts.provision_app_role import provision
 
@@ -17,31 +18,13 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 
 # A dedicated, unprivileged role for integration tests. testcontainers' default connection
-# is a Postgres superuser, and a superuser bypasses row-level security unconditionally — no
-# policy, no FORCE ROW LEVEL SECURITY, can change that. Tests must run as a non-superuser
-# role or RLS enforcement is never actually exercised, only assumed. The role is created by
-# the very same code the deploy runs (`scripts/provision_app_role.py`), so what these tests
-# exercise is the real provisioning, not a test-local imitation that could drift from it.
+# is a Postgres superuser, which may do anything: tests run as the role the deploy creates,
+# holding only its grants, so a statement needing more fails here rather than in prod. The
+# role is created by the very same code the deploy runs (`scripts/provision_app_role.py`), so
+# what these tests exercise is the real provisioning, not a test-local imitation that could
+# drift from it.
 _APP_ROLE = "llm_client_app"
 _APP_ROLE_PASSWORD = "llm-client-app-test-only"  # test-only, not a real secret
-
-
-def _superuser_env(mp: pytest.MonkeyPatch, dsn: str) -> None:
-    """Point the standalone entry points below at this testcontainers instance.
-
-    `POSTGRES_SUPERUSER`/`POSTGRES_SUPERUSER_PASSWORD`, not `POSTGRES_USER`/`POSTGRES_PASSWORD`:
-    both `migrations/env.py` and `scripts/provision_app_role.py` are elevated operations and
-    read the superuser pair (see their own docstrings) — the plain pair means the app's own,
-    unprivileged identity everywhere in this service, and testcontainers' default connection
-    is the superuser.
-    """
-    parts = urlsplit(dsn)
-    assert parts.username and parts.password and parts.hostname and parts.port
-    mp.setenv("POSTGRES_SUPERUSER", parts.username)
-    mp.setenv("POSTGRES_SUPERUSER_PASSWORD", parts.password)
-    mp.setenv("POSTGRES_DB", parts.path.lstrip("/"))
-    mp.setenv("POSTGRES_HOST", parts.hostname)
-    mp.setenv("POSTGRES_PORT", str(parts.port))
 
 
 def _run_migrations(dsn: str) -> None:
@@ -51,7 +34,7 @@ def _run_migrations(dsn: str) -> None:
     `postgres:5432`. These variables are needed for the `command.upgrade(...)` below alone.
     """
     with pytest.MonkeyPatch.context() as mp:
-        _superuser_env(mp, dsn)
+        superuser_env(mp, dsn)
         command.upgrade(Config(str(_ALEMBIC_INI)), "head")
 
 
@@ -59,17 +42,19 @@ def _provision_app_role(superuser_dsn: str) -> None:
     """Create the unprivileged app role by running the deploy's own provisioning script.
 
     Same scoping reasoning as `_run_migrations` above for the `MonkeyPatch.context()`.
-
-    A service that truncates between tests grants `TRUNCATE` to the app role here,
-    separately and with a superuser connection — `provision()` deliberately does not,
-    because TRUNCATE bypasses RLS entirely (whole-table, not row-filtered), and the
-    privileges the deploy actually hands the app role have to stay honest.
     """
     with pytest.MonkeyPatch.context() as mp:
-        _superuser_env(mp, superuser_dsn)
+        superuser_env(mp, superuser_dsn)
         mp.setenv("POSTGRES_USER", _APP_ROLE)
         mp.setenv("POSTGRES_PASSWORD", _APP_ROLE_PASSWORD)
         provision()
+    # TRUNCATE is for `_truncate_after` below, not something the application does — `provision()`
+    # deliberately does not grant it, so the privileges the deploy hands the app role stay honest.
+    engine = create_engine(superuser_dsn)
+    with engine.connect() as connection:
+        connection.execute(text(f"GRANT TRUNCATE ON usage_records TO {_APP_ROLE}"))
+        connection.commit()
+    engine.dispose()
 
 
 def _as_app_role(superuser_dsn: str) -> str:
@@ -96,8 +81,8 @@ def pg_dsn(_dsns: tuple[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def superuser_dsn(_dsns: tuple[str, str]) -> str:
-    """Only for a test proving a superuser bypasses RLS unconditionally — every other test
-    must use `pg_dsn`/`uow`, which are the unprivileged role RLS is meant to restrict."""
+    """Only for what the deploy runs elevated — migrations and checks on them. Every other test
+    uses `pg_dsn`/`uow`, the unprivileged role the application runs as."""
     return _dsns[0]
 
 
@@ -110,5 +95,8 @@ def uow(pg_dsn: str) -> Iterator[SqlAlchemyUnitOfWork]:
         unit.dispose()
 
 
-# Test isolation belongs here too, as an `autouse` fixture truncating this service's tables
-# after each test — added once there are tables, since TRUNCATE names them explicitly.
+@pytest.fixture(autouse=True)
+def _truncate_after(uow: SqlAlchemyUnitOfWork) -> Iterator[None]:
+    yield
+    with uow:
+        uow.connection().execute(text("TRUNCATE TABLE usage_records"))

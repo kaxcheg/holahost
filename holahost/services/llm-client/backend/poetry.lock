@@ -2692,6 +2692,18 @@ trino = ["trino"]
 weaviate = ["weaviate-client (>=4)"]
 
 [[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260906"
+description = "Typing stubs for PyYAML"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "types_pyyaml-6.0.12.20260906-py3-none-any.whl", hash = "sha256:bca893ff0d51df5c9053137d5d0e6ccd36e939a196356f1d5c16372422f5137b"},
+    {file = "types_pyyaml-6.0.12.20260906.tar.gz", hash = "sha256:f59c1cc05010b833d2d72287bbaa72610106b28d42d89a907313117faba85212"},
+]
+
+[[package]]
 name = "types-s3transfer"
 version = "0.16.0"
 description = "Type annotations and code completion for s3transfer"
@@ -3236,4 +3248,4 @@ dev = ["pytest", "setuptools"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "76c9658ee98504723eec7027dbb15822f8b3197459ed5baef1ab13117489108b"
+content-hash = "07cfa4395a036c3c5683453468609387a5c2d753c3f807ae9e712a219874a872"

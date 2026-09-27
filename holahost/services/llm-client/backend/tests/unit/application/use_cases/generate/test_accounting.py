@@ -7,7 +7,7 @@ import pytest
 from tests._support.builders import ANTHROPIC, CLIENT, HAIKU, make_cmd, make_generation, make_usage
 from tests._support.generate import build_use_case, fails, ok
 
-from application.exceptions import ContentRefusedError, UpstreamLlmError
+from application.exceptions import ContentRefusedError, UpstreamLlmError, UsageNotRecordedError
 from application.ports.exceptions import (
     ConcurrentUpdateError,
     IntegrityError,
@@ -78,18 +78,36 @@ class TestWritingTheRecord:
         assert (len(h.usage.added), h.usage.calls) == (1, 2)
         assert h.uow.rollbacks == 1
 
-    def test_unavailable_storage_passes_through(self) -> None:
-        h = build_use_case(usage_errors=[StorageUnavailableError()])
+    def test_a_failed_write_is_raised_with_the_confirmed_spend(self) -> None:
+        answer = make_generation(usage=make_usage(120, 30))
+        h = build_use_case(
+            script={HAIKU.id.value: [ok(generation=answer)]},
+            usage_errors=[StorageUnavailableError()],
+        )
 
-        with pytest.raises(StorageUnavailableError):
+        with pytest.raises(UsageNotRecordedError) as exc:
             h.use_case.execute(make_cmd())
 
+        assert (exc.value.input_tokens, exc.value.output_tokens) == (120, 30)
+        assert (exc.value.provider, exc.value.model) == ("anthropic", "claude-haiku-4-5")
+        assert isinstance(exc.value.__cause__, StorageUnavailableError)
+        assert str(exc.value) == "usage not recorded: StorageUnavailableError"
         assert h.usage.added == []
+
+    def test_conflicts_past_the_retries_are_raised_the_same_way(self) -> None:
+        h = build_use_case(usage_errors=[ConcurrentUpdateError()] * 3)
+
+        with pytest.raises(UsageNotRecordedError) as exc:
+            h.use_case.execute(make_cmd())
+
+        assert isinstance(exc.value.__cause__, ConcurrentUpdateError)
+        assert h.usage.calls == 3
 
     def test_an_integrity_error_is_a_defect_and_not_retried(self) -> None:
         h = build_use_case(usage_errors=[IntegrityError()])
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(UsageNotRecordedError) as exc:
             h.use_case.execute(make_cmd())
 
+        assert isinstance(exc.value.__cause__, IntegrityError)
         assert h.usage.calls == 1
