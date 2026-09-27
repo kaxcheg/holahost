@@ -14,7 +14,7 @@ BUILD_GUARDS = (
     "agent-model",
     "context7-gate",
     "context7-mark",
-    "pre-compact",
+    "context-watch",
     "ledger-gate",
     "branch-gate",
 )

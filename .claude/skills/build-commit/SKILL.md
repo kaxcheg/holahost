@@ -31,7 +31,7 @@ __PROCS_ARGS__
 
 If argument provided (`/build-commit TICKET-42`) — use it. If not — use the single ticket under `ACTIVE:`.
 If multiple `in_progress` tickets — ask which one. If zero — report no active tickets.
-Read `session.md` — verify there are uncommitted changes.
+Verify there are uncommitted changes (`git status`).
 
 Models: per build-session `## Models`. Never let a subagent inherit the main-loop model.
 
@@ -87,7 +87,7 @@ Execute push.
 ## Step 6 — Create PR
 
 Read `.github/pull_request_template.md` (or the PR template the spec's CI/CD section names; if neither exists on
-disk, use the spec's PR-template structure). Fill all sections from session.md and ticket context. **The PR title
+disk, use the spec's PR-template structure). Fill all sections from the ticket context. **The PR title
 and body MUST be in English** (per build-session `## Language`), regardless of the dialogue language — translate
 working notes if needed. Create the PR directly — do NOT ask for confirmation. Execute:
 ```bash

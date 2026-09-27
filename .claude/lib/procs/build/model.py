@@ -7,12 +7,10 @@ from dataclasses import dataclass
 from enum import StrEnum, auto
 from pathlib import Path
 
-from procs.core.ledger import Ledger
-
 BUILD_STATE_DIR = ".build-state"
 SESSION_FILE = "session.md"
 CONTEXT7_LOG = "context7.log"
-TICKET_FILES = ("session.md", "clarifications.md", "plan.md", "design.md")
+CONTEXT_WATCH = "context-watch"
 
 
 class Status(StrEnum):
@@ -45,11 +43,6 @@ class Session:
     path: Path
     status: Status | None
     status_raw: str | None
-    layer: Layer | None
-    branch: str | None
-    session_no: int | None
-    description: str | None
-    ledger: Ledger | None
 
     @property
     def directory(self) -> Path:

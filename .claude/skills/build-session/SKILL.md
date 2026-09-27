@@ -2,7 +2,7 @@
 name: build-session
 description: >
   Use for any ticket work during the Build phase, once `/build-start` has loaded the spec
-  and the ticket: exploration, design, plan, implementation, validation, session state.
+  and the ticket: exploration, design, plan, implementation, validation.
 ---
 
 **RIGID skill — follow every step exactly, in order. No skipping, no adapting.**
@@ -87,29 +87,63 @@ implementing an external-library API call.
 
 ## Session Protocol
 
-### Path A: New Ticket
+A ticket runs start to finish in one session: nothing restores it in a new context. When the `context-watch` hook
+says auto-compaction is near, offer the user to save the state by hand; save only if they ask.
 
-**Read `steps/path-a.md` (next to this file) before step 1, and again in every fresh context (`/compact`, `/clear`,
-`/new`, a new launch) while Path A is unfinished** — it holds the full text of every step. The order and the checkpoints:
+### Setup
 
 1. Source Data and ticket loaded by `/build-start`.
-2. Create `session.md` and `clarifications.md` from the templates (the scaffold command of `steps/path-a.md`); status `in_progress`.
-3. **Explore** — 2–3 parallel `feature-dev:code-explorer` agents (`low_model`); read every key file they identify.
-4. **Design exploration** — no code, no implementation skill, no plan writing until the user approves the design.
-   ⏹ **Context7 — design**. Do **not** write `design.md` yet.
-5. **Branch** — name per Branch Naming in `./CONTRIBUTING.md`, approval, create.
-6. ⏹ **Testing approach** — TDD / code-first / mixed.
-7. **Plan** — `.build-state/<TICKET-ID>/plan.md` per `plan.template.md`. ⏹ **Context7 — plan**.
+
+2. **The state files** — run `python3 .claude/bin/procs build scaffold <TICKET-ID>`: it creates
+   `.build-state/<TICKET-ID>/session.md` and `clarifications.md` from the templates (`## Ticket state`) with
+   status `in_progress`, and never overwrites an existing file.
+
+3. **Explore** — launch 2–3 `feature-dev:code-explorer` agents in parallel (`## Subagents`,
+   `low_model`), each on a different aspect: entry points and direct dependencies of the ticket;
+   similar features/patterns and how they are implemented; test coverage and test patterns of
+   the affected modules. Read every key file they identify before the design dialogue.
+
+4. **Design exploration** — collaborative dialogue turning the ticket into an approved design.
+   No code, no implementation skill, no plan writing until the user approves the design.
+   - Clarify one question at a time: purpose, constraints, success criteria; multiple-choice when
+     possible. Discrepancies and principal decisions as they arise → clarifications.md.
+   - ⏹ **Context7 — design**: every framework/library the design will touch, before proposing
+     approaches.
+   - Propose 2–3 approaches with trade-offs, recommended option first. For a broad design space
+     dispatch 3 parallel `feature-dev:code-architect` agents (`high_model`): minimal changes
+     (smallest footprint, maximum reuse) / clean architecture (maintainability, abstractions) /
+     pragmatic balance (speed + quality, fits team context).
+   - Present the design in sections scaled to complexity (architecture, components, data flow,
+     error handling, testing); get approval section by section.
+   - Self-review before locking: placeholders (TBD/TODO/vague), internal consistency, scope
+     (one plan or decomposition), ambiguity (two readings → pick one explicitly). Fix inline, no
+     re-review.
+
+5. **Branch** — suggest a name per Branch Naming in `./CONTRIBUTING.md`, get approval, create it.
+
+6. ⏹ **Testing approach** — assess the ticket, recommend with justification. The choice is
+   captured by the plan's task variant; → clarifications.md only if it diverges from an approach
+   Source Data explicitly mandates.
+   - **TDD** — domain logic, value objects, use cases, parsers, formatters: units with clear
+     inputs/outputs exercisable with mocks/fakes.
+   - **Code-first** — infrastructure adapters needing real external services, IaC/deploy tickets,
+     CLI DI wiring, exploratory/tuning tasks: the feedback loop is integration tests; TDD is
+     circular or meaningless here.
+   - **Mixed** — TDD for the unit-testable parts, code-first for the rest.
+
+7. **Plan** — write `.build-state/<TICKET-ID>/plan.md` per `plan.template.md` (header, task
+   structure in the chosen testing variant, granularity and no-placeholder rules).
+   - Scope check first: multiple independent subsystems → suggest one plan per subsystem, each
+     producing working, testable software on its own.
+   - Map the file structure before defining tasks: which files to create or modify, one
+     responsibility each, following established codebase patterns.
+   - ⏹ **Context7 — plan**: every library whose code appears in the plan.
+   - Self-review before presenting: spec coverage (a task for every requirement of the approved
+     design), placeholders, type and method-name consistency across tasks. Fix inline.
+
 8. Review the plan with the user → clarifications.md.
-9. **Save the design** to `.build-state/<TICKET-ID>/design.md`. Update `session.md`: artifacts, progress, ledger.
 
-### Path B: Continue Ticket (after `/new`, `/clear`, `/compact`, or a new launch)
-
-1. `/build-start` loaded Source Data and the ticket files.
-2. Report the restored context — ticket, branch, progress (task/step from `plan.md`), ledger
-   state, clarifications and design loaded — and continue from where work stopped.
-
-### Work (both paths)
+### Work
 
 1. Review the plan critically before starting — raise concerns with the user before touching
    code.
@@ -151,38 +185,24 @@ implementing an external-library API call.
 
 | file | content | origin |
 |---|---|---|
-| `session.md` | development state: metadata, task context, progress, files, **protocol ledger** | `session.template.md`, at ticket creation |
-| `clarifications.md` | principal Source Data discrepancies pending fold-back (`## Source data`) | `clarifications.template.md`, at ticket creation |
+| `session.md` | status and the **protocol ledger** — what the guards read | `session.template.md`, Setup step 2 |
+| `clarifications.md` | principal Source Data discrepancies pending fold-back (`## Source data`) | `clarifications.template.md`, Setup step 2 |
 | `plan.md` | implementation plan | Plan step, per `plan.template.md` |
-| `design.md` | approved design | saved after plan approval |
 | `context7.log` | every `query-docs` lookup made for the ticket — evidence for the Context7 gate | PostToolUse hook, automatic; never edited by hand |
+| `context-watch` | the session already told that auto-compaction is near | `context-watch` hook, automatic |
 
 Templates live next to this `SKILL.md`, in `.claude/skills/build-session/`, not the project root; the scaffold
-command (Path A step 2) copies them with `TICKET-ID` substituted. Completed tickets stay in
-place with status `completed`. Every `/clear`, `/compact` or new launch is a fresh context:
-`/build-start` restores it from these files, the only bridge between sessions; switching tickets
-is `/build-start <ticket-id>`.
+command (Setup step 2) copies them with `TICKET-ID` substituted. Completed tickets stay in
+place with status `completed`.
 
 **Protocol ledger.** `session.md` carries one checkbox per ⏹ checkpoint and per user approval
 (design, plan). Tick it the moment the checkpoint is done, with the evidence (e.g.
-`context7: design — fastapi, sqlalchemy`). Path B reports the ledger before continuing.
+`context7: design — fastapi, sqlalchemy`).
 
 **Guards** (wired by the `hooks` of the project's `.claude/settings.json`; code in `.claude/lib/procs/build/guards.py`;
 the permission allowlist is the same `.claude/settings.json`) enforce
-the checkpoints mechanically while a ticket is `in_progress`: every turn and every session start re-injects the
-open ledger lines; an Agent dispatch without an allowed `model` is blocked; writing `plan.md`, `design.md` or any
-project file is blocked until a Context7 lookup is recorded in `context7.log` — `plan.md` also until "design
-approved" is ticked, `design.md` and project files until "plan approved" is; `git commit` on the default branch is
-blocked. A blocked call is a checkpoint you
+the checkpoints mechanically while a ticket is `in_progress`: every turn re-injects the open ledger lines; an Agent
+dispatch without an allowed `model` is blocked; writing `plan.md` or any project file is blocked until a Context7
+lookup is recorded in `context7.log` — `plan.md` also until "design approved" is ticked, project files until "plan
+approved" is; `git commit` on the default branch is blocked. A blocked call is a checkpoint you
 skipped — do the step, then retry; never route around the guard.
-
-**Update `session.md`:** at the end of Path A (plan and design saved), at every ledger tick,
-after significant changes to plan, context or Source Data, on user request, before `/compact` or
-`/clear`, on completion.
-
-**Context thresholds:** ~65% → "Context ~65%. Recommend `/compact`. Saving state." and save;
-~90% → "Context ~90%. Saving state. Run `/clear`, then `/build-start <ticket-id>`."
-Before `/compact` or `/clear` — **mandatory, and before the threshold**: the PreCompact hook of this procedure
-reminds on both a manual `/compact` and an automatic one, but a reminder is not a substitute for saving in time. Update `session.md`
-(step, progress, uncommitted files, ledger), make sure `clarifications.md` holds every qualifying
-entry from this conversation, confirm to the user that state is saved.

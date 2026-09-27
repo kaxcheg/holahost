@@ -1,12 +1,12 @@
 ---
 name: build-start
-description: Entry point of a build session — loads the spec sections and the ticket state, then hands over to build-session (Path A new ticket, Path B continue).
-argument-hint: "[ticket-id ...] [layer] [spec path]"
+description: Entry point of a build session — admits a new ticket, loads its spec sections, then hands over to build-session.
+argument-hint: "<ticket-id ...> <layer> [spec path]"
 ---
 
 # Build Start
 
-Entry point for build sessions. Loads context, then routes to Path A or B per `build-session` skill.
+Entry point for build sessions. Loads context, then hands over to the `build-session` skill.
 
 ## Step 0 — Session directory
 
@@ -25,16 +25,15 @@ __PROCS_ARGS__
 ```
 
 - `ROUTE: STOP` → give the user the MESSAGE and stop.
-- `ROUTE: ASK` → ask the user what the MESSAGE names, then re-run `/build-start` with the answer. A new ticket
-  (Path A) needs ticket ID(s) and a layer before anything is loaded.
-- `ROUTE: PATH_A` / `ROUTE: PATH_B` → continue. Each `NOTE:` line is an open point to settle with the user first.
+- `ROUTE: ASK` → ask the user what the MESSAGE names, then re-run `/build-start` with the answer. A ticket needs
+  ticket ID(s) and a layer before anything is loaded.
+- `ROUTE: START` → continue.
 
 Forms: `/build-start T-05 domain` · `/build-start T-05 T-06 T-07 domain` · `/build-start T-05 domain docs/my_spec.md`.
 Arguments: ticket ID(s), then `<layer>` ∈ `domain | application | infrastructure | interface | frontend | infra | ci-cd`,
 optionally a spec path — the token containing a `/` or ending in `.md`; it overrides auto-location under `./docs/`.
 **Multiple ticket IDs** are concatenated with `-` into a single combined ID used for all state files and
-commands: `B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`, layer = `domain`. Without ticket tokens the single
-`in_progress` ticket is continued (Path B, layer from session.md).
+commands: `B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`, layer = `domain`.
 
 The backend layers (`domain | application | infrastructure | interface`) are the Clean Architecture decomposition —
 use them only when the spec's Tech Constraints chose Clean Architecture; otherwise treat the whole backend as
@@ -60,11 +59,10 @@ Load every range under SECTIONS TO READ **in full** — do not summarize, skip, 
   relevant story/stories in section 3 by matching the ticket's name/scope, and load them with all AC. `infra` /
   `ci-cd` tickets are technical — their requirements come from Infrastructure (12) / CI/CD (13) / Tech
   Constraints (2), not from user stories.
-- **Path B only:** also read the TICKET FILES marked `exists`.
 
 ## Step 3 — Execute
 
-With context loaded, follow the `build-session` skill starting at Path A or Path B.
+With context loaded, follow the `build-session` skill from its Setup.
 
 The loaded spec is **provisional, not final** — it is refined as development progresses. Principal decisions left
 unsettled by it are clarified with the user and recorded in `clarifications.md` (see build-session `## Source data`).

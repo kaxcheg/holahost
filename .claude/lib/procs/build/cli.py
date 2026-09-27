@@ -1,7 +1,7 @@
-"""`procs build …` — the deterministic sub-procedures of /build-start, /build-status and build-session.
+"""`procs build …` — the deterministic sub-procedures of /build-start, /build-commit and build-session.
 
 `route` and `status` are read-only and meant for a skill's `!` injection: they exit 0 for every domain outcome
-and carry «stop» in their output. `scaffold` and `migrate-session` write and are therefore run by the model.
+and carry «stop» in their output. `scaffold` writes and is therefore run by the model.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from procs.build import route, status
-from procs.build.model import Layer
 from procs.core import paths
 
 
@@ -40,7 +39,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_scaffold(args: argparse.Namespace) -> int:
     try:
-        created = status.scaffold(_project(args), args.ticket, args.layer)
+        created = status.scaffold(_project(args), args.ticket)
     except FileNotFoundError as exc:
         print(f"procs build scaffold: {exc}", file=sys.stderr)
         return 1
@@ -51,34 +50,22 @@ def _cmd_scaffold(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_migrate(args: argparse.Namespace) -> int:
-    changed = status.migrate_session(_project(args), args.ticket)
-    print("inserted the Protocol ledger section" if changed else "unchanged: the session already has a ledger (or no template was found)")
-    return 0
-
-
 def register(sub: Any) -> None:
     build = sub.add_parser("build", help="ticket routing, status and state files of the build family")
     commands = build.add_subparsers(dest="command", required=True)
 
-    p = commands.add_parser("route", help="Path A/B decision, spec location and the sections to load")
+    p = commands.add_parser("route", help="start/stop/ask decision, spec location and the sections to load")
     p.add_argument("--project")
     p.add_argument("--headings", action="store_true", help="append the spec's heading index")
     p.add_argument("args", nargs="*", help="the /build-start arguments (default: read them from stdin)")
     p.set_defaults(func=_cmd_route)
 
-    p = commands.add_parser("status", help="facts for /build-status")
+    p = commands.add_parser("status", help="the tickets and which one is in progress, for /build-commit")
     p.add_argument("--project")
     p.add_argument("args", nargs="*", help="optional ticket id (default: read it from stdin)")
     p.set_defaults(func=_cmd_status)
 
     p = commands.add_parser("scaffold", help="create session.md and clarifications.md from the skill's templates")
     p.add_argument("--project")
-    p.add_argument("--layer", choices=[layer.value for layer in Layer], help="the LAYER line of /build-start")
     p.add_argument("ticket")
     p.set_defaults(func=_cmd_scaffold)
-
-    p = commands.add_parser("migrate-session", help="add the Protocol ledger to a session.md that predates it")
-    p.add_argument("--project")
-    p.add_argument("ticket")
-    p.set_defaults(func=_cmd_migrate)

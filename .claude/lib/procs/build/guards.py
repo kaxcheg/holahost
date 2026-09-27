@@ -18,20 +18,16 @@ from collections.abc import Callable
 from typing import Any
 
 from procs.build import session
-from procs.build.model import CONTEXT7_LOG, Context7Lookup
+from procs.build.model import CONTEXT7_LOG, CONTEXT_WATCH, Context7Lookup
 from procs.core import ledger, paths
 
 Result = tuple[str, str, int]
 Guard = Callable[[str], Result]
 SILENT: Result = ("", "", 0)
 
-RESTARTED = (
-    "build-session: context was (re)started mid-ticket. Re-read the ticket files under .build-state/ before "
-    "acting; if the on-disk state lags what you remember, update session.md first (build-session ## Ticket state)."
-)
 _MODELS_ROW = re.compile(r"^\|\s*`(low_model|high_model)`\s*\|\s*`([^`]+)`", re.M)
 FALLBACK_MODELS = {"sonnet": "low_model", "fable": "high_model"}
-GATED_TICKET_FILES = ("plan.md", "design.md")
+GATED_TICKET_FILES = ("plan.md",)
 
 
 def _enter_project() -> list[str] | None:
@@ -81,13 +77,11 @@ def _tool_input(stdin: str) -> dict[str, Any]:
 
 
 def ledger_context(stdin: str) -> Result:
-    """UserPromptSubmit + SessionStart: put the open checkpoints of every in_progress ticket into context."""
+    """UserPromptSubmit: put the open checkpoints of every in_progress ticket into context."""
     sessions = _enter_project()
     if sessions is None:
         return SILENT
     out: list[str] = []
-    if "SessionStart" in stdin:
-        out.append(RESTARTED)
     for path in sessions:
         ticket = session.ticket_of(path)
         text = session.read_text(path)
@@ -104,28 +98,10 @@ def ledger_context(stdin: str) -> Result:
                 "blocks the step after it):"
             )
             out.extend(pending)
-        if "SessionStart" in stdin and _in_path_a(path, text):
-            # After a compaction only the head of the skill is re-attached; the full Path A text lives in a step
-            # file, so a restarted context is told to read it again (D-15).
-            out.append(
-                f"build-session: {ticket} is still in Path A (an approval is open, or design.md is not saved yet) — "
-                "re-read steps/path-a.md of the build-session skill before continuing."
-            )
     return ("\n".join(out) + "\n" if out else "", "", 0)
 
 
 DESIGN_APPROVED, PLAN_APPROVED = "design approved", "plan approved"
-
-
-def _in_path_a(session_path: str, session_text: str) -> bool:
-    """Path A ends with its step 9, saving design.md — not with the second approval."""
-    parsed = ledger.Ledger.parse(session_text)
-    if parsed is None:
-        return False
-    if parsed.is_done(DESIGN_APPROVED) is False or parsed.is_done(PLAN_APPROVED) is False:
-        return True
-    saved = os.path.isfile(os.path.join(os.path.dirname(session_path), "design.md"))
-    return parsed.is_done(PLAN_APPROVED) is True and not saved
 
 
 def allowed_models() -> dict[str, str]:
@@ -176,7 +152,7 @@ def _logged(ticket_dir: str) -> bool:
 
 
 def context7_gate(stdin: str) -> Result:
-    """PreToolUse Write|Edit|NotebookEdit: no plan, design or project file before a recorded Context7 lookup.
+    """PreToolUse Write|Edit|NotebookEdit: no plan or project file before a recorded Context7 lookup.
 
     session.md, clarifications.md, anything under .claude/ and anything outside the project are never gated.
     """
@@ -227,7 +203,7 @@ def _project_relative(tool_input: dict[str, Any]) -> list[str] | None:
 def ledger_gate(stdin: str) -> Result:
     """PreToolUse Write|Edit|NotebookEdit: «an unticked checkpoint blocks the step after it», for the two approvals.
 
-    plan.md needs «design approved»; design.md and project files need «plan approved». A session without a ledger
+    plan.md needs «design approved»; project files need «plan approved». A session without a ledger
     section, or a ledger without the line, is never blocked: the guard enforces a checkpoint, it does not invent one.
     For a project file it is enough that one in_progress ticket has its plan approved — the file cannot be
     attributed to a ticket mechanically.
@@ -243,7 +219,7 @@ def ledger_gate(stdin: str) -> Result:
     if parts[0] == ".build-state":
         if len(parts) < 3 or parts[2] not in GATED_TICKET_FILES or parts[1] not in ledgers:
             return SILENT
-        needed = DESIGN_APPROVED if parts[2] == "plan.md" else PLAN_APPROVED
+        needed = DESIGN_APPROVED
         parsed = ledgers[parts[1]]
         if parsed is None or parsed.is_done(needed) is not False:
             return SILENT
@@ -312,7 +288,7 @@ def current_branch(start: str = ".", top: str | None = None) -> str | None:
 def branch_gate(stdin: str) -> Result:
     """PreToolUse Bash: no `git commit` on the default branch while a ticket is in progress.
 
-    /build-commit «applies to feature branches only»; Path A creates the ticket branch before any code exists.
+    /build-commit «applies to feature branches only»; Setup creates the ticket branch before any code exists.
     Only a commit that lands inside the session's project is judged: `git -C <elsewhere> commit`, a `cd` out of
     the project, or a shell cwd outside it belong to another repository.
     """
@@ -333,7 +309,7 @@ def branch_gate(stdin: str) -> Result:
     return (
         "",
         f"build-session ⏹ {tickets}: `git commit` on the default branch `{branch}` while a ticket is in_progress. "
-        "Ticket work is committed on its feature branch (build-session Path A, step 5; /build-commit applies to "
+        "Ticket work is committed on its feature branch (build-session Setup, step 5; /build-commit applies to "
         "feature branches only). Switch to the ticket branch, or commit outside the session if this is unrelated.\n",
         2,
     )
@@ -358,22 +334,69 @@ def context7_mark(stdin: str) -> Result:
     return ("", "".join(errors), 1 if errors else 0)
 
 
-def pre_compact(stdin: str) -> Result:
-    """PreCompact: the save-state checklist for the first in_progress ticket."""
+DEFAULT_COMPACT_AT = 835_000  # where sessions here compacted while `autoCompactWindow` was not set
+REMIND_AT = 150_000  # tokens left before auto-compaction
+
+
+def context_used(transcript: str) -> int:
+    """Input tokens of the session's last API response: what its context holds, counted as the status line does."""
+    with open(transcript, "rb") as fh:
+        fh.seek(max(0, fh.seek(0, os.SEEK_END) - 4_000_000))
+        lines = fh.read().split(b"\n")
+    for raw in reversed(lines):
+        if b'"assistant"' not in raw or b'"usage"' not in raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue  # the first line of the tail is cut
+        usage = (entry.get("message") or {}).get("usage") or {}
+        used = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        if entry.get("type") == "assistant" and not entry.get("isSidechain") and used:
+            return used  # a synthetic message (an API error) carries zero usage
+    return 0
+
+
+def context_watch(stdin: str) -> Result:
+    """UserPromptSubmit + PostToolUse: once per session, and again after a compaction, tell the model and the user
+    that auto-compaction is REMIND_AT tokens away — the ticket is not restored after it. Fails open."""
     sessions = _enter_project()
     if sessions is None:
         return SILENT
-    ticket = session.ticket_of(sessions[0])
-    message = (
-        "BEFORE COMPACTING — MANDATORY:\n"
-        f"1. Update .build-state/{ticket}/session.md: current step, progress, uncommitted files\n"
-        "2. Ensure clarifications.md contains all decisions from current conversation\n"
-        "3. Ensure plan.md is up-to-date with the approved plan\n"
-        "4. Ensure design.md is up-to-date with the approved design\n"
-        "5. Confirm to user that state is saved"
-    )
-    payload = {"hookSpecificOutput": {"hookEventName": "PreCompact", "additionalContext": message}}
-    return (json.dumps(payload) + "\n", "", 0)
+    try:
+        payload = _payload(stdin)
+        if payload.get("agent_id"):
+            return SILENT  # a subagent's context is not the session's
+        try:
+            config = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
+            with open(os.path.join(config, "settings.json"), encoding="utf-8") as fh:
+                at = json.load(fh).get("autoCompactWindow") or DEFAULT_COMPACT_AT
+        except OSError:
+            at = DEFAULT_COMPACT_AT
+        used = context_used(payload["transcript_path"])
+        marker = os.path.join(os.path.dirname(sessions[0]), CONTEXT_WATCH)
+        told = os.path.isfile(marker) and session.read_text(marker) == payload["session_id"]
+        if used < at - REMIND_AT:
+            if told:
+                os.remove(marker)  # the context shrank — a compaction: the reminder is due again
+            return SILENT
+        if told:
+            return SILENT
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write(payload["session_id"])
+        fill = f"{used // 1000}k of {at // 1000}k"
+        model_text = (
+            f"build-session: context {fill} — auto-compaction is near and the ticket is not restored after it. "
+            "Tell the user and, at the next safe point, offer to save the state by hand."
+        )
+        user_text = f"build: context {fill} — auto-compaction is near; save the state by hand if needed."
+        output = {
+            "hookSpecificOutput": {"hookEventName": payload["hook_event_name"], "additionalContext": model_text},
+            "systemMessage": user_text,
+        }
+        return (json.dumps(output) + "\n", "", 0)
+    except Exception:
+        return SILENT
 
 
 GUARDS: dict[str, Guard] = {
@@ -381,7 +404,7 @@ GUARDS: dict[str, Guard] = {
     "agent-model": _closed("agent-model", agent_model),
     "context7-gate": _closed("context7-gate", context7_gate),
     "context7-mark": context7_mark,
-    "pre-compact": pre_compact,
+    "context-watch": context_watch,
     "ledger-gate": ledger_gate,
     "branch-gate": branch_gate,
 }

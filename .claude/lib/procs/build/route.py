@@ -1,4 +1,4 @@
-"""`/build-start` steps 1–3 as a computation: parse the arguments, pick Path A or B, find the spec, plan the load.
+"""`/build-start` steps 1–3 as a computation: parse the arguments, admit the ticket, find the spec, plan the load.
 
 What the procedure leaves to judgement stays out of here: whether a backlog group IS the requested layer, which
 user stories a ticket without a US id relates to, and any stage whose heading could not be told apart.
@@ -6,22 +6,18 @@ user stories a ticket without a US id relates to, and any stage whose heading co
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum, auto
 from pathlib import Path
 
 from procs.build import session, spec
-from procs.build.model import BUILD_STATE_DIR, SESSION_FILE, TICKET_FILES, Layer
+from procs.build.model import BUILD_STATE_DIR, SESSION_FILE, Layer
 from procs.core import mdsections
-
-RERUN_HINT = "/build-start <ticket-id> [<ticket-id>...] <layer>"
 
 
 class RouteKind(StrEnum):
-    PATH_A = auto()
-    PATH_B = auto()
+    START = auto()
     STOP = auto()
     ASK = auto()
 
@@ -63,12 +59,9 @@ class Route:
     ticket_id: str | None = None
     ticket_ids: tuple[str, ...] = ()
     layer: Layer | None = None
-    layer_source: str | None = None  # argument | session.md
     spec: str | None = None
     spec_source: str | None = None  # argument | docs/
     message: str | None = None
-    in_progress: tuple[str, ...] = ()
-    notes: tuple[str, ...] = field(default=())
 
 
 def decide(project: Path, line: str) -> Route:
@@ -81,89 +74,52 @@ def decide(project: Path, line: str) -> Route:
     if args.not_a_layer is not None:
         return Route(
             RouteKind.ASK,
-            message=f"`{args.not_a_layer}` is not a layer ({LAYERS}). Ask which layer is meant, then re-run `{RERUN_HINT}`.",
+            message=f"`{args.not_a_layer}` is not a layer ({LAYERS}). Ask which layer is meant, then re-run "
+            "`/build-start <ticket-id> [<ticket-id>...] <layer>`.",
         )
-    active = tuple(session.ticket_of(s) for s in session.in_progress_sessions(project))
-    notes: list[str] = []
-    layer: Layer | None
-    layer_source: str | None
-
-    if args.ticket_id is not None:
-        ticket, ids, layer, layer_source = args.ticket_id, args.ticket_ids, args.layer, "argument"
-        path = project / BUILD_STATE_DIR / ticket / SESSION_FILE
-        if not path.is_file():
-            if layer is None:
-                return Route(
-                    RouteKind.ASK, ticket, ids, in_progress=active,
-                    message=f"Ticket `{ticket}` has no session yet (Path A) and no layer was given. Ask for the layer.",
-                )
-            kind = RouteKind.PATH_A
-        elif not session.mentions_in_progress(session.read_text(path)):
-            return Route(RouteKind.STOP, ticket, ids, in_progress=active, message=f"Ticket `{ticket}` is not in_progress")
-        else:
-            kind = RouteKind.PATH_B
-            stored = session.parse(path).layer
-            if stored is not None:
-                # «Path B … (layer from session.md)»: the procedure takes it without a word, so this is no NOTE —
-                # a NOTE is something to settle with the user, and nothing here is open.
-                ignored = f"; the argument `{layer.value}` is ignored on Path B" if layer is not None and layer is not stored else ""
-                layer, layer_source = stored, f"session.md{ignored}"
-            elif layer is None:
-                layer_source = None
-    else:
-        if args.layer is not None:
-            notes.append(f"layer `{args.layer.value}` was given without a ticket id")
-        if not active:
-            return Route(RouteKind.ASK, message="No in_progress ticket (Path A): ask the user for ticket ID(s) and layer before proceeding.")
-        if len(active) > 1:
-            return Route(
-                RouteKind.STOP, in_progress=active,
-                message=f"Several tickets are in_progress: {', '.join(active)}. Re-run with `{RERUN_HINT}`.",
-            )
-        ticket, ids, kind = active[0], (active[0],), RouteKind.PATH_B
-        stored = session.parse(project / BUILD_STATE_DIR / ticket / SESSION_FILE).layer
-        layer, layer_source = (stored, "session.md") if stored is not None else (args.layer, "argument" if args.layer else None)
+    if args.ticket_id is None:
+        return Route(RouteKind.ASK, message="No ticket id given: ask the user for ticket ID(s) and layer before proceeding.")
+    ticket, ids, layer = args.ticket_id, args.ticket_ids, args.layer
+    if (project / BUILD_STATE_DIR / ticket / SESSION_FILE).is_file():
+        return Route(
+            RouteKind.STOP, ticket, ids,
+            message=f"Ticket `{ticket}` already has state in {BUILD_STATE_DIR}/{ticket}/; /build-start does not resume a ticket.",
+        )
+    active = [session.ticket_of(s) for s in session.in_progress_sessions(project)]
+    if active:
+        return Route(
+            RouteKind.STOP, ticket, ids,
+            message=f"Ticket(s) {', '.join(active)} still in_progress: the guards count every in_progress ticket, so its "
+            "approvals would open the gates for this one. Set `Status: completed` in its session.md, then re-run.",
+        )
+    if layer is None:
+        return Route(RouteKind.ASK, ticket, ids, message=f"No layer given for `{ticket}`. Ask for the layer.")
 
     spec_source = "argument"
     if spec_path is None:
         located = spec.locate(project)
         if located.path is None:
-            return Route(RouteKind.STOP, ticket, ids, layer, layer_source, message=located.message, in_progress=active)
+            return Route(RouteKind.STOP, ticket, ids, layer, message=located.message)
         spec_path, spec_source = located.path, "docs/"
 
-    # The backlog settles three things that need no judgement: the ids behind a combined ticket id, the layer of a
-    # session written before session.md had a Layer field, and a ticket filed under another layer's group.
+    # The backlog settles two things that need no judgement: the ids behind a combined ticket id, and a ticket filed
+    # under another layer's group.
     text = session.read_text(project / spec_path)
     backlog = spec.match_stages(text)[spec.Stage.BACKLOG].best
     hits: list[spec.BacklogHit] = []
     if backlog is not None:
         ids = tuple(piece for one in ids for piece in spec.split_combined(one, text, backlog.section))
         hits = spec.backlog_hits(text, backlog.section, ids)
-    # Per ticket: the layers its backlog group can stand for, when every entry of the ticket agrees; else nothing.
-    filed: dict[str, frozenset[Layer]] = {}
     for one in ids:
+        # The layers its backlog group can stand for, when every entry of the ticket agrees. Only a group that
+        # names exactly one layer contradicts the request beyond doubt.
         options = {spec.group_layers(h.group) for h in hits if h.ticket == one}
-        filed[one] = next(iter(options)) if len(options) == 1 else frozenset()
-    if layer is None:
-        settled = set(filed.values())
-        only = next(iter(settled)) if len(settled) == 1 else frozenset()
-        if len(only) == 1:
-            layer = next(iter(only))
-            layer_source = f"backlog group of {', '.join(ids)}; session.md carries no Layer field"
-        else:
-            return Route(
-                RouteKind.ASK, ticket, ids, spec=spec_path, spec_source=spec_source, in_progress=active,
-                message=f"session.md of `{ticket}` carries no Layer field and the backlog groups do not settle it. "
-                f"Ask the user for the layer, then re-run `/build-start {ticket} <layer>`.",
-            )
-    assert layer is not None
-    for one, stands_for in filed.items():
-        # Only a group that names exactly one layer contradicts the request beyond doubt.
+        stands_for = next(iter(options)) if len(options) == 1 else frozenset()
         if len(stands_for) == 1 and layer not in stands_for:
             actual = next(iter(stands_for))
             message = f"Ticket `{one}` is in layer `{actual.value}`, not `{layer.value}`. Re-run with matching IDs."
-            return Route(RouteKind.STOP, ticket, ids, layer, layer_source, spec_path, spec_source, message, active)
-    return Route(kind, ticket, ids, layer, layer_source, spec_path, spec_source, None, active, tuple(notes))
+            return Route(RouteKind.STOP, ticket, ids, layer, spec_path, spec_source, message)
+    return Route(RouteKind.START, ticket, ids, layer, spec_path, spec_source)
 
 
 def render(project: Path, route: Route) -> str:
@@ -174,14 +130,11 @@ def render(project: Path, route: Route) -> str:
     if route.ticket_id:
         ids = f" (ids: {', '.join(route.ticket_ids)})" if len(route.ticket_ids) > 1 else ""
         out.append(f"TICKET: {route.ticket_id}{ids}")
-    if route.in_progress:
-        out.append(f"IN_PROGRESS: {', '.join(route.in_progress)}")
     if route.kind in (RouteKind.STOP, RouteKind.ASK):
         return "\n".join(out) + "\n"
-    out.append(f"LAYER: {route.layer.value if route.layer else 'UNKNOWN'}" + (f" (from {route.layer_source})" if route.layer_source else ""))
-    out.append(f"SPEC: {route.spec} (from {route.spec_source})")
-    out.extend(f"NOTE: {note}" for note in route.notes)
     assert route.spec is not None and route.layer is not None
+    out.append(f"LAYER: {route.layer.value}")
+    out.append(f"SPEC: {route.spec} (from {route.spec_source})")
     text = session.read_text(project / route.spec)
     matches = spec.match_stages(text)
     backlog = matches[spec.Stage.BACKLOG]
@@ -218,11 +171,6 @@ def render(project: Path, route: Route) -> str:
             for hit in mine:
                 stories = f" — stories: {', '.join(hit.story_ids)}" if hit.story_ids else ""
                 out.append(f"  {ticket}: {route.spec}:{hit.line} under «{hit.group or '—'}»{stories} — {hit.text}")
-    if route.kind is RouteKind.PATH_B:
-        out.append("TICKET FILES (read those that exist):")
-        for name in TICKET_FILES:
-            rel = os.path.join(BUILD_STATE_DIR, route.ticket_id or "", name)
-            out.append(f"  {rel} — {'exists' if (project / rel).is_file() else 'absent'}")
     if unsettled:
         out.append("HEADINGS (line:heading — for the UNMATCHED and AMBIGUOUS stages above):")
         out.extend(f"  {line}" for line in headings_listing(project, route.spec).splitlines())

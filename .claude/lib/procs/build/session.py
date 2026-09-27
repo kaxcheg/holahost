@@ -12,8 +12,7 @@ import os
 import re
 from pathlib import Path
 
-from procs.build.model import BUILD_STATE_DIR, SESSION_FILE, Layer, Session, Status
-from procs.core.ledger import Ledger
+from procs.build.model import BUILD_STATE_DIR, SESSION_FILE, Session, Status
 
 STATUS_IN_PROGRESS = re.compile(r"status:\*{0,2}[ \t\r\f\v]*in_progress", re.IGNORECASE)
 
@@ -78,17 +77,9 @@ def parse(path: str | Path) -> Session:
     if status_raw is not None:
         value = status_raw.strip().casefold()
         status = next((s for s in Status if s.value == value), None)
-    ticket_line = fields.get("ticket")
-    description = ticket_line.partition("—")[2].strip() or None if ticket_line else None
-    number = fields.get("session #", "")
     return Session(
         ticket_id=path.parent.name,
         path=path,
         status=status,
         status_raw=status_raw,
-        layer=Layer.parse(fields["layer"]) if "layer" in fields else None,
-        branch=fields.get("branch") or None,
-        session_no=int(number) if number.isdigit() else None,
-        description=description,
-        ledger=Ledger.parse(text),
     )
