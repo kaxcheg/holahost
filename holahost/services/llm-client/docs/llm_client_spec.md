@@ -581,7 +581,7 @@ models is configuration, not persistent state (§3.6).
 | The budget's state | nowhere: an aggregate over the usage log for the current window | computed on every check (§6.1) |
 | Idempotency keys | process memory | until `IDEMPOTENCY_KEY_TTL` expires, or until a restart; the volume is bounded by one TTL's traffic, and a live key is never evicted — that would quietly lift the protection against paying twice |
 | The registry of providers, models and aliases | the service's git config | changed by a rollout (§3.6) |
-| Provider keys | Secrets Manager (staging/prod), `.env.dev` (dev) | rotation is replacing the value plus a restart |
+| Provider keys | Secrets Manager (staging/prod), `infra/envs/dev/.env` (dev) | rotation is a new key at the vendor, the value replaced in SM, a restart, then the old key revoked (Stage 11) |
 | The texts of prompts and answers | **nowhere** | they live only in the request's memory |
 | Rate-limit counters, the JWKS cache | process memory | until a restart |
 
@@ -649,7 +649,7 @@ attempt are reported together once every entity is valid:
 
 A provider's key is read once, at startup. On staging and prod the bootstrap fetches the secret of
 every enabled provider and hands it on through the environment variable named after its reference —
-`anthropic-api-key` → `ANTHROPIC_API_KEY`; on dev that variable comes from the `.env` file. A missing
+`anthropic-api-key` → `ANTHROPIC_API_KEY`; on dev that variable comes from `infra/envs/dev/.env`. A missing
 key stops the startup. The keys never pass through the service's typed settings: only the
 generation adapter needs them, and every other holder of the settings would see them too.
 
@@ -1473,14 +1473,15 @@ deviations and additions are here.
 | Resource | The difference |
 |---|---|
 | **The database container** in the service's compose project | ordinary Postgres 16: the schema (§6) needs no extensions |
-| **Secrets in SM** (`infra/envs/<env>`) | two kinds: the database password and **one secret per LLM provider**. The providers' secret names reach the registry's git config (§3.6) as references, while the values live only in SM. Adding a provider means both editing the config and creating the secret in the TF root |
+| **Secrets in SM** (`infra/envs/<env>`) | the two database passwords of the defaults (`db-password` for the app role, `db-superuser-password` for migrations and provisioning) and **one secret per LLM provider**. The root reads the provider set off the registry itself (`yamldecode` of `backend/app/config/registry.yaml`): one secret per `api_key_ref`, so a name in the root and a reference in the config cannot drift apart and no CI step has to compare them. Selected by having a reference, not by `enabled`, so disabling a provider keeps its secret. The values live only in SM |
+| **Committed `infra/envs/{staging,prod}/.env`** | the non-secret runtime settings: `ENV`, `AWS_REGION`, `POSTGRES_USER`/`POSTGRES_DB`, the budget ceilings (staging's a tenth of prod's), the rate limits, `IDEMPOTENCY_KEY_TTL_SECONDS`, the JWT variables with `EXPECTED_AUDIENCE=llm-client`. No password and no provider key. Compose and `Settings` cannot start without it |
 | **Outgoing internet access** | the only service on the platform that needs it: calls to the providers' APIs. The network requirement is outgoing HTTPS to the providers' domains; when egress filtering appears, the domain list comes from the same registry |
-| **Instance role rights** | beyond the default — reading the providers' secrets; this is the only role on the platform with access to them (B-2) |
+| **Instance role rights** | nothing beyond the default: the instance role already reads Secrets Manager, and it is one role for every container on the instance. That only `llm-client` reads the provider keys (B-2) is therefore a convention; enforcing it needs a role per service, a platform-level change |
 | **Instance requirements** | no memory for models is needed — all the heavy work is at the vendor. The constraint is different: every generation occupies a thread for the whole wait, so the thread pool's size is the throughput ceiling (B-7) |
 | **`infra/common`, ECR** | no difference: a call to the platform's `service-ecr` module with the service's name |
-| **Alarms** (`infra/envs/<env>`) | the log group, the SNS topic, the `5xx` alarm and the filters for authorization and limit refusals come from the platform's `service-observability` module. Beyond it: the share of `UpstreamLlmError`, the utilisation of the daily budget, and the share of `downgraded` — the last of which catches the quiet degradation in quality that nobody would otherwise notice (B-4). They need to know the route and the domain fields, so they live in the service's root |
+| **Alarms** (`infra/envs/<env>`) | the log group, the SNS topic, the `5xx` alarm and the filters for authorization and limit refusals come from the platform's `service-observability` module. Beyond it, in the service's root because they know the route (`POST /api/llm-client/generate`) and the domain fields: generation p95 above `GENERATION_P95_BUDGET` over 15 minutes; the success rate below 90 % over 15 minutes, counting only the service's own faults (`UpstreamLlmError`, `InternalError`) against the successes and judged only from five generations in the window; the share of `UpstreamLlmError` above 20 % over two 15-minute windows; the share of `downgraded` among successes above 10 % over an hour — the quiet degradation nobody would otherwise notice (B-4); and per enabled provider, its tokens of the UTC day reaching 80 % of `BUDGET_CAP_PROVIDER_*`, input and output apart, the ceilings read off the environment's own `.env` so the alarm and the service cannot disagree. A caller's own budget has no alarm (an unbounded dimension). The rest of the Metrics section is a dashboard and saved Logs Insights queries |
 | **Runbook, the "Check" section** | the profile operation is a generation on a cheap model with a short `max_tokens`; look at `op_completed` in the logs. The check has to be cheap: it spends real money |
-| **Runbook, an extra section** | rotating a provider's key: replace the value in SM, restart the container, run a control generation. No image rollout is required |
+| **Runbook, an extra section** | rotating a provider's key — a restart, not the rollout the framework defaults assign to a key held at an external provider: the vendor keeps the old and the new key valid side by side, and the service reads its key once at process start. The order is what makes it safe: a new key at the vendor → the value replaced in SM → `docker restart llm-client-api-1` (plain `docker`: a compose command refuses to run without the compose file's required variables) → a control generation → the old key revoked. Revoking first answers every generation `500` until the restart. No image rollout is required |
 
 ---
 
@@ -1494,7 +1495,7 @@ conventions — the defaults". Only the deviations and additions are here.
 |---|---|
 | **Tests in `ci`** | no test reaches a real provider: the adapters are checked with fakes, and the retries, failover, budget and pre-flight with scenarios on top of them. This is not only about money: a test that depends on a vendor becomes flaky for someone else's reasons |
 | **Config validation** | a separate step: the registry of providers and aliases is checked by the same procedure as at service startup (US-L14). An error in the config has to fail in the PR, not at rollout |
-| **Checking the secret references** | a step verifies that every `api_key_ref` from the config corresponds to a secret created by the environment's TF root. A divergence means a service that will not come up |
+| **Checking the secret references** | structural rather than a step: the environment roots derive their secrets from the registry (Stage 11), so every `api_key_ref` has its secret by construction, and `terraform validate` of both roots is the check. It covers names, not values — a secret left value-less still stops the startup |
 | **Smoke after the rollout** | a generation on the cheapest model with a minimal `max_tokens`. It is the only smoke check on the platform that **costs money** — it must not be put in a loop and must not be retried without a bound |
 | **CI's access to provider keys** | the CI role has none and never gets any: only the instance role reads the keys (B-2). That is why the smoke check goes through the service itself rather than straight to the vendor |
 | **The order in `deploy`** | no difference: migrations before the container comes up |
@@ -1641,10 +1642,17 @@ metric as health.
 | Average answer length | `output_tokens` | together with the spend, it answers what a typical answer costs |
 | Unique callers per period | `client_id` | how many integrations actually use the service |
 
-The last row and every ratio of metrics are **queries, not standing filters**: a CloudWatch filter
-turns a matched line into a number and can neither count unique values nor divide one metric by
-another. They are computed by a Logs Insights query over the same log group; that introduces no new
-component, but no alarm can be attached to them either.
+A ratio of metrics is metric math over standing filters — the share of `UpstreamLlmError` divides
+by `GenerateRequestCount`, every line of the route; the success rate divides the successes by the
+successes plus the service's own faults; the share of `downgraded` divides by the successes — and an
+alarm or a widget can carry it. Its counters publish 0 for every other line ingested
+(`default_value`), so a window with traffic but no failures reads 0 rather than missing and the
+ratio evaluates. A window with no lines at all has no datapoints, and these alarms stay OK: a
+service that stopped logging is not what they catch, and nothing on the platform alarms on the
+absence of traffic yet — an alarm that would, on a staging that idles, would fire every quiet hour.
+What a filter cannot do is count unique values or break a figure down by an unbounded field: the
+last row, the spend by caller, and requested-versus-actual model are Logs Insights queries saved
+beside the log group, with no alarm.
 
 ### What these metrics do not answer
 
@@ -1802,8 +1810,9 @@ numbers.
 
 **B-2. Provider keys are server-side, from Secrets Manager; BYOK is not supported**
 Context: the callers here are platform services, not end users.
-Decision: each provider's key is kept in SM and is available only to `llm-client`; a caller passes no
-key.
+Decision: each provider's key is kept in SM and read only by `llm-client`; a caller passes no key.
+"Only" is a convention while every container on the instance shares one role that reads SM
+(Stage 11); a role per service would enforce it.
 Rejected: a BYOK header (there is no subject to bring a key, and passing a secret through the
 platform's services end to end widens the surface for a leak); the key in the service's environment
 variables (rotation without a deploy becomes impossible).
