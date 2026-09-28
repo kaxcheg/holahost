@@ -5,25 +5,27 @@ its class name, verbatim (`PlatformError.code`), and the shape of its **`details
 `details_dict()` returns. Nothing else is contractual — the `message` is for a person
 reading a log, and the HTTP status is a projection applied by `interface/http/errors.py`,
 which is why two errors may share one status and why changing a status is not a change to
-this file.
+this file. `headers()` is what an error owes beside its body (`Retry-After`), and
+`log_fields()` what it reports to the completion event and never to the caller.
 
 No two errors share an identity: a consumer builds its message from `details`, so what the
 identity has to name is which error the service threw, not the category it falls in.
 
-Three of the errors below are re-exported rather than declared: every service rejects a
-field, refuses a request that broke the transport contract, and answers for a resource that
-is absent or another subject's — with the same identity and the same `details` each time.
+Two of the errors below are re-exported rather than declared: every service rejects a field and
+refuses a request that broke the transport contract, with the same identity and the same
+`details` each time. The platform's `NotFoundError` is not among them — this service addresses no
+resource by id, so it has nothing to answer as absent.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 
 from holahost_http import (
     InvalidPayloadError,
     MalformedRequestError,
-    NotFoundError,
     PlatformError,
 )
 
@@ -38,7 +40,6 @@ __all__ = [
     "DuplicateRequestError",
     "InvalidPayloadError",
     "MalformedRequestError",
-    "NotFoundError",
     "RequestTooSlowForSyncError",
     "UnknownModelError",
     "UpstreamLlmError",
@@ -108,6 +109,10 @@ class RequestTooSlowForSyncError(ApplicationError):
             "budget_seconds": self.budget_seconds,
         }
 
+    def log_fields(self) -> Mapping[str, object]:
+        # Both of its causes refuse before any provider is called.
+        return {"preflight_rejected": True}
+
 
 class DuplicateRequestError(ApplicationError):
     """A request with the same `Idempotency-Key` is in flight or already completed.
@@ -128,7 +133,7 @@ class BudgetExhaustedError(ApplicationError):
     """A spend ceiling is exhausted and the request cannot be served.
 
     `scope` names the ceiling. `resets_at` is also kept as a `datetime`, because the response's
-    `Retry-After` is computed from it where the response is written.
+    `Retry-After` is computed from it when the response is written.
     """
 
     def __init__(self, *, scope: BudgetScope, resets_at: datetime) -> None:
@@ -138,6 +143,16 @@ class BudgetExhaustedError(ApplicationError):
 
     def details_dict(self) -> Mapping[str, object]:
         return {"scope": self.scope.value, "resets_at": self.resets_at.isoformat()}
+
+    def headers(self) -> Mapping[str, str]:
+        """`Retry-After` in whole seconds until the window resets, rounded up, at least one.
+
+        Rounded up because a caller coming back a fraction early meets the same refusal; at least
+        one because a window that turned over while the answer was written would otherwise
+        invite a retry at the very instant of the refusal.
+        """
+        seconds = math.ceil((self.resets_at - datetime.now(tz=UTC)).total_seconds())
+        return {"Retry-After": str(max(1, seconds))}
 
 
 class UpstreamLlmError(ApplicationError):
@@ -159,21 +174,35 @@ class UpstreamLlmError(ApplicationError):
     def details_dict(self) -> Mapping[str, object]:
         return {"attempts": self.attempts, "upstream_status": self.upstream_status}
 
+    def log_fields(self) -> Mapping[str, object]:
+        return {"attempts": self.attempts, "provider_timeouts": self.provider_timeouts}
+
 
 class ContentRefusedError(ApplicationError):
     """The model declined to answer this content.
 
     The call was paid for and recorded; the same content will be refused again. `provider` and
     `model` name the one that refused — after a downgrade or failover it is not the one asked for.
+    The tokens the provider charged reach the completion event, not `details`.
     """
 
-    def __init__(self, *, provider: str, model: str) -> None:
+    def __init__(self, *, provider: str, model: str, input_tokens: int, output_tokens: int) -> None:
         super().__init__("content refused")
         self.provider = provider
         self.model = model
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
     def details_dict(self) -> Mapping[str, object]:
         return {"provider": self.provider, "model": self.model}
+
+    def log_fields(self) -> Mapping[str, object]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+        }
 
 
 class UsageNotRecordedError(ApplicationError):
@@ -194,3 +223,11 @@ class UsageNotRecordedError(ApplicationError):
         self.output_tokens = output_tokens
         self.provider = provider
         self.model = model
+
+    def log_fields(self) -> Mapping[str, object]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "provider": self.provider,
+            "model": self.model,
+        }

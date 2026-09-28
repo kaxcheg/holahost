@@ -163,7 +163,7 @@ The acceptance criteria reference parameters by symbolic name; the values are fi
 | `FALLBACK_CHAIN` | the ordered candidates an alias resolves to — the order tried during failover |
 | `PROVIDER_TIMEOUT` | the timeout of one call to a provider |
 | `RETRY_MAX_ATTEMPTS`, `RETRY_BACKOFF_BASE`, `RETRY_TOTAL_BUDGET` | the upstream retry policy |
-| `MAX_INPUT_BYTES` | the maximum request size (`system` + `messages`) |
+| `MAX_INPUT_BYTES` | the maximum request body, measured whole — `system`, `messages` and the JSON around them |
 | `MAX_OUTPUT_TOKENS` | the ceiling on the answer's length |
 | `BUDGET_WINDOW`, `BUDGET_CAP_PER_CLIENT`, `BUDGET_CAP_DOWNGRADE_PER_CLIENT`, `BUDGET_CAP_PER_PROVIDER` | the budget's window and ceilings |
 | `ON_BUDGET_EXHAUSTED`, `DOWNGRADE_TARGETS` | the caller's policy on exhaustion of its own budget and the cheaper models it falls back to |
@@ -677,6 +677,7 @@ exists, load that does not fit the budget is not served by the service.
 | `FALLBACK_CHAIN` | the candidates an alias resolves to, in order; one model per alias in this iteration | with one candidate failover does not fire — the mechanism exists, the configuration of it does not |
 | `MAX_INPUT_BYTES` | 256 KiB | more makes no sense in a synchronous path: a generation over such an input will not fit the budget |
 | `MAX_OUTPUT_TOKENS` | 1000 | higher risks not fitting `PROVIDER_TIMEOUT` |
+| `temperature` range, `MAX_STOP_SEQUENCES` | 0..1; 4 sequences, none empty | the range and the count every configured vendor accepts: outside them a vendor rejects the request, which would be answered `500` for a caller's mistake (§7.2) |
 | `BUDGET_WINDOW` | a day, reset at 00:00 UTC, lazily on the first request of a new window | aggregated over the usage log on the fly, so no separate scheduler is needed |
 | `BUDGET_CAP_PER_CLIENT` | 2,000,000 input and 200,000 output tokens per day | counted separately: the prices differ by a multiple, and one counter would lie |
 | `BUDGET_CAP_PER_PROVIDER` | 10,000,000 input and 1,000,000 output tokens per day | protection of the platform's wallet on top of the per-client ceilings |
@@ -694,7 +695,9 @@ Where a parameter is declared follows who applies its rule, not where its figure
 - the figures derived from the gateway's ceiling — `PROVIDER_TIMEOUT`, `RETRY_*`,
   `MAX_OUTPUT_TOKENS`, `MAX_INPUT_BYTES`, `GENERATION_P95_BUDGET` — are application constants
   (`application/limits.py`). Dev has no gateway, yet its figures are the same: the service does not
-  branch on environment (§3.1), or dev would accept load that prod refuses;
+  branch on environment (§3.1), or dev would accept load that prod refuses. The `temperature` range
+  and `MAX_STOP_SEQUENCES` sit beside them: the use case applies them, and they bound what every
+  vendor accepts rather than one vendor's model;
 - the vendor's facts — `MODEL_ALIASES`, `FALLBACK_CHAIN`, `DOWNGRADE_TARGETS`,
   `MODEL_TOKENS_PER_SECOND`, a model's limits and prices — are in the registry (§3.6): they change
   when a vendor ships or retires a model;
@@ -781,7 +784,7 @@ sequenceDiagram
     PG-->>API: the window's remainders
     API->>PR: the generation request
     PR-->>API: text + usage
-    API->>PG: transaction: write the usage record + increment the counters
+    API->>PG: transaction: write the usage record
     PG-->>API: commit
     API-->>CLI: 200 text + usage + the actual provider and model
 ```
@@ -1082,8 +1085,8 @@ Idempotency-Key: 7c1f…            # optional
     { "role": "user", "content": "A guest asks: what time is check-in?" }
   ],
   "max_tokens": 800,               // optional; 1..MAX_OUTPUT_TOKENS, larger is truncated to it
-  "temperature": 0.3,              // optional
-  "stop": ["\n\n"]                 // optional
+  "temperature": 0.3,              // optional; 0..1
+  "stop": ["\n\n"]                 // optional; up to MAX_STOP_SEQUENCES (4), none empty
 }
 
 200 OK
@@ -1101,17 +1104,28 @@ Idempotency-Key: 7c1f…            # optional
 `system` is a field of its own rather than a message with the `system` role in the common list. That
 is the guarantee from §3.8: the service is obliged to preserve the role boundary the caller set, and a
 separate field makes that boundary indestructible — it becomes impossible to glue an instruction
-together with untrusted data by mistake. In `messages`, only the `user` role is allowed; `assistant`
-arrives with a multi-turn conversation (E-6).
+together with untrusted data by mistake. It is optional and defaults to empty, which sends no system
+block (§3.2). In `messages`, only the `user` role is allowed; `assistant` arrives with a multi-turn
+conversation (E-6). A message's text is `content` on the wire, the name vendors use; the application
+calls it `text`, and the router maps one to the other.
+
+The request schema publishes types, not ranges: the use case judges every field itself (§7.4,
+`InvalidPayloadError`), and a bound declared in the schema too would answer one fault with two
+different `details.field`s. A field unknown to the schema is refused rather than ignored — a misspelt
+`max_token` would otherwise be served with the default the caller meant to change. `temperature` is
+bounded to 0..1, the range every configured vendor accepts, and `stop` to four non-empty sequences:
+outside them a vendor rejects the request, which this service answers `500` and fails over on, for a
+mistake the caller can fix.
 
 `provider` and `model` in the response are the **actual** ones. If they diverged from what was
 requested, that is visible through `downgraded` (the budget policy fired) and `failed_over` (a
 provider switch fired); a caller that cares which model answered must read the response rather than
 rely on the request.
 
-The ceiling on an answer is published here, in the request schema, and that is where a caller reads
-it: `MAX_OUTPUT_TOKENS` is the documented maximum, a larger value is truncated to it, and the response
-carries no field saying so. A value below 1 is refused with `422 InvalidPayloadError` instead —
+The ceiling on an answer is published here, in the description of the request schema's
+`max_tokens`, and that is where a caller reads it: `MAX_OUTPUT_TOKENS` is the documented maximum, a
+larger value is truncated to it — so the schema carries no upper bound, which would refuse it
+first — and the response carries no field saying so. A value below 1 is refused with `422 InvalidPayloadError` instead —
 truncating it would mean answering a request nobody asked for, and passing it on buys a vendor's
 rejection for a mistake the caller can fix.
 
@@ -1130,7 +1144,8 @@ it. It is the only public route, it is the one declared in the authentication mi
 `public_paths`, and that same declaration exempts it from the `X-Request-ID` requirement.
 
 What is checked is that the usage-log database is reachable. Health makes no provider calls: it must
-neither spend money nor fall over together with a vendor.
+neither spend money nor fall over together with a vendor. The `503` body names no reason; the reason
+goes to the log as a `health_unavailable` warning.
 
 ### 7.4 Errors
 
@@ -1152,14 +1167,19 @@ data.
 | `ContextOverflowError` | 422 | the input estimate plus `max_tokens` exceeds the model's `max_context` | `max_context`, `estimated` | not until the input or `max_tokens` is reduced |
 | `RequestTooSlowForSyncError` | 422 | pre-flight: a full answer does not fit one attempt's time, or the time ran out before an attempt could start (§3.7.1). Both are measured against the model the caller asked for, even where a downgrade had already switched the candidates — the advice has to be about the request that was made | `max_tokens_allowed`, `budget_seconds` | not until `max_tokens` is reduced |
 | `DuplicateRequestError` | 409 | the `Idempotency-Key` is already in flight or already completed | `state` (`in_flight`/`completed`) | no |
-| `BudgetExhaustedError` | 429 | a ceiling is exhausted and the request cannot be served (US-L05, US-L06); `Retry-After` is mandatory | `scope` (`client`/`client_downgrade`/`provider`), `resets_at` (ISO 8601) | yes, after `resets_at` |
+| `BudgetExhaustedError` | 429 | a ceiling is exhausted and the request cannot be served (US-L05, US-L06); `Retry-After` is mandatory: the whole seconds until `resets_at`, rounded up, at least 1 | `scope` (`client`/`client_downgrade`/`provider`), `resets_at` (ISO 8601) | yes, after `resets_at` |
 | `ContentRefusedError` | 422 | the model declined to answer this content | `provider`, `model` | no — the same content is refused again |
 | `UpstreamLlmError` | 502 | every candidate model failed transiently, or the time ran out between failures | `attempts`, `upstream_status` (`null` on a timeout) | yes |
 
 `ContentRefusedError` is a `422` rather than a `502`: the vendor answered, and what could not be
 processed is the caller's content. `provider` and `model` name the one that refused, which after a
 downgrade or a failover is not the one asked for. The call is paid for, so it produces a usage record
-like any other confirmed spend (§4.4).
+like any other confirmed spend (§4.4), and the tokens charged reach the completion event (§8.4).
+
+What an error owes beyond its body, and what it reports to the log, are declared on the error itself:
+`headers()` — the `Retry-After` of `BudgetExhaustedError` — and `log_fields()`, the completion-event
+fields the response must not show. The `holahost-http` handlers write both; the headers only where the
+error is answered as itself, the fields also for an error answered `500`.
 
 `RequestTooSlowForSyncError` also answers a request whose time ran out on slow budget reads before
 the first attempt could start: an overloaded database then looks like a request too large for the
@@ -1170,7 +1190,10 @@ own.
 A request the vendor itself rejects — a revoked key, a model missing at the vendor, a call the adapter
 built wrong — publishes no error of its own: the cause is this service's, the caller can do nothing
 about it, and it is answered `500 InternalError` with the reason in the log. The 5xx alarm is then
-measuring what it is meant to (Metrics).
+measuring what it is meant to (Metrics). Every deliberate pass-through of §8.3 — that rejection and
+the three storage failures of a budget read — is listed in the edge's `silent_500_types`, together
+with the domain's invariant violation: none is a `PlatformError`, and unlisted they would reach
+Starlette's re-raising handler and print a traceback outside the JSON log.
 
 **Platform responses** are produced by the edge rather than by this service, and they are the same
 behind every service on the platform. They are deliberately absent from the table above: describing
@@ -1179,10 +1202,10 @@ one fact in N documents turns it into N facts that drift apart.
 | Class | HTTP | Where from |
 |---|---|---|
 | `MalformedRequestError` | 422 | `RequestIdMiddleware` — `X-Request-ID` is missing |
-| `InvalidPayloadError` | 422 | a rejected field — from the framework's validation, and from the use case, which judges the same fields itself rather than trusting that every command came through the schema: an empty `messages`, an unknown role, `max_tokens` below 1 (a value above `MAX_OUTPUT_TOKENS` is truncated, §7.2), a key outside 1…128. `details` carries `field`, `limit` |
+| `InvalidPayloadError` | 422 | a rejected field. The use case judges the ranges — the schema publishes only types (§7.2) — so each rule answers with one `field`: `messages` (empty, an unknown role, a blank message), `max_tokens` below 1 (`limit` 1000; a value above `MAX_OUTPUT_TOKENS` is truncated), `temperature` outside 0..1, `stop` over four sequences or with an empty one (`limit` 4), `idempotency_key` outside 1…128 (`limit` 128). The framework's validation answers only a wrong type, a missing field or an unknown one, with the field's own name and `limit` null. `details` carries `field`, `limit` |
 | `PayloadTooLargeError` | 413 | `BodySizeLimitMiddleware` — the body exceeds the transport ceiling |
 | `RateLimitExceededError` | 429 | `RateLimitMiddleware` — the per-caller limit was exceeded; `Retry-After` comes from the exception |
-| `InternalError` | 500 | anything not in the service's contract: an empty body, with the reason only in the log |
+| `InternalError` | 500 | anything not in the service's contract: the envelope with empty `details`, the reason only in the log |
 
 `InvalidPayloadError` answers `422` rather than `400`: by RFC 9110 §15.5.1 a `400` is broken syntax or
 framing, while by RFC 4918 §11.2 a `422` is a syntactically valid request whose content could not be
@@ -1325,16 +1348,21 @@ resulting stack, outermost first:
 2. `BodySizeLimitMiddleware` — `413 PayloadTooLargeError` by `Content-Length`, **before the body is
    read**. Here, rather than at parse time: the framework reads the body while assembling the
    handler's arguments, that is, before resolving its dependencies — a check expressed through
-   `Depends` accepts the whole request and only then refuses it. The transport ceiling is derived from
-   `MAX_INPUT_BYTES`.
+   `Depends` accepts the whole request and only then refuses it. The transport ceiling is
+   `MAX_INPUT_BYTES` itself, over the whole body: nothing inside the body is measured in bytes again,
+   so there is no inner limit to derive it from or to advertise instead.
 3. `HolahostAuthMiddleware` — `401` on failure; the only thing that puts the token into `scope`.
 4. `RateLimitMiddleware` — `429` + `Retry-After` when exceeded; keyed by the token from step 3.
 5. Routing → `interface/http/schemas.GenerateRequest`: parsing the body and the `Idempotency-Key`
-   header; a validation failure → `422 InvalidPayloadError`.
+   header; a wrong type, a missing or an unknown field → `422 InvalidPayloadError`. The route attaches
+   `requested_model` to the request's completion event (`holahost_http.add_log_fields`) before the use
+   case runs, so a refusal's event names it too.
 6. `GenerateUseCase.execute(cmd)`.
-7. The `holahost_http` exception handlers — an application error → a status and an envelope per the
-   service's `ERROR_CONTRACT`; a domain exception no use case translated → `500` with an empty body
-   (framework specification, "Brief: domain exceptions").
+7. The `holahost_http` exception handlers — an application error → a status, an envelope and the
+   headers it owes per the service's `ERROR_CONTRACT`; a domain exception no use case translated, and
+   every deliberate pass-through of §8.3 → `500` with empty `details`, through `silent_500_types`
+   (framework specification, "Brief: domain exceptions"). The event they write carries the error's
+   `log_fields()` and the route's fields.
 
 ### 8.2 UC-L1 "Generate an answer"
 
@@ -1347,7 +1375,7 @@ resulting stack, outermost first:
 | # | Module and call | What happens |
 |---|---|---|
 | 1.0 | `deadline = monotonic() + RETRY_TOTAL_BUDGET` | one deadline for the whole request, budget reads, pauses and failover included |
-| 1.1 | the command's fields become domain values | an unknown role, an empty `messages`, a blank message, `max_tokens < 1`, or a key outside 1…128 → `InvalidPayloadError` naming the field |
+| 1.1 | the command's fields become domain values | an unknown role, an empty `messages`, a blank message, `max_tokens < 1`, a `temperature` outside 0..1, a `stop` over four sequences or with an empty one, or a key outside 1…128 → `InvalidPayloadError` naming the field |
 | 1.2 | `ProvidersRepo.resolve(cmd.model_ref) -> list[Model]` | empty → `UnknownModelError` with `ProvidersRepo.aliases()`; the first candidate is the one to call, the rest are for failover |
 | 1.3 | `IdempotencyStore.begin(client_id, key)` | only if a key was sent; on a duplicate it raises `DuplicateRequestError` with the state (`in_flight`/`completed`) |
 | 1.4 | `max_tokens = min(cmd.max_tokens or model.max_output, MAX_OUTPUT_TOKENS, model.max_output)` | computed per model: a downgrade target or a failover candidate may have a lower ceiling of its own |
@@ -1374,7 +1402,7 @@ provider confirmed usage for reaches it.
 | `ProviderRejectedRequestError` | the use case, step 1.9 | no repeat; the next candidate at once, because the cause is this service's key, adapter or config at that one vendor. Every candidate rejecting it is a defect: the exception passes through and is answered `500` with the reason in the log |
 | `StorageUnavailableError` / `ConcurrentUpdateError` / `IntegrityError` on a budget read | **a deliberate pass-through** | outward a `500`. Skipping the check and generating anyway is not an option: without the budget check the call would mean unaccounted spend, and repeating a five-second aggregate would spend the request's time budget. `IntegrityError` here is a missing grant, a deploy defect |
 | `ConcurrentUpdateError` on `UsageRepo.add` | the use case, step 1.11 | the transaction is retried — the insert is idempotent by the record's `id`, and the generation is already paid for, so losing the record is the worst outcome. The retry is bounded by its count (three attempts) and by each attempt's own timeouts — a 2 s lock wait, a 5 s statement — not by the request's deadline: the caller loses the text whatever happens next, and stopping at the deadline would lose the record as well. Generations compete for no row here — the log is append-only and every `id` is fresh — so what raises it is a table held by DDL or maintenance, or an overloaded database. Past the retries it is handled as the row below |
-| `StorageUnavailableError` / `IntegrityError` on `UsageRepo.add` | the use case, step 1.11 | raised as `UsageNotRecordedError`, carrying the spend the provider confirmed, with the storage failure as its cause; outward a `500`, even though the generation has already been paid for. Returning the text with the spend unsaved is worse: it silently breaks the accounting. The router writes the carried figures into `op_completed` (§8.4), so the spend reaches the event log even when it misses the usage log |
+| `StorageUnavailableError` / `IntegrityError` on `UsageRepo.add` | the use case, step 1.11 | raised as `UsageNotRecordedError`, carrying the spend the provider confirmed, with the storage failure as its cause; outward a `500`, even though the generation has already been paid for. Returning the text with the spend unsaved is worse: it silently breaks the accounting. The error reports the carried figures as its completion-event fields, which the platform's handler writes into `op_completed` (§8.4), so the spend reaches the event log even when it misses the usage log |
 | `RateLimitExceededError` | the platform middleware, before the use case | `429` + `Retry-After` from the exception; the refusal event is written by `holahost_http.log_rejection` |
 
 Separately, the fate of the idempotency key after a successful `begin`: it is **released** while
@@ -1406,7 +1434,18 @@ rarer of the two. It comes from the result, or from
 `UpstreamLlmError`, which carries it outside its published `details`. For a request whose usage
 record could not be written, `input_tokens`, `output_tokens`, `provider` and `model` come from
 `UsageNotRecordedError`: once the write has failed, it is the only place the confirmed spend
-survives.
+survives. A content refusal was charged too, so `ContentRefusedError` reports the same four;
+`preflight_rejected` is `RequestTooSlowForSyncError`'s.
+
+Who writes which line: the route writes the success line; a refusal's line is written by the
+`holahost-http` exception handler, which takes these fields from the error (`log_fields()`) and
+`requested_model` from what the route attached before the use case ran (§8.1). Both are assembled by
+`holahost_http.log_completion`, so the core is built one way and `route` is the resolved path on
+both — `POST /api/llm-client/generate` — and one filter on it counts every outcome.
+
+The route's `429` has two bodies, discriminated by `code`: this service's `BudgetExhaustedError` and
+the platform limiter's `RateLimitExceededError`, which the document names beside it for that reason
+alone (§7.4).
 
 The service's own fields are declared as a list in `config/logging.py` and passed to
 `configure_logging`; the core comes from `holahost-observability` and is not repeated here. Beyond
@@ -1520,10 +1559,12 @@ The service skeleton — a copy of `holahost/templates/service` — arrives with
 
 - `L-14` The FastAPI application, the router, the request and response schemas, the `Idempotency-Key`
   header
-- `L-15` `ERROR_CONTRACT` with the published schemas of every error, the types answered `500` with an
-  empty body (the domain's invariant violation and the vendor's rejection of a request), the
-  `Retry-After` a `BudgetExhaustedError` owes, and the values for the edge (the buckets, the body
-  ceiling, the error for a missing `X-Request-ID`); the assembly is `create_edge_app` from `LIB-02`
+- `L-15` `ERROR_CONTRACT` with the published schemas of every error, the types answered `500` with
+  empty `details` (the domain's invariant violation, the vendor's rejection of a request and the three
+  storage failures of a budget read), the `Retry-After` a `BudgetExhaustedError` owes and the
+  completion-event fields the errors carry — both through `LIB-02`'s `PlatformError.headers()` /
+  `log_fields()` — and the values for the edge (the buckets, the body ceiling, the error for a missing
+  `X-Request-ID`); the assembly is `create_edge_app` from `LIB-02`
 - `L-16` `GET /api/llm-client/health`, with no provider calls
 - `L-17` The composition root
 
@@ -1886,7 +1927,7 @@ would import a persistence library, forbidden by the `import-linter` contract; s
 mapped into entities — the same manual assembly plus an extra layer. Imperative mapping removes the
 dependency problem, but on a domain this size there is nothing for an identity map, change tracking
 and cascades to be applied to, while session lifetime and lazy attributes remain; on top of that the
-budget counter increment is done in atomic SQL anyway rather than through a session. Raw SQL in
+budget is an aggregate over the log (B-9), a query rather than objects to track. Raw SQL in
 strings was rejected separately: there is no single `MetaData` for Alembic and no typed support for
 expressions. Revisit under the framework specification's S-6.
 Consequences: the queries are explicit, one `MetaData` is shared with Alembic, `domain/` is free of

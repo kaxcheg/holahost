@@ -9,6 +9,7 @@ from tests._support.generate import build_use_case, ok
 
 from application.dto.generation import GenerateResult, MessageInput
 from application.exceptions import InvalidPayloadError, UnknownModelError
+from application.limits import MAX_STOP_SEQUENCES
 from domain.value_objects.message import Message
 from domain.value_objects.role import Role
 
@@ -62,6 +63,29 @@ class TestTheCommandIsJudgedBeforeAnyPort:
         with pytest.raises(InvalidPayloadError) as exc:
             h.use_case.execute(make_cmd(max_tokens=-5))
         assert exc.value.field == "max_tokens"
+
+    @pytest.mark.parametrize("temperature", [-0.1, 1.01])
+    def test_a_temperature_outside_zero_to_one_is_invalid(self, temperature: float) -> None:
+        # Passed on, it buys a vendor's rejection — a 500 and a failover — for a caller's typo.
+        h = build_use_case()
+        with pytest.raises(InvalidPayloadError) as exc:
+            h.use_case.execute(make_cmd(temperature=temperature))
+        assert exc.value.details_dict() == {"field": "temperature", "limit": None}
+        assert h.generation.calls == []
+
+    @pytest.mark.parametrize("stop", [["a", "b", "c", "d", "e"], ["a", ""]])
+    def test_stop_holds_at_most_four_non_empty_sequences(self, stop: list[str]) -> None:
+        h = build_use_case()
+        with pytest.raises(InvalidPayloadError) as exc:
+            h.use_case.execute(make_cmd(stop=stop))
+        assert exc.value.details_dict() == {"field": "stop", "limit": MAX_STOP_SEQUENCES}
+        assert h.generation.calls == []
+
+    def test_the_bounds_themselves_are_accepted(self) -> None:
+        h = build_use_case(script={HAIKU.id.value: [ok(), ok()]})
+        h.use_case.execute(make_cmd(temperature=0.0, stop=["\n\n", "END", "###", "--"]))
+        h.use_case.execute(make_cmd(temperature=1.0))
+        assert len(h.generation.calls) == 2
 
 
 class TestModelResolution:

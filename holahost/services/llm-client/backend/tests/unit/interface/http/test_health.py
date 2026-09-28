@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Iterator
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from config.logging import configure_logging
 from interface.http.api_base import API_BASE_URL
 from interface.http.dependencies import get_engine
 from interface.http.health import router as health_router
@@ -73,3 +76,16 @@ class TestHealth:
 
         assert response.status_code == 503
         assert response.json() == {"status": "unavailable"}
+
+    def test_the_reason_reaches_the_log(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # The body says nothing on purpose, so the log is the only place an operator finds why.
+        configure_logging()
+        app = _build_app()
+        app.dependency_overrides[get_engine] = lambda: _BrokenEngine()
+
+        TestClient(app).get(_HEALTH_URL)
+
+        event = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert event["event"] == "health_unavailable"
+        assert event["level"] == "WARNING"
+        assert "db down" in event["error_reason"]

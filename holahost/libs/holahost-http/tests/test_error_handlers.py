@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
+from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from holahost_observability import configure_logging
 from pydantic import BaseModel
@@ -21,6 +23,8 @@ from holahost_http import (
     NotFoundError,
     PlatformError,
     RequestIdMiddleware,
+    add_log_fields,
+    log_completion,
     register_error_handlers,
 )
 
@@ -41,6 +45,39 @@ class _TooLargeError(_ServiceError):
         return {"limit": self.limit, "actual": self.actual}
 
 
+class _RetryLaterError(_ServiceError):
+    """Owes a header, the way a refusal with a known end owes `Retry-After`."""
+
+    def headers(self) -> Mapping[str, str]:
+        return {"Retry-After": "42"}
+
+
+class _UnpublishedRetryError(_ServiceError):
+    """Owes a header, but nobody published it — answered as out of contract."""
+
+    def headers(self) -> Mapping[str, str]:
+        return {"Retry-After": "42"}
+
+
+class _CountedError(_ServiceError):
+    """Carries completion-event fields the response must not show."""
+
+    def log_fields(self) -> Mapping[str, object]:
+        return {"attempts": 3}
+
+
+class _UnpublishedCountedError(_ServiceError):
+    def log_fields(self) -> Mapping[str, object]:
+        return {"attempts": 3}
+
+
+class _CoreNamedError(_ServiceError):
+    """Reports a field named like a core one — which only the platform writes."""
+
+    def log_fields(self) -> Mapping[str, object]:
+        return {"error_reason": "from the service", "attempts": 1}
+
+
 class _DerivedNotFoundError(NotFoundError):
     """A subclass nobody put in the table — it must still map to its base's status."""
 
@@ -56,13 +93,16 @@ class _Body(BaseModel):
 
 _CONTRACT: ErrorContract = {
     _TooLargeError: 413,
+    _RetryLaterError: 429,
+    _CountedError: 502,
+    _CoreNamedError: 409,
     InvalidPayloadError: 422,
     NotFoundError: 404,
 }
 
 
 def _build_app(*, contract: ErrorContract = _CONTRACT) -> FastAPI:
-    configure_logging()
+    configure_logging(extra_fields={"attempts", "requested"})
     app = FastAPI()
     app.add_middleware(RequestIdMiddleware)
     register_error_handlers(
@@ -74,6 +114,37 @@ def _build_app(*, contract: ErrorContract = _CONTRACT) -> FastAPI:
     @app.get("/too-large")
     def too_large() -> None:
         raise _TooLargeError(limit=100, actual=200)
+
+    @app.get("/retry-later")
+    def retry_later() -> None:
+        raise _RetryLaterError("later")
+
+    @app.get("/unpublished-retry")
+    def unpublished_retry() -> None:
+        raise _UnpublishedRetryError("later")
+
+    @app.get("/counted")
+    def counted(request: Request) -> None:
+        add_log_fields(request, requested="fast")
+        raise _CountedError("gave up")
+
+    @app.get("/counted-unpublished")
+    def counted_unpublished() -> None:
+        raise _UnpublishedCountedError("gave up")
+
+    @app.get("/core-named")
+    def core_named() -> None:
+        raise _CoreNamedError("conflict")
+
+    @app.get("/success")
+    def success(request: Request) -> None:
+        add_log_fields(request, requested="fast")
+        log_completion(request, outcome="success", fields={"attempts": 1})
+
+    @app.get("/annotated-invariant")
+    def annotated_invariant(request: Request) -> None:
+        add_log_fields(request, requested="fast")
+        raise _DomainInvariantError(_INTERNAL_DETAIL)
 
     @app.get("/not-found")
     def not_found() -> None:
@@ -196,6 +267,93 @@ class TestUnexpectedExceptions:
 
         assert response.status_code == 404
         assert "error" not in response.json()
+
+
+def _last_event(captured: str) -> dict[str, Any]:
+    event: dict[str, Any] = json.loads(captured.strip().splitlines()[-1])
+    return event
+
+
+class TestErrorHeaders:
+    def test_a_published_error_carries_the_headers_it_owes(self) -> None:
+        response = _client().get("/retry-later")
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "42"
+
+    def test_an_error_that_owes_none_adds_none(self) -> None:
+        assert "Retry-After" not in _client().get("/too-large").headers
+
+    def test_an_out_of_contract_error_answers_without_them(self) -> None:
+        # The 500 is not the error that owed the header: telling a caller when to come back
+        # for an answer the service never published would be advice about the wrong fact.
+        response = _client().get("/unpublished-retry")
+
+        assert response.status_code == 500
+        assert "Retry-After" not in response.headers
+
+
+class TestCompletionEventFields:
+    def test_a_published_error_reports_its_fields_and_the_request_s(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        response = _client().get("/counted")
+
+        event = _last_event(capsys.readouterr().out)
+        assert event["outcome"] == "_CountedError"
+        assert event["attempts"] == 3
+        assert event["requested"] == "fast"
+        assert "attempts" not in response.json()["error"]["details"]
+
+    def test_an_out_of_contract_error_still_reports_its_fields(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Answered 500 with nothing in the body, so the event is the only place the figures
+        # it carries survive.
+        _client().get("/counted-unpublished")
+
+        event = _last_event(capsys.readouterr().out)
+        assert event["outcome"] == "InternalError"
+        assert event["attempts"] == 3
+
+    def test_a_silent_500_reports_the_request_s_fields(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _client().get("/annotated-invariant")
+
+        event = _last_event(capsys.readouterr().out)
+        assert event["outcome"] == "InternalError"
+        assert event["requested"] == "fast"
+
+    def test_a_field_named_like_a_core_one_is_dropped_not_fatal(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Failing inside the handler would turn a published 409 into a traceback 500.
+        response = _client().get("/core-named")
+
+        event = _last_event(capsys.readouterr().out)
+        assert response.status_code == 409
+        assert event["error_reason"] is None
+        assert event["attempts"] == 1
+
+    def test_a_route_may_not_attach_a_core_field(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        with pytest.raises(ValueError, match="outcome"):
+            add_log_fields(request, outcome="success")
+
+
+class TestTheSuccessLine:
+    def test_is_assembled_like_a_refusal_s_with_the_route_s_fields(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # One core for both lines, so a filter on `route` counts every outcome of the route.
+        _client().get("/success", headers={"X-Request-ID": "req-ok"})
+
+        event = _last_event(capsys.readouterr().out)
+        assert (event["route"], event["outcome"]) == ("GET /success", "success")
+        assert event["request_id"] == "req-ok"
+        assert event["level"] == logging.getLevelName(logging.INFO)
+        assert (event["requested"], event["attempts"]) == ("fast", 1)
 
 
 class TestTheLogLevelFollowsTheStatus:

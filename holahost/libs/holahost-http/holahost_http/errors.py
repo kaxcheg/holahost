@@ -43,6 +43,22 @@ class PlatformError(Exception):
         """Wire-format ``details`` payload for this error. Empty by default."""
         return {}
 
+    def headers(self) -> Mapping[str, str]:
+        """Response headers this error owes, such as ``Retry-After``. Empty by default.
+
+        Written only where the error is answered as itself: an error answered
+        ``500 InternalError`` is not the fact the header would describe.
+        """
+        return {}
+
+    def log_fields(self) -> Mapping[str, object]:
+        """Fields for the completion event of the request this error ended. Empty by default.
+
+        For figures the event needs and the response must not show — attempts made, a spend
+        already charged. The names have to be in the service's log-field allowlist.
+        """
+        return {}
+
 
 class PayloadTooLargeError(PlatformError):
     """The request body exceeds the cap enforced by ``BodySizeLimitMiddleware``.
@@ -65,8 +81,8 @@ class RateLimitExceededError(PlatformError):
     """The caller is over its rate limit for the requested bucket.
 
     Args:
-        retry_after: Seconds to wait before retrying — surfaced by the middleware as
-            the mandatory ``Retry-After`` response header.
+        retry_after: Seconds to wait before retrying — also owed as the mandatory
+            ``Retry-After`` response header.
     """
 
     def __init__(self, retry_after: int) -> None:
@@ -75,6 +91,9 @@ class RateLimitExceededError(PlatformError):
 
     def details_dict(self) -> Mapping[str, object]:
         return {"retry_after_seconds": self.retry_after}
+
+    def headers(self) -> Mapping[str, str]:
+        return {"Retry-After": str(self.retry_after)}
 
 
 class MalformedRequestError(PlatformError):
@@ -179,10 +198,13 @@ async def send_platform_error(
     bound to Starlette's ``ExceptionMiddleware``, which sits *inside* the user-middleware
     stack, so an exception raised in middleware becomes a 500. Middleware that wants a
     specific status has to produce the response itself.
+
+    The headers the error owes are written first; ``headers`` adds to them and wins on a clash.
     """
+    merged = {**error.headers(), **(headers or {})}
     response = JSONResponse(
         status_code=status,
         content=error_envelope(error.code, str(error), error.details_dict()),
-        headers=dict(headers) if headers else None,
+        headers=merged or None,
     )
     await response(scope, receive, send)

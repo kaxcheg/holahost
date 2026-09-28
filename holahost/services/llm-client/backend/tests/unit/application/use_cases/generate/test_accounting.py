@@ -57,6 +57,7 @@ class TestTheRecord:
             h.use_case.execute(make_cmd())
 
         assert exc.value.details_dict() == {"provider": "anthropic", "model": "claude-haiku-4-5"}
+        assert (exc.value.input_tokens, exc.value.output_tokens) == (40, 0)
         [record] = h.usage.added
         assert (record.usage, record.latency_ms) == (make_usage(40, 0), 500)
 

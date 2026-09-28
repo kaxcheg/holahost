@@ -90,6 +90,12 @@ def test_request_over_the_ceiling_is_429_with_retry_after() -> None:
     assert response.json()["error"]["code"] == "RateLimitExceededError"
 
 
+def test_the_error_itself_owes_the_retry_after() -> None:
+    # One mechanism for every error that knows when to come back: the middleware writes
+    # what the error owes, as the route handlers do.
+    assert RateLimitExceededError(retry_after=7).headers() == {"Retry-After": "7"}
+
+
 def test_buckets_are_counted_separately() -> None:
     client = TestClient(build_app(limiter(user_ingest=1, user_read=5)))
     client.post("/documents")

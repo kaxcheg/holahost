@@ -12,12 +12,14 @@ fails when a vendor does — health is not the place to discover an upstream out
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine, text
 
+from config.logging import log_event
 from interface.http.dependencies import get_engine
 from interface.http.schemas import HealthResponse
 
@@ -29,8 +31,9 @@ def health(engine: Annotated[Engine, Depends(get_engine)]) -> HealthResponse | J
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-    except Exception:
+    except Exception as error:
         # No reason in the body: it goes to the log. A readiness probe is read by machines,
         # and by anyone who can reach the endpoint.
+        log_event("health_unavailable", level=logging.WARNING, error_reason=str(error))
         return JSONResponse(status_code=503, content={"status": "unavailable"})
     return HealthResponse(status="ok")
