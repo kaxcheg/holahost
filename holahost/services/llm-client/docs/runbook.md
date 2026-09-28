@@ -209,8 +209,10 @@ the dashboard `llm-client-staging`. Alarms: `llm-client-staging-5xx`, `-generate
 Push to `release/v*`. The `deploy-staging` pipeline runs `terraform apply`, builds and pushes the
 image tagged `git-<sha>` only, then an SSM Run Command applies migrations, provisions the app role
 and **then** swaps the container (`docker compose up -d`, recreate strategy — migrations always
-precede code, so they must be backwards-compatible). A change to the registry is a rollout too: the
-running process never re-reads it.
+precede code, so they must be backwards-compatible). Then the smoke: the free `/health` loop, and one
+paid generation on `fast` with `max_tokens: 1` — not retried, so a red smoke is re-run by a person,
+not by the pipeline. A change to the registry is a rollout too: the running process never re-reads
+it.
 
 A provider the registry **adds** needs its secret to exist and hold a value before any container
 runs the new registry — and the pipeline's own `terraform apply` creates the secret value-less in
@@ -313,6 +315,13 @@ reading the provider keys; isolating them needs a role per service, a platform-l
 
 **Outgoing HTTPS.** The only service on the platform that calls the internet: to the providers'
 domains. When egress filtering appears, the domain list follows from the registry.
+
+**The paid smoke's client.** The pipelines generate through the service as an ordinary caller: a
+client registered in auth's config with `llm-client` among its allowed audiences, its credentials
+stored as `LLM_CLIENT_SMOKE_CLIENT_ID` / `LLM_CLIENT_SMOKE_CLIENT_SECRET` in the GitHub environments
+`staging` and `prod`. Until they are set the pipelines skip the paid call with a notice and check
+`/health` only — a rollout then proves the process is up, not that it can generate, so check by hand
+as in "Check".
 
 ## Access
 

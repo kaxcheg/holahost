@@ -26,6 +26,8 @@ providers:
         tokens_per_second: 120
 
 # An alias is an ordered chain: the first candidate is called, the rest are failover.
+# `fast` stays the cheapest chain: the pipelines' post-deploy smoke spends one call on it, and
+# `make validate-registry` refuses a registry where it resolves to nothing.
 aliases:
   default: [{ provider: anthropic, model: claude-sonnet-4-6 }]
   quality: [{ provider: anthropic, model: claude-sonnet-4-6 }]

@@ -60,7 +60,7 @@ jobs:
             base="$(git merge-base origin/develop HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD)"
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
-          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/rag-documents|libs/holahost-[a-z]+|make|infra/modules)/|\.github/(actions/|workflows/rag-documents-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/rag-documents|libs/[^/]+|make|infra/modules)/|\.github/(actions/|workflows/rag-documents-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
