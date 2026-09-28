@@ -120,14 +120,16 @@ __PROCS_ARGS__
 - `ROUTE: STOP` → give the user the MESSAGE and stop.
 - `ROUTE: ASK` → ask the user what the MESSAGE names, then re-run `/build-session` with the answer.
 - `ROUTE: START` → load every range under SECTIONS TO READ **in full** — do not summarize, skip, or defer:
+  - `LAYER: none` — no layer was given and the Backlog group does not settle one, so the range is the whole spec.
+    Conceptual (6) comes with it: where it differs from **Detailed Sequence Flow (9)**, (9) holds.
   - `UNMATCHED` — no heading carries the stage's keywords: match the stage to a heading of the HEADINGS list by
     meaning (case-insensitive; ignore numeric prefixes and `-`/`_`/space separators), tolerant of analogous
     wording, and read it by its line-range. Sections absent from the spec are skipped (a small/abstract project may
     omit Frontend, Detailed Flow, etc.). Conceptual (6) is never loaded — it is the un-signatured draft of
     **Detailed Sequence Flow (9)**.
   - `AMBIGUOUS` — several headings fit one stage: decide by their content; still unclear → ask the user.
-  - **Backlog (14)** — the entry of each ticket ID is printed under BACKLOG ENTRIES. Confirm every ID sits under
-    the `<layer>` group; one that does not → stop: "Ticket `<ID>` is in layer `<actual>`, not `<layer>`. Re-run
+  - **Backlog (14)** — the entry of each ticket ID is printed under BACKLOG ENTRIES. With a layer, confirm every ID
+    sits under the `<layer>` group; one that does not → stop: "Ticket `<ID>` is in layer `<actual>`, not `<layer>`. Re-run
     with matching IDs."
   - **User Stories (3)** — a story the backlog entry names (`story <US-ID>`) is loaded in full with **all AC
     items**; for `STORIES BY SCOPE`, find the stories in section 3 by the ticket's name/scope and load them with
@@ -139,7 +141,7 @@ Forms: `/build-session T-05 domain` · `/build-session T-05 T-06 T-07 domain` ·
 `<layer>` ∈ `domain | application | infrastructure | interface | frontend | infra | ci-cd`, optionally a spec path —
 the token containing a `/` or ending in `.md`; without it the spec is the one whose Backlog lists the ticket. Without
 a layer it is the one the Backlog group of the tickets names; a group that names none, or could be two (a bare
-`Infrastructure`), routes to ASK. **Multiple
+`Infrastructure`), leaves the layer unset and the whole spec is read. **Multiple
 ticket IDs** are concatenated with `-` into a single combined ID used for all state files and commands:
 `B-06 B-07 domain` → `<TICKET-ID>` = `B-06-B-07`. **A range** is an ID followed by a bare last number: `T-05-07`
 stands for `T-05` through `T-07` and is itself the `<TICKET-ID>`. The backend layers (`domain |
