@@ -39,6 +39,15 @@ class TestTheShape:
         with pytest.raises(ValidationError):
             RegistryFile.model_validate(data)
 
+    @pytest.mark.parametrize("client", ["", "  "])
+    def test_an_override_for_a_blank_client_is_refused(self, client: str) -> None:
+        # No caller has a blank `client_id`; built lazily, on the first request, it would fail
+        # every generation instead of the startup.
+        data = registry_data()
+        data["on_budget_exhausted"]["overrides"] = {client: "downgrade"}
+        with pytest.raises(ValidationError, match="override for a blank client_id"):
+            RegistryFile.model_validate(data)
+
 
 class TestReferences:
     def test_an_alias_to_an_unknown_model_is_refused(self) -> None:

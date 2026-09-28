@@ -329,7 +329,10 @@ GET /.well-known/jwks.json            # no auth, Cache-Control: max-age=300
 ```
 
 Client authentication at `/token`: **public** — PKCE, no secret; **confidential** (s2s) —
-`Authorization: Basic base64(client_id:client_secret)`. Errors use `{error: {code, message}}`. The
+`Authorization: Basic base64(client_id:client_secret)`. The request body is form-encoded
+(`application/x-www-form-urlencoded`) for every grant, as RFC 6749 and RFC 8693 define it:
+`grant_type` is a field of it, and `audience` is repeated once per target; the `{…}` above lists
+the fields. Errors use `{error: {code, message}}`. The
 order at `/token`, failing fast: authenticate the client → the grant-specific check (code + verifier
 / refresh / subject_token) → the identity's status → the client's audience allowlist → **mint**, the
 signature being the final act.
@@ -842,22 +845,30 @@ generic hooks over its changed files, and `ruff`, `mypy` and `lint-imports` chec
 package. Walking every package from a pipeline would make it install every other package's
 environment and block a PR on code it does not own.
 
-**Pipelines.** GitHub Actions starts from the root `.github/workflows/`, which holds **thin trigger
-stubs** `<svc>-*.yml` with a path filter of `holahost/services/<svc>/**` plus `holahost/libs/**`;
-the logic lives inside the service. The libraries are matched because a service runs on their code:
-a library change re-runs the pipeline of every service, and that run is what checks the dependents
-against it. Every library is matched, not a list of today's dependencies — an extra run costs
-minutes, while a dependency added without updating the list breaks a service on `develop` unnoticed.
-The diff base of a new branch's first push is its merge-base with `develop`: a diff from the root
-commit matches every filter. A job skipped by the filter must report success into its required
-context, or the PR will hang.
+**Pipelines.** GitHub Actions reads workflows only from the root `.github/workflows/`, so each
+service's pipelines are files there, `<svc>-*.yml`, and their repeated steps are composite actions in
+`.github/actions/` (an action only one service uses carries its name: `llm-client-paid-smoke`). The
+path filter is a step inside the job rather than `on.paths`: a workflow skipped by `on.paths` leaves
+a required check pending forever, while a job whose filter finds nothing completes green. It matches
+`holahost/services/<svc>/`, `holahost/libs/`, `holahost/make/`, `holahost/infra/modules/`, the
+pipeline's own files and the repository-wide tool versions. The libraries are matched because a
+service runs on their code: a library change re-runs the pipeline of every service, and that run is
+what checks the dependents against it. Every library is matched, not a list of today's dependencies
+— an extra run costs minutes, while a dependency added without updating the list breaks a service on
+`develop` unnoticed. The diff base of a new branch's first push is its merge-base with `develop`: a
+diff from the root commit matches every filter.
 
 | Pipeline | Trigger | Steps |
 |---|---|---|
-| `<svc>-ci` | a PR into `develop` / `main` / `release/*`, a push to a short-lived branch | `pre-commit` → the Python gates of the service's package → tests → `docker build` without a push → `terraform plan` of the service's roots |
+| `<svc>-ci` | a PR into `develop` / `main` / `release/*`, a push to a short-lived branch | `pre-commit` → the Python gates of the service's package → unit and integration tests → `openapi-check` and the service's own checks → `docker build` without a push and the image size ceiling → `terraform validate` of the service's roots, then `terraform plan` once the repository variable `AWS_ACCOUNT_ID` exists and the PR is not from a fork |
 | `libs-ci` | the same, with a path filter of `holahost/libs/**` | `pre-commit` → each library's Python gates → its unit tests |
 | `<svc>-deploy-staging` | a push to `release/v*` | `terraform apply` → `docker build` and push to ECR under the `git-<sha>` tag (that one only — see "Image tags" below), remembering the digest → SSM Run Command: `alembic upgrade head`, then provisioning the application role, then `docker compose up -d` → smoke |
-| `<svc>-promote-prod` | a push of a `<svc>/v*` tag | `terraform apply` → resolve the digest by the tagged commit's `git-<sha>` **without rebuilding** → SSM Run Command: migrations, then provisioning the application role, then rolling out that same digest → smoke → an `environment: prod` gate with manual approval → tagging the rolled-out digest `release-v<version>` |
+| `<svc>-promote-prod` | a push of a `<svc>/v*` tag | an `environment: prod` gate with manual approval, holding the whole job → `terraform apply` → resolve the digest by the tagged commit's `git-<sha>` **without rebuilding** → SSM Run Command: migrations, then provisioning the application role, then rolling out that same digest → smoke → tagging the rolled-out digest `release-v<version>` |
+
+`deploy-staging` has no path filter: every push to `release/v*` rolls out every service to staging,
+whichever one it touched. A filter would leave a commit without its `git-<sha>` image, and a
+component tag on that commit could not be promoted. The cost is a container recreate per service per
+push, plus `llm-client`'s one paid smoke call — known, and cheaper than a release that cannot ship.
 
 **Image tags.** A service's ECR repository is immutable (`IMMUTABLE`, the only exception being
 `latest*`), so no tag can be written twice, and each tag is written exactly once by its own pipeline:
@@ -935,7 +946,7 @@ subsequent service.
 | The shared CI composite actions: `setup-python-toolchain`, `build-push-image`, `ssm-migrate-deploy`, `smoke-check`, `terraform-apply` | `.github/actions/` (the repository root — GitHub reads only that) | implemented |
 | The service template: the clean-architecture tree, `Dockerfile`, `docker-compose.yml`, `.env.example`, `alembic.ini`, a base `pyproject.toml` (`ruff`, `mypy` strict, the `import-linter` contract, `pytest`), a test skeleton (testcontainers + `alembic upgrade` + provisioning of the unprivileged role, a JWKS server and token minting, registration of the error handlers), the domain exception type already listed in `SILENT_500_TYPES`, and a generated `docs/openapi.json` | `holahost/templates/service/` | implemented; `make test`, `make test-int` and `make openapi-check` pass on the copied tree |
 | `holahost-client` — the caller's discipline: obtaining and caching an s2s token, setting `X-Request-ID`, honouring `Retry-After`, parsing the error envelope into exceptions | `holahost/libs/holahost-client/` | placeholder, see below |
-| A reusable CI workflow (`workflow_call`) instead of a copy of the pipeline body in every stub | `.github/workflows/` | placeholder, see below |
+| A reusable CI workflow (`workflow_call`) instead of a copy of the pipeline body in every service's workflow file | `.github/workflows/` | placeholder, see below |
 
 ## What stayed a placeholder, and why exactly these
 
@@ -953,12 +964,15 @@ appeared. What remains common is `X-Request-ID` and honouring `Retry-After` — 
 trigger: the first Orchestration Service.
 
 **A reusable CI workflow.** The repeating *steps* are already extracted — those are the composite
-actions above. Within the pipeline body, four decisions are service-specific (the path filter's
-regex, the image's name and size ceiling, whether there is an `openapi-check`, whether there is an
-integration run) out of roughly a dozen steps. Designing a `workflow_call` with four inputs from a
-single example is a way to guess the wrong interface and, unlike with Python libraries, nothing here
-checks the mistake: a workflow is not typed, and the divergence would surface only at the second
-service. The trigger: the second pipeline.
+actions above. Designing a `workflow_call` from a single example was a way to guess the wrong
+interface: a workflow is not typed, and nothing checks the mistake. The second pipeline
+(`llm-client`) has now shown the divergence: in `ci`, the service's name (from which the filter, the
+directories, the image and the plan role follow), the image size ceiling and a check of its own
+(`validate-registry`); in the rollout pipelines, a smoke step of its own. The extraction is a
+separate change rather than part of the second service: a called workflow's job reports under a new
+check name, so it renames the required checks of every service at once, and branch protection has
+to change in the same step. The trigger: the third pipeline, or the next change to a step the
+copies share.
 
 ## The operation-completion event contract
 

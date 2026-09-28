@@ -67,7 +67,12 @@ class RegistryFile(_Entry):
 
     @model_validator(mode="after")
     def _check_references(self) -> Self:
-        problems = [*self._alias_problems(), *self._target_problems(), *self._provider_problems()]
+        problems = [
+            *self._alias_problems(),
+            *self._target_problems(),
+            *self._provider_problems(),
+            *self._policy_problems(),
+        ]
         if problems:
             raise ValueError("; ".join(problems))
         return self
@@ -135,6 +140,13 @@ class RegistryFile(_Entry):
             if count > 1
         ]
         return problems
+
+    def _policy_problems(self) -> list[str]:
+        # The overrides become `ClientId`s only on the first request, so the one rule a client id
+        # has is checked here, where it stops the startup rather than every generation.
+        if any(not client.strip() for client in self.on_budget_exhausted.overrides):
+            return ["a budget policy override for a blank client_id"]
+        return []
 
 
 def read_registry(path: Path = REGISTRY_PATH) -> RegistryFile:

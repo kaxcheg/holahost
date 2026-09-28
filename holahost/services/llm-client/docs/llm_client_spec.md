@@ -1494,12 +1494,14 @@ conventions — the defaults". Only the deviations and additions are here.
 | Item | The difference |
 |---|---|
 | **Tests in `ci`** | no test reaches a real provider: the adapters are checked with fakes, and the retries, failover, budget and pre-flight with scenarios on top of them. This is not only about money: a test that depends on a vendor becomes flaky for someone else's reasons |
-| **Config validation** | a separate step: the registry of providers and aliases is checked by the same procedure as at service startup (US-L14). An error in the config has to fail in the PR, not at rollout |
+| **Tests in `ci`, the integration run** | a step of its own, against a real Postgres (testcontainers): budgets, idempotency and accounting are storage behaviour |
+| **Config validation** | a separate step, `make validate-registry`: the registry of providers and aliases is checked by the same procedure as at service startup (US-L14) — reading the file, then building its domain objects against the adapters the service has — with no environment and no keys, plus one rule of the pipelines': the smoke's alias `fast` resolves to an enabled candidate. An error in the config has to fail in the PR, not at rollout |
 | **Checking the secret references** | structural rather than a step: the environment roots derive their secrets from the registry (Stage 11), so every `api_key_ref` has its secret by construction, and `terraform validate` of both roots is the check. It covers names, not values — a secret left value-less still stops the startup |
-| **Smoke after the rollout** | a generation on the cheapest model with a minimal `max_tokens`. It is the only smoke check on the platform that **costs money** — it must not be put in a loop and must not be retried without a bound |
+| **Smoke after the rollout** | two steps. First the free one — the platform's `/health` loop, retried within a window. Then one generation on `fast` (the cheapest alias, kept so by the registry) with `max_tokens: 1`: the only smoke check on the platform that **costs money**, so it is sent once, with no loop and no retry — a failure fails the rollout, and re-running it is a person's decision. It needs a caller's identity: a client registered in `auth` with `llm-client` among its audiences, its credentials stored in the GitHub environment (`LLM_CLIENT_SMOKE_CLIENT_ID` / `_SECRET`); the token is the frame's S2S `client_credentials`. Until those exist the step is skipped with a notice and the rollout checks health only |
 | **CI's access to provider keys** | the CI role has none and never gets any: only the instance role reads the keys (B-2). That is why the smoke check goes through the service itself rather than straight to the vendor |
 | **The order in `deploy`** | no difference: migrations before the container comes up |
-| **`Makefile`** | `include ../../make/common.mk` plus the service's name and the image size ceiling; the targets are shared |
+| **Before an AWS account exists** | as for every service: `terraform validate` always runs, `terraform plan` waits for the repository variable `AWS_ACCOUNT_ID`, and the rollout pipelines carry a placeholder account until the OIDC roles exist. The first rollout is by hand (runbook, "Rolling out by hand") |
+| **`Makefile`** | `include ../../make/common.mk` plus the service's name and the image size ceiling; the targets are shared, and the one of its own is `validate-registry` |
 | **The service skeleton** | copied from `holahost/templates/service` — the clean-architecture tree, the tooling, the test skeleton and the Terraform roots are already in place |
 | **`openapi-check`** | the step exists: `docs/openapi.json` is regenerated from the application and compared by diff — a changed contract has to be seen in the PR |
 
@@ -1580,14 +1582,15 @@ The service skeleton — a copy of `holahost/templates/service` — arrives with
 
 ### CI/CD
 
-- `L-22` The trigger stub and the `ci` pipeline — hooks, tests on fakes, registry config validation,
-  checking the secret references, `docker build`, `terraform plan`
+- `L-22` The `ci` pipeline — hooks, tests on fakes, the integration run, registry config validation,
+  `openapi-check`, `docker build` with the size ceiling, `terraform validate` (which checks the secret
+  references) and `terraform plan`
 - `L-23` The `deploy-staging` pipeline — apply, build and push, SSM with migrations and the rollout,
   the paid smoke check on a cheap model
-- `L-24` The `promote-prod` pipeline — resolving the digest, migrations, the rollout, smoke, the
-  approval gate
+- `L-24` The `promote-prod` pipeline — the approval gate before anything runs, resolving the digest,
+  migrations, the rollout, smoke
 - `L-25` The Makefile from the template, adapted — lint, types, tests, `lint-imports`, `dev-up`,
-  migrations and `ci-local` come from `common.mk`
+  migrations and `ci-local` come from `common.mk`; the service's own target is `validate-registry`
 
 ---
 
@@ -1785,7 +1788,7 @@ assistant (§1.3.4).
 
 | Stage | The fork |
 |---|---|
-| 1 | The service's entry in `auth`'s git config: the service's `client_id`, the list of callers with `llm-client` in `allowed_audiences`, and their tokens' TTLs — Stage 11 |
+| 1 | The service's entry in `auth`'s git config: the service's `client_id`, the list of callers with `llm-client` in `allowed_audiences` — the rollout's smoke client among them (Stage 12) — and their tokens' TTLs — Stage 11 |
 | 3 | The value of `MODEL_TOKENS_PER_SECOND` for each model: taken from a measurement on the target instance rather than from the provider's documentation — fixed at first implementation |
 | 6 | The threshold at which the budget check by aggregate stops fitting the time budget and E-5 is switched on — set by measurement rather than in advance |
 | 3 | The value of `BUDGET_CAP_DOWNGRADE_PER_CLIENT`: no caller uses the `downgrade` policy yet — fixed together with the first one that does, in the service's settings, which carry placeholders until then |

@@ -75,8 +75,8 @@ runs:
         ENV_SUBDIR="infra/envs/${{ inputs.env }}"
         COMPOSE_B64=$(base64 -w0 < "${{ inputs.compose-file }}")
         ENV_B64=$(base64 -w0 < "${{ inputs.env-file }}")
-        SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-password"
-        SUPERUSER_SECRET_ID="holahost/${{ inputs.env }}/rag-documents/db-superuser-password"
+        SECRET_ID="holahost/${{ inputs.env }}/${{ inputs.service-name }}/db-password"
+        SUPERUSER_SECRET_ID="holahost/${{ inputs.env }}/${{ inputs.service-name }}/db-superuser-password"
         # No PYTHON_VERSION here: docker-compose.yml's `api` service carries no `build:`
         # section, so Compose never needs it.
 
