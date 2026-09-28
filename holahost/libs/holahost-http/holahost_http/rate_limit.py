@@ -125,14 +125,7 @@ class RateLimitMiddleware:
         except RateLimitExceededError as exc:
             if self._on_rejected is not None:
                 self._on_rejected(scope, outcome=exc.code)
-            await send_platform_error(
-                scope,
-                receive,
-                send,
-                status=429,
-                error=exc,
-                headers={"Retry-After": str(exc.retry_after)},
-            )
+            await send_platform_error(scope, receive, send, status=429, error=exc)
             return
 
         await self.app(scope, receive, send)

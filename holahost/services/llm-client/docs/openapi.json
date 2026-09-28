@@ -1,6 +1,370 @@
 {
   "components": {
     "schemas": {
+      "BudgetExhaustedDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "resets_at": {
+            "description": "When the next budget window starts (UTC).",
+            "format": "date-time",
+            "title": "Resets At",
+            "type": "string"
+          },
+          "scope": {
+            "description": "The ceiling that ran out: the caller's own, its downgrade pool, a provider's.",
+            "enum": [
+              "client",
+              "client_downgrade",
+              "provider"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "resets_at"
+        ],
+        "title": "BudgetExhaustedDetails",
+        "type": "object"
+      },
+      "BudgetExhaustedErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "BudgetExhaustedError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/BudgetExhaustedDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "BudgetExhaustedErrorBody",
+        "type": "object"
+      },
+      "ContentRefusedDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "description": "The model that refused — not always the one asked for.",
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "description": "The provider whose model refused.",
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "ContentRefusedDetails",
+        "type": "object"
+      },
+      "ContentRefusedErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "ContentRefusedError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/ContentRefusedDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "ContentRefusedErrorBody",
+        "type": "object"
+      },
+      "ContextOverflowDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "estimated": {
+            "description": "The input's upper-bound estimate plus `max_tokens`.",
+            "title": "Estimated",
+            "type": "integer"
+          },
+          "max_context": {
+            "description": "The model's context window, in tokens.",
+            "title": "Max Context",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_context",
+          "estimated"
+        ],
+        "title": "ContextOverflowDetails",
+        "type": "object"
+      },
+      "ContextOverflowErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "ContextOverflowError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/ContextOverflowDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "ContextOverflowErrorBody",
+        "type": "object"
+      },
+      "DuplicateRequestDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "description": "Where the request that holds the key is; its answer is not returned again.",
+            "enum": [
+              "in_flight",
+              "completed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "DuplicateRequestDetails",
+        "type": "object"
+      },
+      "DuplicateRequestErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "DuplicateRequestError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/DuplicateRequestDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "DuplicateRequestErrorBody",
+        "type": "object"
+      },
+      "DuplicateRequestErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/DuplicateRequestErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "DuplicateRequestErrorResponse",
+        "type": "object"
+      },
+      "GenerateRejectedResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "discriminator": {
+              "mapping": {
+                "ContentRefusedError": "#/components/schemas/ContentRefusedErrorBody",
+                "ContextOverflowError": "#/components/schemas/ContextOverflowErrorBody",
+                "InvalidPayloadError": "#/components/schemas/InvalidPayloadErrorBody",
+                "MalformedRequestError": "#/components/schemas/MalformedRequestErrorBody",
+                "RequestTooSlowForSyncError": "#/components/schemas/RequestTooSlowForSyncErrorBody"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InvalidPayloadErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/MalformedRequestErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/ContextOverflowErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/RequestTooSlowForSyncErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/ContentRefusedErrorBody"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "GenerateRejectedResponse",
+        "type": "object"
+      },
+      "GenerateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer's ceiling, at least 1. At most 1000: a larger value is truncated to it. Absent means the model's own ceiling, capped the same way.",
+            "title": "Max Tokens"
+          },
+          "messages": {
+            "description": "The conversation, in order; at least one.",
+            "items": {
+              "$ref": "#/components/schemas/MessageIn"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "model": {
+            "description": "A model alias (`fast`, `quality`, `default`) or a model id.",
+            "title": "Model",
+            "type": "string"
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Up to 4 stop sequences, none of them empty.",
+            "title": "Stop"
+          },
+          "system": {
+            "default": "",
+            "description": "The system instruction, passed to the provider unchanged; empty sends none.",
+            "title": "System",
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From 0 to 1.",
+            "title": "Temperature"
+          }
+        },
+        "required": [
+          "model",
+          "messages"
+        ],
+        "title": "GenerateRequest",
+        "type": "object"
+      },
+      "GenerateResponse": {
+        "properties": {
+          "downgraded": {
+            "description": "The budget policy moved the request to a cheaper model.",
+            "title": "Downgraded",
+            "type": "boolean"
+          },
+          "failed_over": {
+            "description": "A candidate other than the first answered.",
+            "title": "Failed Over",
+            "type": "boolean"
+          },
+          "finish_reason": {
+            "enum": [
+              "stop",
+              "max_tokens"
+            ],
+            "title": "Finish Reason",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model that answered — not always the one asked for.",
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "description": "The provider that answered.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageOut"
+          }
+        },
+        "required": [
+          "text",
+          "usage",
+          "provider",
+          "model",
+          "finish_reason",
+          "downgraded",
+          "failed_over"
+        ],
+        "title": "GenerateResponse",
+        "type": "object"
+      },
+      "GenerateTooManyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "discriminator": {
+              "mapping": {
+                "BudgetExhaustedError": "#/components/schemas/BudgetExhaustedErrorBody",
+                "RateLimitExceededError": "#/components/schemas/RateLimitExceededErrorBody"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BudgetExhaustedErrorBody"
+              },
+              {
+                "$ref": "#/components/schemas/RateLimitExceededErrorBody"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "GenerateTooManyResponse",
+        "type": "object"
+      },
       "HealthResponse": {
         "properties": {
           "status": {
@@ -14,16 +378,484 @@
         ],
         "title": "HealthResponse",
         "type": "object"
+      },
+      "InternalErrorBody": {
+        "additionalProperties": false,
+        "description": "The one out-of-contract answer. Anything a service did not publish — an unmapped\nexception, a driver failure, a defect — comes back as exactly this, with an empty\n``details``: the cause reaches the log, never the caller.",
+        "properties": {
+          "code": {
+            "const": "InternalError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/NoDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "InternalErrorBody",
+        "type": "object"
+      },
+      "InternalErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/InternalErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "InternalErrorResponse",
+        "type": "object"
+      },
+      "InvalidPayloadDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "description": "Which request field failed validation.",
+            "title": "Field",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That field's length limit, or null if it has none.",
+            "title": "Limit"
+          }
+        },
+        "required": [
+          "field",
+          "limit"
+        ],
+        "title": "InvalidPayloadDetails",
+        "type": "object"
+      },
+      "InvalidPayloadErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "InvalidPayloadError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/InvalidPayloadDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "InvalidPayloadErrorBody",
+        "type": "object"
+      },
+      "MalformedRequestErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "MalformedRequestError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/NoDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "MalformedRequestErrorBody",
+        "type": "object"
+      },
+      "MessageIn": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "The message text, passed to the provider unchanged.",
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "description": "`user` — the only role in this version.",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "MessageIn",
+        "type": "object"
+      },
+      "NoDetails": {
+        "additionalProperties": false,
+        "description": "An error whose identity is the whole message — nothing to parameterise.",
+        "properties": {},
+        "title": "NoDetails",
+        "type": "object"
+      },
+      "RateLimitExceededDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "retry_after_seconds": {
+            "description": "Seconds to wait; also sent as `Retry-After`.",
+            "title": "Retry After Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retry_after_seconds"
+        ],
+        "title": "RateLimitExceededDetails",
+        "type": "object"
+      },
+      "RateLimitExceededErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "RateLimitExceededError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/RateLimitExceededDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "RateLimitExceededErrorBody",
+        "type": "object"
+      },
+      "RequestTooSlowForSyncDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_seconds": {
+            "description": "The time that `max_tokens_allowed` was fitted to.",
+            "title": "Budget Seconds",
+            "type": "number"
+          },
+          "max_tokens_allowed": {
+            "description": "The largest `max_tokens` one attempt can finish.",
+            "title": "Max Tokens Allowed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_tokens_allowed",
+          "budget_seconds"
+        ],
+        "title": "RequestTooSlowForSyncDetails",
+        "type": "object"
+      },
+      "RequestTooSlowForSyncErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "RequestTooSlowForSyncError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/RequestTooSlowForSyncDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "RequestTooSlowForSyncErrorBody",
+        "type": "object"
+      },
+      "UnknownModelDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "available_aliases": {
+            "description": "The aliases this service resolves.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Aliases",
+            "type": "array"
+          },
+          "requested": {
+            "description": "The alias or model id the request named.",
+            "title": "Requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requested",
+          "available_aliases"
+        ],
+        "title": "UnknownModelDetails",
+        "type": "object"
+      },
+      "UnknownModelErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "UnknownModelError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/UnknownModelDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "UnknownModelErrorBody",
+        "type": "object"
+      },
+      "UnknownModelErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/UnknownModelErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "UnknownModelErrorResponse",
+        "type": "object"
+      },
+      "UpstreamLlmDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "description": "Provider calls made, across every candidate.",
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "upstream_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The last transient failure's vendor status; null for a timeout.",
+            "title": "Upstream Status"
+          }
+        },
+        "required": [
+          "attempts",
+          "upstream_status"
+        ],
+        "title": "UpstreamLlmDetails",
+        "type": "object"
+      },
+      "UpstreamLlmErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "UpstreamLlmError",
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/UpstreamLlmDetails"
+          }
+        },
+        "required": [
+          "code",
+          "details"
+        ],
+        "title": "UpstreamLlmErrorBody",
+        "type": "object"
+      },
+      "UpstreamLlmErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/UpstreamLlmErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "UpstreamLlmErrorResponse",
+        "type": "object"
+      },
+      "UsageOut": {
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "UsageOut",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "Platform-issued service JWT with `llm-client` in its audience. Budgets, limits and the exhaustion policy attach to its `client_id`.",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
   "info": {
-    "description": "Generation through external LLM providers, with model aliases, retries, failover, budgets\nand usage accounting.\n\nErrors answer `{\"error\": {\"code\", \"message\", \"details\"}}`. Branch on `code`: it is the\nerror's identity and it tags `details`, whose shape depends on it. `message` is for a\nperson reading a log — do not parse it, and compose what you show a user from `code` and\n`details`. The HTTP status is a projection of the identity, not a separate fact.\n\nOnly this service's own errors are described below. What the shared edge answers with —\n`401`/`503` for authentication, `429` over the rate limit, `413` for a request body past\nthe transport cap — belongs to the platform contract and is the same for every service\nbehind it.\n",
+    "description": "Generation through external LLM providers, with model aliases, retries, failover, budgets\nand usage accounting.\n\nErrors answer `{\"error\": {\"code\", \"message\", \"details\"}}`. Branch on `code`: it is the\nerror's identity and it tags `details`, whose shape depends on it. `message` is for a\nperson reading a log — do not parse it, and compose what you show a user from `code` and\n`details`. The HTTP status is a projection of the identity, not a separate fact.\n\nOnly this service's own errors are described below. What the shared edge answers with —\n`401`/`503` for authentication, `429` over the rate limit, `413` for a request body past\nthe transport cap — belongs to the platform contract and is the same for every service\nbehind it. The two `429`s differ by `code`: `RateLimitExceededError` means too often, wait\nseconds; `BudgetExhaustedError` means today's spend is gone, wait for the window to reset.\n",
     "title": "llm-client",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/llm-client/generate": {
+      "post": {
+        "operationId": "generate_api_llm_client_generate_post",
+        "parameters": [
+          {
+            "description": "1 to 128 characters. A repeat with the same key within the key's lifetime is answered `409 DuplicateRequestError` instead of paying for a second generation; the first answer is not returned again.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "1 to 128 characters. A repeat with the same key within the key's lifetime is answered `409 DuplicateRequestError` instead of paying for a second generation; the first answer is not returned again.",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownModelErrorResponse"
+                }
+              }
+            },
+            "description": "No model answers this name."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateRequestErrorResponse"
+                }
+              }
+            },
+            "description": "The key is already in use."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateRejectedResponse"
+                }
+              }
+            },
+            "description": "The request could not be served."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateTooManyResponse"
+                }
+              }
+            },
+            "description": "`BudgetExhaustedError`: a spend ceiling is exhausted until `details.resets_at`. `RateLimitExceededError`: too many requests in the rate-limit window.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait — until the budget window resets, or the limit's.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalErrorResponse"
+                }
+              }
+            },
+            "description": "Out of contract — see the log."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamLlmErrorResponse"
+                }
+              }
+            },
+            "description": "Every candidate model failed transiently. Retryable."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate",
+        "tags": [
+          "generation"
+        ]
+      }
+    },
     "/api/llm-client/health": {
       "get": {
         "operationId": "health_api_llm_client_health_get",

@@ -2,11 +2,11 @@
 
 Two declarations and nothing else, which is the point: the machinery around them — the MRO
 walk that answers an unpublished subclass as its published ancestor, the closed vocabulary
-that turns everything else into `500 InternalError` with an empty body, the failure log,
-the header echo Starlette's outermost handler would otherwise drop — belongs to every
-service equally and lives in `holahost_http`. Both are passed to `create_edge_app` as data;
-nothing here wraps the platform's registration, because the function that consumes them
-lives in that same package.
+that turns everything else into `500 InternalError` with empty `details`, the failure log with
+the fields an error carries, the headers it owes, the header echo Starlette's outermost handler
+would otherwise drop — belongs to every service equally and lives in `holahost_http`. Both are
+passed to `create_edge_app` as data; nothing here wraps the platform's registration, because the
+function that consumes them lives in that same package.
 
 An error the middleware answers with before routing has no row here: its status is an
 argument where the stack is assembled (`app.py`), and a row would be a second source for
@@ -18,8 +18,17 @@ the same number.
 
 from __future__ import annotations
 
-from holahost_http import ErrorContract, InvalidPayloadError, NotFoundError
+from holahost_http import ErrorContract, InvalidPayloadError
 
+from application.exceptions import (
+    BudgetExhaustedError,
+    ContentRefusedError,
+    ContextOverflowError,
+    DuplicateRequestError,
+    RequestTooSlowForSyncError,
+    UnknownModelError,
+    UpstreamLlmError,
+)
 from application.ports.exceptions import (
     ConcurrentUpdateError,
     IntegrityError,
@@ -32,11 +41,22 @@ ERROR_CONTRACT: ErrorContract = {
     # `InvalidPayloadError` is required: it is what the framework's own request validation
     # is answered with, and `create_edge_app` refuses a contract without it.
     InvalidPayloadError: 422,
-    NotFoundError: 404,
+    UnknownModelError: 400,
+    ContextOverflowError: 422,
+    RequestTooSlowForSyncError: 422,
+    DuplicateRequestError: 409,
+    BudgetExhaustedError: 429,
+    # 422, not 502: the vendor answered, and what could not be processed is the caller's content.
+    ContentRefusedError: 422,
+    UpstreamLlmError: 502,
 }
 """422 rather than 400 for a rejected field: by RFC 9110 §15.5.1 a 400 is broken syntax or
 framing, while 422 (RFC 4918 §11.2) is a syntactically correct request whose content could
-not be processed. Reserve 400 for an HTTP framing violation."""
+not be processed. `UnknownModelError` holds 400 legitimately: it is not the request's form but a
+reference inside it to nothing.
+
+`UsageNotRecordedError` is absent on purpose — a paid answer whose record failed is this
+service's defect, answered `500`; the spend it carries still reaches the completion event."""
 
 SILENT_500_TYPES: tuple[type[Exception], ...] = (
     DomainValidationError,
@@ -45,7 +65,7 @@ SILENT_500_TYPES: tuple[type[Exception], ...] = (
     IntegrityError,
     ProviderRejectedRequestError,
 )
-"""Answered `500` with an empty body, through an ordinary handler.
+"""Answered `500` with empty `details`, through an ordinary handler.
 
 A domain invariant that reached the interface layer untranslated is a defect either way: an
 unset `field` is internal by definition, and a `field`-carrying one means the use case owing

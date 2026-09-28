@@ -4,24 +4,32 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import timedelta
+from typing import Annotated
 
 import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 from holahost_http import RateLimitExceededError
 from tests._support.builders import make_usage
 from tests._support.registry import registry_data
 from tests._support.settings import set_settings_env
 
 from application.exceptions import DuplicateRequestError
+from application.use_cases.generate import GenerateUseCase
 from config.registry import RegistryFile
+from domain.value_objects.budget_policy import BudgetPolicy
 from domain.value_objects.budget_scope import BudgetScope
 from domain.value_objects.client_id import ClientId
 from domain.value_objects.idempotency_key import IdempotencyKey
+from infrastructure.db.sqlalchemy_budget_repo import SqlAlchemyBudgetRepo
+from infrastructure.db.sqlalchemy_usage_repo import SqlAlchemyUsageRepo
 from infrastructure.registry.config_providers_repo import InvalidRegistryError
 from interface.http import dependencies
 from interface.http.edge import GENERATE_BUCKET
 
 _GETTERS = (
     dependencies.get_settings,
+    dependencies.get_engine,
     dependencies.get_registry,
     dependencies.get_providers_repo,
     dependencies.get_provider_keys,
@@ -29,6 +37,7 @@ _GETTERS = (
     dependencies.get_rate_limiter,
     dependencies.get_idempotency_store,
     dependencies.get_generation_provider,
+    dependencies.get_budget_policies,
 )
 
 
@@ -64,6 +73,52 @@ class TestTheIdempotencyStore:
         monkeypatch.setattr(dependencies, "InMemoryIdempotencyStore", ttls.append)
         dependencies.get_idempotency_store()
         assert ttls == [timedelta(seconds=60)]
+
+
+class TestTheUseCaseOfARequest:
+    def test_its_repositories_read_through_the_request_s_one_unit_of_work(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # One connection slot per request: two units of work would have the budget read and the
+        # usage write on different transactions of different requests' connections.
+        set_settings_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        seen: list[GenerateUseCase] = []
+        app = FastAPI()
+
+        @app.get("/probe")
+        def probe(
+            use_case: Annotated[GenerateUseCase, Depends(dependencies.get_generate_use_case)],
+        ) -> None:
+            seen.append(use_case)
+
+        TestClient(app).get("/probe")
+
+        [use_case] = seen
+        assert isinstance(use_case.budget_repo, SqlAlchemyBudgetRepo)
+        assert isinstance(use_case.usage_repo, SqlAlchemyUsageRepo)
+        assert use_case.budget_repo._uow is use_case.uow
+        assert use_case.usage_repo._uow is use_case.uow
+
+    def test_a_new_request_gets_a_new_unit_of_work(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        set_settings_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        seen: list[GenerateUseCase] = []
+        app = FastAPI()
+
+        @app.get("/probe")
+        def probe(
+            use_case: Annotated[GenerateUseCase, Depends(dependencies.get_generate_use_case)],
+        ) -> None:
+            seen.append(use_case)
+
+        client = TestClient(app)
+        client.get("/probe")
+        client.get("/probe")
+
+        first, second = seen
+        assert first.uow is not second.uow
+        assert first.idempotency_store is second.idempotency_store
 
 
 class TestTheRateLimiter:
@@ -105,6 +160,20 @@ class TestTheRegistry:
     ) -> None:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
         assert dependencies.get_generation_provider() is dependencies.get_generation_provider()
+
+    def test_the_budget_policy_is_the_registry_s_default_and_overrides(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data = registry_data()
+        data["on_budget_exhausted"] = {"default": "reject", "overrides": {"batch": "downgrade"}}
+        monkeypatch.setattr(
+            dependencies, "read_registry", lambda: RegistryFile.model_validate(data)
+        )
+
+        default, overrides = dependencies.get_budget_policies()
+
+        assert default is BudgetPolicy.REJECT
+        assert overrides == {ClientId("batch"): BudgetPolicy.DOWNGRADE}
 
     def test_a_provider_without_an_adapter_stops_the_build_with_its_reason(
         self, monkeypatch: pytest.MonkeyPatch

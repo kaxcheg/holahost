@@ -26,6 +26,9 @@ from application.exceptions import (
 )
 from application.limits import (
     MAX_OUTPUT_TOKENS,
+    MAX_STOP_SEQUENCES,
+    MAX_TEMPERATURE,
+    MIN_TEMPERATURE,
     PROVIDER_TIMEOUT_SECONDS,
     RETRY_BACKOFF_BASE_SECONDS,
     RETRY_BACKOFF_JITTER,
@@ -120,7 +123,8 @@ class GenerateUseCase:
             invariant no caller input could violate is broken. Passed through deliberately: the
             interface answers `500` with the reason in the log alone.
         :raises InvalidPayloadError: `messages` is empty, holds an unknown role or a blank message,
-            or the idempotency key is outside 1..128 characters.
+            the idempotency key is outside 1..128 characters, `max_tokens` is below 1,
+            `temperature` is outside 0..1, or `stop` names more than four sequences or an empty one.
         :raises UnknownModelError: `model_ref` resolves to no model of an enabled provider.
         :raises DuplicateRequestError: conscious pass-through from `IdempotencyStore.begin`.
         :raises ContextOverflowError: the input estimate plus `max_tokens` exceeds the context of
@@ -146,6 +150,8 @@ class GenerateUseCase:
         messages = _messages(cmd.messages)
         key = _idempotency_key(cmd.idempotency_key)
         _check_max_tokens(cmd.max_tokens)
+        _check_temperature(cmd.temperature)
+        _check_stop(cmd.stop)
 
         candidates = self.providers.resolve(cmd.model_ref)
         if not candidates:
@@ -353,7 +359,10 @@ class GenerateUseCase:
                 call.provider_seconds += elapsed
                 self._record(call, model, error.usage, elapsed, failed_over=failed_over)
                 raise ContentRefusedError(
-                    provider=model.provider.name.value, model=model.id.value
+                    provider=model.provider.name.value,
+                    model=model.id.value,
+                    input_tokens=error.usage.input_tokens.value,
+                    output_tokens=error.usage.output_tokens.value,
                 ) from error
             else:
                 elapsed = self.monotonic() - started
@@ -457,6 +466,17 @@ def _check_max_tokens(value: int | None) -> None:
     """
     if value is not None and value < 1:
         raise InvalidPayloadError(field="max_tokens", limit=MAX_OUTPUT_TOKENS)
+
+
+def _check_temperature(value: float | None) -> None:
+    if value is not None and not MIN_TEMPERATURE <= value <= MAX_TEMPERATURE:
+        raise InvalidPayloadError(field="temperature")
+
+
+def _check_stop(value: list[str] | None) -> None:
+    # Empty is refused, whitespace is not: a blank line is the most common stop sequence there is.
+    if value is not None and (len(value) > MAX_STOP_SEQUENCES or "" in value):
+        raise InvalidPayloadError(field="stop", limit=MAX_STOP_SEQUENCES)
 
 
 def _idempotency_key(value: str | None) -> IdempotencyKey | None:

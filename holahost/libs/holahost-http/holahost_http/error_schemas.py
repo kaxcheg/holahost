@@ -14,7 +14,9 @@ would invite exactly the parsing the contract says not to do.
 What is also absent: the platform's *middleware* answers — ``401``/``503`` from
 ``holahost-auth``, ``429`` and the transport ``413`` from this package. They are identical
 behind every service, and restating them in each service's document would make one fact
-look like N.
+look like N. The one exception is ``RateLimitExceededErrorBody``: a service that publishes a
+``429`` of its own has to put the limiter's body in the same union, or its document says every
+``429`` on that route is the service's.
 """
 
 from __future__ import annotations
@@ -53,6 +55,15 @@ class MalformedRequestErrorBody(Strict):
 class NotFoundErrorBody(Strict):
     code: Literal["NotFoundError"]
     details: NoDetails
+
+
+class RateLimitExceededDetails(Strict):
+    retry_after_seconds: int = Field(description="Seconds to wait; also sent as `Retry-After`.")
+
+
+class RateLimitExceededErrorBody(Strict):
+    code: Literal["RateLimitExceededError"]
+    details: RateLimitExceededDetails
 
 
 class InternalErrorBody(Strict):
@@ -97,6 +108,8 @@ __all__ = [
     "MalformedRequestErrorBody",
     "NoDetails",
     "NotFoundErrorBody",
+    "RateLimitExceededDetails",
+    "RateLimitExceededErrorBody",
     "Strict",
     "discriminated",
     "envelope",

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from holahost_http import MalformedRequestError
 
+from application.limits import MAX_INPUT_BYTES
 from interface.http.api_base import API_BASE_URL
 
 HEALTH_PATH = f"{API_BASE_URL}/health"
@@ -30,12 +31,10 @@ expensive operation, priced apart from the framework's `ingest` and `read`."""
 
 _GENERATE_PATH = f"{API_BASE_URL}/generate"
 
-# A transport limit: it bounds the whole HTTP body, multipart framing included, and only
-# decides how much the edge reads before anyone can look. A service that also checks the
-# thing *inside* the body derives this from that limit with `body_cap_for_upload`, and
-# advertises the inner one — told to trim to the transport cap, a caller lands just above
-# the application's own check and is refused a second time.
-MAX_REQUEST_BODY_SIZE = 1 * 1024 * 1024
+# The input ceiling applied to the whole JSON body, framing and escaping included, before any
+# of it is read. Nothing inside the body is measured again in bytes, so there is no inner limit
+# to derive this from or to advertise in its place.
+MAX_REQUEST_BODY_SIZE = MAX_INPUT_BYTES
 
 MISSING_REQUEST_ID_ERROR = MalformedRequestError()
 """What this service answers with when `X-Request-ID` is absent.

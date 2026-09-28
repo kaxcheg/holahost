@@ -35,7 +35,7 @@ from holahost_http.in_memory_rate_limiter import (
     DEFAULT_MAX_TRACKED_KEYS,
     InMemoryRateLimiter,
 )
-from holahost_http.observability import log_rejection
+from holahost_http.observability import add_log_fields, log_completion, log_rejection
 from holahost_http.rate_limit import CallerIdentity, RateLimiter, RateLimitMiddleware
 from holahost_http.request_id import RequestIdMiddleware
 from holahost_http.security import BEARER_SCHEME_NAME, bearer_scheme
@@ -59,10 +59,12 @@ __all__ = [
     "RateLimiter",
     "RejectionLogger",
     "RequestIdMiddleware",
+    "add_log_fields",
     "bearer_scheme",
     "body_cap_for_upload",
     "create_edge_app",
     "error_envelope",
+    "log_completion",
     "log_rejection",
     "register_error_handlers",
     "send_platform_error",

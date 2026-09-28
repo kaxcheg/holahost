@@ -15,13 +15,11 @@ raised in middleware reaches them.
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Mapping, Sequence
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from holahost_observability import OP_COMPLETED, log_event
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from holahost_http.errors import (
@@ -30,6 +28,7 @@ from holahost_http.errors import (
     PlatformError,
     error_envelope,
 )
+from holahost_http.observability import log_completion
 
 ErrorContract = Mapping[type[PlatformError], int]
 """What a service publishes: its own error classes, each mapped to a status.
@@ -51,11 +50,6 @@ def _published_as(exc: PlatformError, contract: ErrorContract) -> type[PlatformE
         if exc_class in contract:
             return exc_class
     return None
-
-
-def _duration_ms(request: Request) -> float:
-    start = getattr(request.state, "start_time", None)
-    return (time.monotonic() - start) * 1000 if start is not None else 0.0
 
 
 def register_error_handlers(
@@ -87,7 +81,12 @@ def register_error_handlers(
     invalid_payload_status = contract[InvalidPayloadError]
 
     def log_failure(
-        request: Request, *, outcome: str, status: int, error_reason: str | None = None
+        request: Request,
+        *,
+        outcome: str,
+        status: int,
+        error_reason: str | None = None,
+        fields: Mapping[str, object] | None = None,
     ) -> None:
         """Write the completion event for a request a handler refused.
 
@@ -96,25 +95,32 @@ def register_error_handlers(
 
         ``error_reason`` stays ``None`` for a 4xx, where the diagnostic content is already
         in the envelope's ``details``, and is populated for a 5xx, whose body carries
-        nothing. Passed raw — the scrubber runs at the sink.
+        nothing.
+
+        The service's own fields come from the route (``add_log_fields``) and from the
+        error (``PlatformError.log_fields``), the error's winning on a clash.
         """
-        token = getattr(request.state, "token", None)
-        log_event(
-            OP_COMPLETED,
-            level=logging.ERROR if status >= 500 else logging.WARNING,
-            route=f"{request.method} {request.url.path}",
+        log_completion(
+            request,
             outcome=outcome,
-            duration_ms=_duration_ms(request),
-            request_id=getattr(request.state, "request_id", None),
-            client_id=getattr(token, "client_id", None),
-            sub=getattr(token, "subject", None),
+            level=logging.ERROR if status >= 500 else logging.WARNING,
             error_reason=error_reason,
+            fields=fields,
         )
 
     def internal_error(
         request: Request, exc: Exception, *, headers: dict[str, str] | None = None
     ) -> JSONResponse:
-        log_failure(request, outcome=INTERNAL_ERROR_CODE, status=500, error_reason=str(exc))
+        # An unpublished `PlatformError` still reports its fields: the body carries nothing,
+        # so the event is the only place figures it holds — a spend already charged — survive.
+        fields = exc.log_fields() if isinstance(exc, PlatformError) else None
+        log_failure(
+            request,
+            outcome=INTERNAL_ERROR_CODE,
+            status=500,
+            error_reason=str(exc),
+            fields=fields,
+        )
         return JSONResponse(
             status_code=500,
             content=error_envelope(INTERNAL_ERROR_CODE, "internal error", {}),
@@ -129,9 +135,11 @@ def register_error_handlers(
             # would name a class the contract does not list. Both go to the log.
             return internal_error(request, exc)
         status, code = contract[published], published.__name__
-        log_failure(request, outcome=code, status=status)
+        log_failure(request, outcome=code, status=status, fields=exc.log_fields())
         return JSONResponse(
-            status_code=status, content=error_envelope(code, str(exc), exc.details_dict())
+            status_code=status,
+            content=error_envelope(code, str(exc), exc.details_dict()),
+            headers=dict(exc.headers()) or None,
         )
 
     for silent_type in silent_500_types:

@@ -30,6 +30,19 @@ MAX_OUTPUT_TOKENS = 1000
 """The ceiling on an answer; a larger `max_tokens` is truncated to it. More risks not fitting a
 single attempt."""
 
+MAX_INPUT_BYTES = 256 * 1024
+"""The largest request body. A generation over more input would not fit the request budget
+anyway; the edge refuses a larger body before reading it."""
+
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 1.0
+"""The range every configured vendor accepts. Outside it a vendor rejects the request, which this
+service answers `500` — so it is refused here as the caller's mistake it is."""
+
+MAX_STOP_SEQUENCES = 4
+"""The most stop sequences a request may name, none of them empty. The smallest limit among the
+vendors a candidate chain can mix."""
+
 MESSAGE_FRAMING_TOKENS = 16
 """Added per part (`system` and each message) to the input estimate, for the role and turn markers
 a provider wraps around text. Generous on purpose: the estimate must stay an upper bound."""

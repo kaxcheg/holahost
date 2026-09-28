@@ -55,6 +55,13 @@ class TestBudget:
             _budget(caps=_usage(100, 0))
         assert exc.value.field is None
 
+    def test_rejects_a_window_without_a_time_zone(self) -> None:
+        # Its reset time is compared with the clock to tell a refused caller when to return; a
+        # naive window would fail that comparison while the refusal is being answered.
+        with pytest.raises(DomainValidationError, match="time zone") as exc:
+            _budget(window_start=datetime(2026, 9, 13))
+        assert exc.value.field is None
+
     def test_rejects_a_provider_key_for_a_client_scope(self) -> None:
         with pytest.raises(DomainValidationError, match="key") as exc:
             _budget(scope=BudgetScope.CLIENT, key=ProviderName("anthropic"))

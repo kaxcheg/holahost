@@ -28,6 +28,7 @@ from interface.http.edge import (
 )
 from interface.http.errors import ERROR_CONTRACT, SILENT_500_TYPES
 from interface.http.health import router as health_router
+from interface.http.router import router as generation_router
 
 _DESCRIPTION = """\
 Generation through external LLM providers, with model aliases, retries, failover, budgets
@@ -41,7 +42,8 @@ person reading a log — do not parse it, and compose what you show a user from 
 Only this service's own errors are described below. What the shared edge answers with —
 `401`/`503` for authentication, `429` over the rate limit, `413` for a request body past
 the transport cap — belongs to the platform contract and is the same for every service
-behind it.
+behind it. The two `429`s differ by `code`: `RateLimitExceededError` means too often, wait
+seconds; `BudgetExhaustedError` means today's spend is gone, wait for the window to reset.
 """
 
 
@@ -50,7 +52,7 @@ def create_app() -> FastAPI:
         title="llm-client",
         description=_DESCRIPTION,
         api_base_url=API_BASE_URL,
-        routers=[health_router],
+        routers=[health_router, generation_router],
         # Built here rather than by the factory because the auth library depends on
         # `holahost-http` and not the other way round. Its `public_paths` is the one
         # declaration of what needs no token — the factory reads it back to exempt the same
@@ -64,9 +66,6 @@ def create_app() -> FastAPI:
         rate_limiter=get_rate_limiter(),
         bucket_for=bucket_for,
         max_request_body_size=MAX_REQUEST_BODY_SIZE,
-        # A service that also checks something *inside* the body derives the transport cap
-        # from that limit with `body_cap_for_upload` and advertises the inner one here, so
-        # a caller told to trim is not refused a second time with a different number.
         missing_request_id_error=MISSING_REQUEST_ID_ERROR,
         error_contract=ERROR_CONTRACT,
         silent_500_types=SILENT_500_TYPES,

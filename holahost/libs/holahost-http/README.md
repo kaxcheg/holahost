@@ -33,12 +33,14 @@ handler, which re-raises after writing.
 | `body_cap_for_upload` | Derives that cap from a service's own file-size limit, adding `MULTIPART_OVERHEAD_ALLOWANCE`. |
 | `RateLimitMiddleware` | Consults the limiter before routing, so an over-quota caller is refused while its body is still on the wire. 429 + `Retry-After`. |
 | `RateLimiter` / `InMemoryRateLimiter` | The port and a process-local, LRU-bounded implementation. |
-| `PlatformError`, `error_envelope`, `send_platform_error` | The envelope `{"error": {code, message, details}}`, and writing it from middleware. |
+| `PlatformError`, `error_envelope`, `send_platform_error` | The envelope `{"error": {code, message, details}}`, and writing it from middleware. An error may also owe response headers (`headers()`) and carry completion-event fields (`log_fields()`). |
 | `MalformedRequestError`, `InvalidPayloadError`, `NotFoundError` | The three errors every service answers with, so their identity and `details` are one thing platform-wide. |
 | `register_error_handlers` | Exception -> envelope, driven by the service's own `contract`. |
 | `holahost_http.error_schemas` | The published models for the errors above, the `{"error": ...}` wrapper and the strict base a service's own models inherit. |
 | `bearer_scheme` | The declaration that puts `bearerAuth` in a service's OpenAPI document. Declares, never enforces. |
 | `log_rejection` | The `on_rejected` callback the middleware take, writing the platform's `op_completed` event. |
+| `add_log_fields` | Attaches a route's own fields to its request's `op_completed`, for whichever handler writes it. |
+| `log_completion` | Writes `op_completed` for a request that reached a route — the route's success line and, through the handlers, a refusal's — with one core, so a filter on `route` counts every outcome. |
 | `create_edge_app` | Builds the application with the stack in the one order that works, every router under the base path, and the handlers registered. |
 
 ## What it does not provide
@@ -188,9 +190,21 @@ Lookup walks the MRO, so an unlisted subclass answers as the published error it
 specialises, with the **ancestor's** identity: its own name is in no schema.
 
 Every refusal is logged, through `holahost_observability.log_event` — not a parameter,
-because nothing about the line is the service's. On a 4xx the cause is already in the
+because the line's shape is the platform's. On a 4xx the cause is already in the
 envelope's `details`; on a 5xx the body deliberately carries nothing, so `error_reason`
 on this line is the only place it survives.
+
+A service adds its own fields to that line from two places, both declared in its log-field
+allowlist: what the route knew before the use case ran (`add_log_fields(request, ...)` — the
+model a caller asked for), and what the error carries (`PlatformError.log_fields()` — attempts
+made, a spend already charged). An out-of-contract `PlatformError` still reports its fields,
+since its `500` body shows none of them. A service field named like a core one is dropped from
+the line rather than allowed to fail the handler, and `add_log_fields` refuses one outright.
+
+An error that owes a response header — `Retry-After` on a refusal whose end is known —
+declares it in `PlatformError.headers()`; the handler writes it when the error is answered as
+itself, and `send_platform_error` does the same for middleware, which is how the rate limiter's
+`429` gets its header.
 
 `silent_500_types` names extra types answered `500` through an ordinary handler. Without
 it they reach Starlette's bare-`Exception` handler, bound to `ServerErrorMiddleware`, which

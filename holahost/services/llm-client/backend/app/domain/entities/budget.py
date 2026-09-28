@@ -43,6 +43,9 @@ class Budget:
         # Assembled from the usage log and config, never from a request — `field` stays None.
         if self.caps.input_tokens.value <= 0 or self.caps.output_tokens.value <= 0:
             raise DomainValidationError("Budget caps must be positive")
+        if self.window_start.utcoffset() is None:
+            # `resets_at` is compared with the clock when a refusal is answered.
+            raise DomainValidationError("Budget window_start must carry a time zone")
         expected = ProviderName if self.scope is BudgetScope.PROVIDER else ClientId
         if not isinstance(self.key, expected):
             raise DomainValidationError(

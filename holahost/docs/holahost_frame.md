@@ -918,7 +918,7 @@ subsequent service.
 | Entity | Where it lives | Status |
 |---|---|---|
 | `holahost-observability` — the JSON logger, the field allowlist mechanism, the core fields of the `op_completed` event, the free-text scrubber | `holahost/libs/holahost-observability/` | implemented |
-| `holahost-http` — the HTTP edge: the `{error:{code,message,details}}` envelope and `PlatformError`; the `X-Request-ID`, body-limit and rate-limit middleware; the `RateLimiter` port with an in-memory implementation; **the `create_edge_app` edge factory**, which fixes the middleware order and mounts the routers; the exception handler driven by the service's contract; the platform errors `MalformedRequestError`, `InvalidPayloadError`, `NotFoundError` and the `InternalError` identity; the published schemas for them; the `bearerAuth` declaration | `holahost/libs/holahost-http/` | implemented |
+| `holahost-http` — the HTTP edge: the `{error:{code,message,details}}` envelope and `PlatformError`, with the response headers an error owes (`headers()`, e.g. `Retry-After`) and its completion-event fields (`log_fields()`); the `X-Request-ID`, body-limit and rate-limit middleware; the `RateLimiter` port with an in-memory implementation; **the `create_edge_app` edge factory**, which fixes the middleware order and mounts the routers; the exception handler driven by the service's contract; `add_log_fields` for a route's own fields on a refusal's event; the platform errors `MalformedRequestError`, `InvalidPayloadError`, `NotFoundError` and the `InternalError` identity; the published schemas for them; the `bearerAuth` declaration | `holahost/libs/holahost-http/` | implemented |
 | `holahost-auth` — the offline JWT validation middleware (signature, claims, JWKS cache, the 401/403 discipline), `TokenContext`, the `AuthConfig` config (five token-validation variables, reading the environment itself) | `holahost/libs/holahost-auth/` | implemented |
 | `holahost-db` — the storage-failure contract (three types) and the translation of vendor errors, the `UnitOfWork` port and its SQLAlchemy implementation, the engine factory, retrying a transaction on conflict, the two Postgres identities as typed settings, RLS binding and the startup guard, provisioning of the application role, the skeleton of `alembic/env.py` | `holahost/libs/holahost-db/` | implemented |
 | The shared make targets (`lint`, `format`, `typecheck`, `test`, `test-int`, `lint-imports`, `openapi`, `dev-*`, `migrate-*`, `ci-local`, `ci-image`, `ci-tf`) | `holahost/make/common.mk`, pulled in with `include` from a service's `Makefile` | implemented |
@@ -974,6 +974,10 @@ op_completed { request_id, client_id, sub, route, outcome, duration_ms, error_re
   field name outside the allowlist fails the call rather than silently shortening the line: the
   allowlist exists precisely so that content — a document's text, a prompt, a token's body — cannot
   end up in the log.
+- A refusal raised inside a route is written by `holahost-http`'s exception handler, not by the
+  route; the service's own fields still reach that line — from the error (`PlatformError.log_fields()`,
+  also when it is answered `500`) and from what the route attached before the failure
+  (`add_log_fields`). The success line is the route's own.
 
 Why one name for all: the CloudWatch filters for 5xx, for authorization refusals and for limit
 refusals are derived from it and from the core fields, they live in the `service-observability`

@@ -11,6 +11,7 @@ from holahost_http import (
     MalformedRequestError,
     NotFoundError,
     PlatformError,
+    RateLimitExceededError,
     error_envelope,
 )
 from holahost_http.error_schemas import (
@@ -20,6 +21,7 @@ from holahost_http.error_schemas import (
     MalformedRequestErrorBody,
     NoDetails,
     NotFoundErrorBody,
+    RateLimitExceededErrorBody,
     Strict,
     envelope,
 )
@@ -30,6 +32,7 @@ _PUBLISHED: list[tuple[PlatformError, type[BaseModel]]] = [
     (InvalidPayloadError(field="query"), InvalidPayloadErrorBody),
     (MalformedRequestError(), MalformedRequestErrorBody),
     (NotFoundError(), NotFoundErrorBody),
+    (RateLimitExceededError(retry_after=7), RateLimitExceededErrorBody),
 ]
 
 
