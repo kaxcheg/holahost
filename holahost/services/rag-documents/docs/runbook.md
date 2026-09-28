@@ -105,9 +105,11 @@ make dev-up
 The embedding model re-downloads on the next boot if `model-cache` was wiped — watch
 `startup_completed` for how long that took.
 
-**Get a token.** Until `auth` exists, mint one yourself against the `JWKS_URL` and `EXPECTED_*`
-values in `infra/envs/dev/.env` and pass it as `Authorization: Bearer <token>`. The service
-validates it offline, so any issuer matching that configuration works.
+**Get a token.** Until `auth` exists, the dev minter issues it: `make dev-up` once in
+`holahost/tools/dev-minter`, then `make -s -C holahost/tools/dev-minter token` from the repository
+root prints one (its `aud` contains `rag-documents`). Pass it as `Authorization: Bearer <token>`.
+`JWKS_URL` in `infra/envs/dev/.env` must name the minter by its `backbone` name, as
+`.env.example` does: inside the container, `localhost` is the container itself.
 
 ---
 

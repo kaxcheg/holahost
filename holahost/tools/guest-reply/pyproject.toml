@@ -1,0 +1,74 @@
+[project]
+name = "guest-reply"
+version = "0.1.0"
+description = "The platform's console orchestrator: answers a guest from a guidebook through rag-documents and llm-client."
+requires-python = ">=3.12,<4.0"
+
+[project.scripts]
+guest-reply = "guest_reply.cli:app"
+
+[tool.poetry]
+packages = [{ include = "guest_reply" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+typer = "^0.27"
+httpx = "^0.28"
+pydantic = "^2.10"
+pydantic-settings = "^2.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-httpserver = "^1.1"
+werkzeug = "^3.1"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "." makes `tests` a namespace package, so `tests._support` imports from every test file.
+pythonpath = ["."]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# Bare `assert` is pytest's idiom; the tests carry fake token literals, which read like a leak to
+# the hardcoded-secret checks.
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+# Without it mypy takes every pydantic-settings field for a required constructor argument.
+plugins = ["pydantic.mypy"]
+# `tests` has no __init__.py: module names come from the path, as pytest's importlib mode does it.
+mypy_path = ["."]
+namespace_packages = true
+explicit_package_bases = true
+
+[tool.importlinter]
+root_package = "guest_reply"
+
+[[tool.importlinter.contracts]]
+# The one dependency rule of the tool: the clients and the prompt know nothing about commands.
+name = "Clients and the prompt know nothing about scenarios or the command line"
+type = "forbidden"
+source_modules = ["guest_reply.clients", "guest_reply.prompt"]
+forbidden_modules = ["guest_reply.flows", "guest_reply.cli"]
+
+[[tool.importlinter.contracts]]
+name = "Scenarios know nothing about the command line"
+type = "forbidden"
+source_modules = ["guest_reply.flows"]
+forbidden_modules = ["guest_reply.cli"]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"

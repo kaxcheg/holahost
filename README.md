@@ -29,7 +29,8 @@ holahost/
 | [`templates/service`](holahost/templates/service/README.md) — new-service skeleton | implemented |
 | `infra/modules` — `service-ecr`, `service-observability` | implemented |
 | [`llm-client`](holahost/services/llm-client/README.md) — facade over external LLM providers | designed, not built |
-| [`guest-reply`](holahost/tools/guest-reply/README.md) — console orchestrator | designed, not built |
+| [`guest-reply`](holahost/tools/guest-reply/README.md) — console orchestrator | implemented, with CI |
+| [`dev-minter`](holahost/tools/dev-minter/README.md) — dev-only token minter and JWKS, until `auth` exists | implemented, with CI |
 | `auth` — JWT issuer; platform Terraform root; web frontend | designed, not built |
 
 Nothing here is deployed yet: the Terraform roots describe infrastructure that has not been applied

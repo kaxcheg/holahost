@@ -1,0 +1,50 @@
+[project]
+name = "dev-minter"
+version = "0.1.0"
+description = "The local stand-in for auth: signs dev JWTs and serves their JWKS on the backbone network."
+requires-python = ">=3.12,<4.0"
+
+[tool.poetry]
+packages = [{ include = "dev_minter" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+pyjwt = { extras = ["crypto"], version = "^2.13" }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.8"
+mypy = "^1.13"
+import-linter = "^2.1"
+# The test that matters: a minted token passes the platform's own validator, against the JWKS
+# this package serves.
+holahost-auth = { path = "../../libs/holahost-auth", develop = true }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# Bare `assert` is pytest's idiom; S310 flags urlopen on a URL built at runtime, which is what a
+# test of a local server does.
+"tests/*" = ["S101", "S310"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.importlinter]
+root_package = "dev_minter"
+
+[[tool.importlinter.contracts]]
+name = "The key, the token and the JWKS know nothing about the command line"
+type = "forbidden"
+source_modules = ["dev_minter.keys", "dev_minter.tokens", "dev_minter.server"]
+forbidden_modules = ["dev_minter.cli"]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"

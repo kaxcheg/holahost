@@ -1,0 +1,88 @@
+name: tools-ci
+
+# The console tools' own pipeline (holahost/tools/*): each tool's gates and tests, and the dev
+# minter's image. Same shape as libs-ci: the path check is a job-internal step, so a run that finds
+# nothing to build still completes green.
+#
+# A library change runs it too: dev-minter's tests check its tokens with holahost-auth, which
+# path-depends on holahost-http and holahost-observability.
+
+on:
+  pull_request:
+    branches: [develop, main, "release/**", "hotfix/**"]
+  push:
+    branches: ["feature/**", "bugfix/**", "refactor/**", "chore/**", "docs/**", "test/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      TOOLS: guest-reply dev-minter
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history — needed for the diff-based path filter below
+
+      - name: Detect tool changes
+        id: filter
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
+            base="$(git merge-base origin/develop HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/tools/|holahost/libs/|\.github/(actions/|workflows/tools-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-python-toolchain
+        id: toolchain
+        if: steps.filter.outputs.changed == 'true'
+
+      - name: Install dependencies
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          for tool in $TOOLS; do
+            (cd "holahost/tools/$tool" && poetry install) || exit 1
+          done
+
+      # The four Python hooks are skipped as in the other pipelines: they walk every package in the
+      # repo. The next step runs the same tools on the tools' packages only.
+      - name: Pre-commit (generic hooks over the tools' changed files)
+        if: steps.filter.outputs.changed == 'true'
+        env:
+          SKIP: python-ruff,python-ruff-format,python-mypy,python-import-linter
+        run: |
+          pip install pre-commit
+          pre-commit run --files $(git diff --name-only "${{ steps.filter.outputs.base }}" HEAD -- holahost/tools)
+
+      - name: Python gates
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          for tool in $TOOLS; do
+            (cd "holahost/tools/$tool" \
+              && poetry run ruff check . \
+              && poetry run ruff format --check . \
+              && poetry run mypy . \
+              && poetry run lint-imports) || exit 1
+          done
+
+      - name: Unit tests
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          for tool in $TOOLS; do
+            (cd "holahost/tools/$tool" && poetry run pytest -q) || exit 1
+          done
+
+      # Dev-only and never pushed: building it here is what catches a broken Dockerfile before a
+      # developer's `make dev-up` does.
+      - name: Build the dev-minter image
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          docker build --build-arg PYTHON_VERSION=${{ steps.toolchain.outputs.python-version }} \
+            -t dev-minter:ci holahost/tools/dev-minter
