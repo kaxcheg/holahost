@@ -76,16 +76,16 @@ cp infra/envs/dev/.env.example infra/envs/dev/.env
 # The service refuses to start without a key for every enabled provider: the placeholder in
 # ANTHROPIC_API_KEY starts it, and a real key is needed only to generate.
 make dev-up
-curl http://localhost:8080/api/llm-client/health          # -> {"status":"ok"}
+curl http://localhost:8081/api/llm-client/health          # -> {"status":"ok"}
 ```
 
 **2. Check**
 
 ```bash
-curl http://localhost:8080/api/llm-client/health
+curl http://localhost:8081/api/llm-client/health
 
 # profile operation: one short generation on the cheapest alias — it costs real money
-curl -sX POST http://localhost:8080/api/llm-client/generate \
+curl -sX POST http://localhost:8081/api/llm-client/generate \
   -H "Authorization: Bearer <token>" -H "X-Request-ID: manual-check-1" \
   -H "Content-Type: application/json" \
   -d '{"model": "fast", "messages": [{"role": "user", "content": "Say OK."}], "max_tokens": 5}'
@@ -114,10 +114,12 @@ make dev-down-v      # drops the pgdata volume — the usage log, and with it to
 make dev-up
 ```
 
-**Get a token.** Until `auth` exists, mint one yourself against the `JWKS_URL` and `EXPECTED_*`
-values in `infra/envs/dev/.env` (`aud` must contain `llm-client`) and pass it as
-`Authorization: Bearer <token>`. The service validates it offline, so any issuer matching that
-configuration works.
+**Get a token.** Until `auth` exists, the dev minter issues it: `make dev-up` once in
+`holahost/tools/dev-minter`, then `make -s -C holahost/tools/dev-minter token` from the repository
+root prints one (its `aud` contains `llm-client`). Pass it as `Authorization: Bearer <token>`.
+`JWKS_URL` in `infra/envs/dev/.env` must name the minter by its `backbone` name, as
+`.env.example` does: inside the container, `localhost` is the container itself. Its `HOST_PORT` is
+`8081`, as in `.env.example`: rag-documents holds `8080`, and guest-reply calls both at once.
 
 ---
 

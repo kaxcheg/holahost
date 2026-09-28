@@ -88,7 +88,7 @@ To consume one, add a path dependency:
 |---|---|
 | `services/<svc>/` | A microservice: `backend/`, `Dockerfile`, compose files, `infra/`, `docs/openapi.json` |
 | `libs/<lib>/` | Shared platform libraries |
-| `tools/<tool>/` | Console tools. Not deploy units — no image, no ECR |
+| `tools/<tool>/` | Console and dev-only tools. Not deploy units — nothing goes to ECR or to an environment; the dev minter builds a local image for the dev stack |
 | `templates/service/` | The skeleton a new service is copied from |
 | `infra/modules/` | Terraform modules the services' own roots call |
 | `make/common.mk` | Make targets every service includes |

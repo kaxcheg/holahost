@@ -1,0 +1,26 @@
+name: dev-minter
+
+# The local stand-in for `auth`, dev only: the services validate tokens against its JWKS, and the
+# operator mints tokens from it. Never deployed — staging and prod validate against `auth`.
+#
+# On `backbone` and nowhere else. The services' JWKS_URL is http://dev-minter:8081/..., resolved by
+# Docker's DNS from this service's name, from inside their own containers — where `localhost` is
+# the service's container, not this one. No port is published: nothing on the host needs the JWKS.
+services:
+  dev-minter:
+    image: dev-minter:dev
+    # PID 1 ignores a SIGTERM it has no handler for; `init` puts a real init in front, so
+    # `docker compose down` stops the server at once instead of after the kill timeout.
+    init: true
+    networks: [backbone]
+    volumes:
+      - keys:/var/lib/dev-minter
+    restart: unless-stopped
+
+networks:
+  backbone:
+    external: true
+
+volumes:
+  # The signing key. `make dev-down-v` deletes it, and with it every token minted so far.
+  keys:

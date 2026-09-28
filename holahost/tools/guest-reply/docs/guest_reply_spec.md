@@ -5,7 +5,7 @@
 > machine. It calls `rag-documents` and `llm-client` in sequence and implements the iteration's only
 > product scenario — answering a guest from a local guidebook.
 >
-> **Path convention:** `src/…`, `docs/…` are relative to the tool's root
+> **Path convention:** `guest_reply/…`, `docs/…` are relative to the tool's root
 > (`holahost/tools/guest-reply/`); "the repository root" means the root of the monorepo.
 >
 > **Dynamic sections:** this document keeps the iteration's **cross-service** "Deferred decisions"
@@ -56,7 +56,7 @@ stateDiagram-v2
     shell --> ingested: ingest <file> [--name N]
     ingested --> answered: ask <document_id> "<guest message>"
     answered --> answered: ask again (same document)
-    ingested --> ingested: replace <document_id> <file> (new document_id)
+    ingested --> ingested: replace <document_id> <file> (same document_id)
     answered --> ingested: replace <document_id> <file>
     ingested --> removed: rm <document_id>
     answered --> removed: rm <document_id>
@@ -73,11 +73,11 @@ stateDiagram-v2
 | `guest-reply replace <document_id> <file> [--name N]` | one call of the replace operation in the documents service; the replacement is atomic on its side | the same `document_id` |
 | `guest-reply ask <document_id> "<msg>"` | search in `rag-documents` → generation in `llm-client` | the answer's text |
 | `guest-reply ask --file <file> "<msg>"` | one-shot: `ingest` → `ask` → `rm` | the answer's text |
-| `guest-reply rm <document_id>` | deletes the document (idempotent) | — |
+| `guest-reply rm <document_id>` | deletes the document; a missing one is an error, not a success | — |
 
 There is one common flag: `--json`, for machine-readable output instead of text. There is no
-environment selection — the base URL is always the local dev stack. The exact signatures, exit codes
-and `--json` format are Stage 7.
+environment selection — the two service addresses are always the local dev stack's. The exact
+signatures, exit codes and `--json` format are Stage 7.
 
 Every command except `ask` and the one-shot is **exactly one** service call. `ask` is two (search and
 generation), and the one-shot is four (plus `ingest` and `rm`).
@@ -86,7 +86,7 @@ generation), and the one-shot is four (plus `ingest` and `rm`).
 
 | Step | Where | What happens |
 |---|---|---|
-| 1 | `auth` (in this iteration, the dev minter — ADR C-4) | an s2s token by `client_credentials`, cached in process memory until roughly its `exp`. While there is no `auth`: the token is issued by the `holahost/infra/scripts/mint-dev-token.py` script and the CLI takes it ready-made from an environment variable; the arrival of `auth` changes only the source of the token, not the other steps |
+| 1 | `auth` (in this iteration, the dev minter — ADR C-4) | an s2s token by `client_credentials`, cached in process memory until roughly its `exp`. While there is no `auth`: the token is issued by the dev minter (`holahost/tools/dev-minter`) and the CLI takes it ready-made from `HOLAHOST_TOKEN`; the arrival of `auth` changes only the source of the token, not the other steps |
 | 2 | `rag-documents` | search by `document_id` → the top-K chunks |
 | 3 | locally | assembling the prompt: `system` (the host's role and the rules for answering) + `user` (the chunks as context plus the guest's message) |
 | 4 | `llm-client` | `generate` → text plus usage plus the actual provider and model |
@@ -96,11 +96,13 @@ generation), and the one-shot is four (plus `ingest` and `rm`).
 
 | Event | What the CLI does |
 |---|---|
-| The token expired, or a service answered `401` | request the token once more and repeat the call; a second `401` → an error |
-| `404` from `rag-documents` (the document does not exist or belongs to someone else) | the message "document not found", non-zero exit |
+| A service answered `401` (the token expired, or was not minted for this stack) | an authorization error telling the operator to mint a new token; no repeat — re-reading a ready-made token sends the same one. Once `auth` exists: request the token once more and repeat the call; a second `401` → the error |
+| `404 NotFoundError` from `rag-documents` (the document does not exist or belongs to someone else) | the message "document not found", non-zero exit |
 | The search returned an empty list of chunks | generation is not called; the message "there is no relevant context in the document" |
-| `429` + `Retry-After` from any service | wait the stated time, a bounded number of repeats, then an error |
-| `502 ERR_UPSTREAM_LLM` | a message that the provider is unavailable, non-zero exit; retrying is at the operator's discretion |
+| `429 RateLimitExceededError` with `Retry-After` of at most a minute | wait the stated time and repeat the call, a bounded number of times, then an error |
+| `429` with a longer `Retry-After`, or `429 BudgetExhaustedError` | an error at once, stating how long to wait (`details`) — a budget resets once a day, an hourly window is the operator's to wait |
+| `502 UpstreamLlmError` | a message that the provider is unavailable, non-zero exit; retrying is at the operator's discretion |
+| `503` (the service cannot validate tokens — on dev, the minter is down) | a "service unreachable" error, non-zero exit |
 | An error at the `ingest` step of the one-shot | the document is not created; the `ask` and `rm` steps are not performed |
 | An error at the `ask` step of the one-shot | the document is deleted anyway — `rm` always runs |
 
@@ -125,7 +127,8 @@ thin dev orchestrator: setting `X-Request-ID` on every outgoing call. The servic
 compensate for the missing perimeter internally, and they will not.
 
 What stays with the CLI: obtaining and caching the s2s token, the order of the calls, the reaction to
-error codes (repeating after `Retry-After`, one token re-request on `401`), deleting the document in
+error codes (waiting out a short `Retry-After`; once `auth` exists, one token re-request on `401`),
+deleting the document in
 the one-shot, reading the file from disk and printing the result. Any item one is later tempted to
 add beyond this list is a sign that the decision is being taken in the wrong component.
 
@@ -144,12 +147,12 @@ there is only the sequence of calls and the reaction to the answers (the invaria
 
 | Parameter | Purpose |
 |---|---|
-| `HOLAHOST_API_BASE` | the base URL of the local dev stack |
-| `HOLAHOST_CLIENT_ID`, `HOLAHOST_CLIENT_SECRET` | the s2s client's credentials (dev) |
+| `HOLAHOST_RAG_DOCUMENTS_URL`, `HOLAHOST_LLM_CLIENT_URL` | each service's origin on the local dev stack — two, because dev has no gateway and each service has its own published port |
 | `HOLAHOST_TOKEN` | a ready-made token from the dev minter, while `auth` is not built (ADR C-4) |
-| `RETRY_ON_429_MAX` | how many times to wait out `Retry-After` before giving up |
-| `MODEL_ALIAS` | the model alias the CLI passes to `llm-client` |
-| `EXIT_*` | the exit codes per class of error (the list is Stage 7) |
+| `HOLAHOST_CLIENT_ID`, `HOLAHOST_CLIENT_SECRET` | the s2s client's credentials, once `auth` exists |
+| `HOLAHOST_MODEL_ALIAS` | the model alias the CLI passes to `llm-client`; `default` if unset |
+| `RETRY_ON_429_MAX` | how many times to wait out `Retry-After` before giving up — a constant of the code (§3.4) |
+| exit codes | one per class of error (the list is Stage 7) |
 
 ### US-C01: Uploading a guidebook
 
@@ -161,8 +164,8 @@ there is only the sequence of calls and the reaction to the answers (the invaria
 - `--name` sets the display name; without the flag the file's name is used.
 - A path that does not exist or cannot be read → an error message and a non-zero exit code, with no
   service call made.
-- A service error (format, size, empty document, chunk limit) is printed with its `code` and a
-  human-readable text; no `document_id` is printed.
+- A service error (format, size, empty document, chunk limit) is printed with its `code`, its
+  message and its `details` (the limit and the actual value); no `document_id` is printed.
 - With `--json`, stdout carries only the JSON object, and diagnostics go to stderr.
 
 ### US-C02: Replacing a guidebook
@@ -187,7 +190,7 @@ there is only the sequence of calls and the reaction to the answers (the invaria
   then the generation in `llm-client`.
 - The prompt is assembled by substituting the chunks found and the guest's message into static assets
   (the `system` prompt and the context template); there is no branching on chunk content in the code.
-- `MODEL_ALIAS` is passed to `llm-client`, not a vendor model name.
+- `HOLAHOST_MODEL_ALIAS` is passed to `llm-client`, not a vendor model name.
 - Only the answer's text is printed to stdout; with `--json`, an object with the text, `usage`, the
   actual provider and model, and the number of chunks used.
 - Running it again with the same `document_id` does not require re-uploading the file.
@@ -223,24 +226,27 @@ there is only the sequence of calls and the reaction to the answers (the invaria
 - An empty chunk list from `rag-documents` → generation is **not called**, and the message "there is
   no relevant context in the document" is printed.
 - The exit code differs both from the code for a successful answer and from the service-error codes.
-- With `--json`, an object with an empty chunk list and no answer field is returned.
+- With `--json`, the object has `answer: null` and `chunks_used: 0` (§7.3) — the same keys as an
+  answer, so a script checks one field.
 
 ### US-C07: Reacting to service errors
 
 > As an Operator, I want predictable behaviour on transient failures, so that I can tell a platform problem from my own mistake.
 
 **AC:**
-- `401` from any service → one token re-request and a repeat of the call; a second `401` → an
-  authorization error message and a non-zero exit code.
-- `429` with `Retry-After` → waiting the stated time, at most `RETRY_ON_429_MAX` times, then giving
-  up with a statement of how long to wait.
-- `502 ERR_UPSTREAM_LLM` → a message that the provider is unavailable; the CLI makes no automatic
+- `401` from any service → an authorization error message telling the operator to mint a new token,
+  and its own exit code; no repeat while the token is ready-made. Once `auth` exists: one token
+  re-request and a repeat of the call; a second `401` → that error.
+- `429 RateLimitExceededError` with `Retry-After` of at most a minute → waiting the stated time, at
+  most `RETRY_ON_429_MAX` times, then giving up with a statement of how long to wait. A longer
+  `Retry-After` or `429 BudgetExhaustedError` → giving up at once, with how long to wait.
+- `502 UpstreamLlmError` → a message that the provider is unavailable; the CLI makes no automatic
   retries (retrying is `llm-client`'s job, US-L03).
 - A service being unreachable over the network is distinguishable in the output from an error that
   came back with a code.
-- Each class of error has its own `EXIT_*`; the codes are listed in the contract (Stage 7).
-- A service's error body is printed from its `code` and `message` fields; raw JSON is not dumped in
-  normal mode.
+- Each class of error has its own exit code; the codes are listed in the contract (Stage 7).
+- A service's error body is printed from its `code`, `message` and `details`; raw JSON is not dumped
+  in normal mode. The CLI branches on `code`, the services' own (the error's class name).
 
 ### US-C08: Machine-readable output
 
@@ -248,21 +254,22 @@ there is only the sequence of calls and the reaction to the answers (the invaria
 
 **AC:**
 - `--json` turns stdout into a single JSON object; in that mode nothing else is printed to stdout.
+  A malformed command line is the exception: it is refused before the command runs, on stderr only.
 - Without `--json` the output is human-readable, and diagnostics go to stderr.
-- The base URL comes from `HOLAHOST_API_BASE` and points at the local dev stack; there is no
-  environment-selection flag.
-- A missing `HOLAHOST_API_BASE` → a configuration error before any network call.
+- The services' origins come from `HOLAHOST_RAG_DOCUMENTS_URL` and `HOLAHOST_LLM_CLIENT_URL` and
+  point at the local dev stack; there is no environment-selection flag.
+- A missing or malformed origin → a configuration error before any network call.
 
 ### US-C09: Obtaining a token
 
 > As an Operator, I want the tool to obtain its own token, so that I do not paste credentials into every command.
 
 **AC:**
-- The token is requested by `client_credentials` from `HOLAHOST_CLIENT_ID` / `HOLAHOST_CLIENT_SECRET`
-  and cached in process memory until it expires.
-- While `auth` is not built, a ready-made token from `HOLAHOST_TOKEN` is used instead of the request
-  (ADR C-4); the arrival of `auth` changes only this step.
-- Having neither the credentials nor `HOLAHOST_TOKEN` → a configuration error before any service call.
+- While `auth` is not built, the token is the ready-made one in `HOLAHOST_TOKEN`, issued by the dev
+  minter (ADR C-4). When `auth` arrives, the token is requested by `client_credentials` from
+  `HOLAHOST_CLIENT_ID` / `HOLAHOST_CLIENT_SECRET` and cached in process memory until it expires;
+  that is the only step that changes.
+- A missing `HOLAHOST_TOKEN` → a configuration error before any service call.
 - Neither the secret nor the token is printed in normal output, in `--json`, or in error messages.
 - The token is not written to disk.
 
@@ -325,17 +332,21 @@ structure is flat and reflects three roles — parsing commands, calling service
 assets.
 
 ```
-src/guest_reply/
+guest_reply/
   cli.py              # command and flag declarations, exit codes, printing
   config.py           # typed settings from the environment
-  clients/            # HTTP clients for the platform's services: one per service, plus token retrieval
+  errors.py           # the tool's error types, one per reaction (and exit code)
+  clients/            # HTTP clients for the platform's services: one per service, the shared call
+                      # (headers, timeouts, the error envelope), and the token
   flows.py            # the sequence of calls for each command
-  prompt/             # assets: the system prompt and the context-substitution template (files, not code)
+  prompt/             # assets: the system prompt, the context and fragment templates (files, not
+                      # code), and their rendering by substitution
 ```
 
-There is one dependency rule: `flows.py` knows about `clients/` and reads the assets; `clients/`
-knows nothing about commands. There is no branching in `flows.py` on the content of the services'
-answers — only on error codes.
+There is one dependency rule, checked by import-linter: `flows.py` knows about `clients/` and the
+prompt; `clients/` and `prompt/` know nothing about the scenarios or the commands. There is no
+branching in `flows.py` on the content of the services' answers — the one exception is the
+scenario's own: an empty search leaves nothing to generate from.
 
 ### 3.3 Technology stack
 
@@ -346,7 +357,8 @@ answers — only on error codes.
 | HTTP client | `httpx` (synchronous) — connect and read timeouts set separately |
 | Validation | Pydantic v2 for settings and for parsing responses |
 | Packaging | poetry, as part of the monorepo; installed with `poetry install`, with no separate distribution |
-| Tests | pytest; HTTP is mocked and the tests never reach real services |
+| Tests | pytest with `pytest-httpserver`: a local fake of both services, so the tests never reach real ones |
+| CI | `tools-ci`: ruff, mypy, import-linter and the tests, for this tool and the dev minter, plus a build of the minter's image |
 
 ### 3.4 Parameters and limits (numbers)
 
@@ -356,7 +368,8 @@ answers — only on error codes.
 | Read timeout for search and metadata | 10 s | with headroom over the documents service's search budget |
 | Read timeout for ingest and generation | 35 s | slightly more than the services' synchronous ceiling, so that their own error reaches the operator instead of a client-side cut-off |
 | `RETRY_ON_429_MAX` | 3 | after three `Retry-After` waits there is no point continuing — the limit is set too low for the scenario |
-| Repeat after `401` | exactly 1 | a second `401` means a problem with the credentials, not a stale token |
+| Longest `Retry-After` waited | 60 s | the services count in hourly windows; a longer wait can mean most of an hour, and the operator at the terminal is better told how long than left at a silent prompt |
+| Repeat after `401` | 0 while the token is ready-made; exactly 1 once `client_credentials` exists | re-reading a ready-made token sends the same one; with `auth`, a second `401` means a problem with the credentials, not a stale token |
 | Retries on `5xx` and timeouts | 0 | upstream retries are the services' job; duplicating them here would multiply the load |
 | Maximum file size | not checked | the limit belongs to the documents service; duplicating the number in two places guarantees divergence |
 
@@ -483,12 +496,16 @@ guest-reply rm      <document_id> [--json]
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `HOLAHOST_API_BASE` | yes | the base URL of the local dev stack |
+| `HOLAHOST_RAG_DOCUMENTS_URL` | yes | `rag-documents`' origin on the local dev stack (`http://localhost:8080`) |
+| `HOLAHOST_LLM_CLIENT_URL` | yes | `llm-client`'s origin on the local dev stack (`http://localhost:8081`) |
 | `HOLAHOST_TOKEN` | yes, while there is no `auth` | a ready-made token from the dev minter |
+| `HOLAHOST_MODEL_ALIAS` | no | the `llm-client` alias; `default` if unset |
 | `HOLAHOST_CLIENT_ID`, `HOLAHOST_CLIENT_SECRET` | once `auth` exists | the s2s client's credentials |
 
-A missing required variable is a configuration error raised before any network call. The values are
-printed in no output mode, error messages included.
+The URLs are origins: each client adds its service's `/api/<svc>` path, which is part of that
+service's contract. Plain `http` is accepted only for a local host. A missing or invalid required
+variable is a configuration error raised before any network call. The values are printed in no
+output mode, error messages included.
 
 ### 7.3 Output
 
@@ -511,38 +528,51 @@ With `--json`, `stdout` carries exactly one object and nothing else:
 // rm
 { "document_id": "…", "deleted": true, "request_id": "…" }
 
-// any error
-{ "error": { "code": "ERR_NOT_FOUND", "message": "document not found" }, "request_id": "…" }
+// any error: a service's envelope as it came, or the tool's own error in the same shape
+{ "error": { "code": "NotFoundError", "message": "document not found", "details": {} }, "request_id": "…" }
+
+// one-shot whose temporary document could not be deleted: `cleanup_error` joins the answer object,
+// or the error object when the answer failed too
+{ "answer": "…", …, "cleanup_error": { "document_id": "…", "error": { "code": "…", "message": "…", "details": {} } } }
 ```
 
 `request_id` is always present — it is what locates a command's run in both services' logs (US-C10).
 In the one-shot, the temporary document's `document_id` is visible only in machine-readable mode.
+A `code` is the service's own (its error's class name); the tool's own errors follow the same
+convention: `ConfigurationError`, `FileUnreadableError`, `TokenRejectedError`,
+`ServiceUnreachableError`, `UnexpectedResponseError`.
 
 ### 7.4 Exit codes
 
 | Code | Situation |
 |---|---|
 | `0` | success |
-| `1` | a usage error: an unknown command, a missing argument, `--file` together with `<document_id>` |
-| `2` | a configuration error: a required environment variable is unset |
+| `1` | a configuration error: a required environment variable is unset or invalid |
+| `2` | a usage error: an unknown command, a missing argument, a malformed `<document_id>`, `--file` together with `<document_id>` — Click's own code, raised before the command runs |
 | `3` | the file does not exist or cannot be read |
-| `4` | the document was not found (the service answered `404`) |
+| `4` | the document was not found (`404 NotFoundError`) |
 | `5` | there is no relevant context — the search came back empty and generation was never called |
-| `6` | refused by a limit: `Retry-After` was honoured `RETRY_ON_429_MAX` times without success |
-| `7` | the LLM provider is unavailable (`502` from the generation service) |
-| `8` | a service was unreachable over the network, or did not answer within the timeout |
-| `9` | a service returned an error the tool does not interpret (`5xx`, an unexpected format) |
+| `6` | refused by a limit: a rate limit still refused after `RETRY_ON_429_MAX` waits or with too long a `Retry-After`, or a spent budget |
+| `7` | the LLM provider is unavailable (`502 UpstreamLlmError`) |
+| `8` | a service was unreachable over the network, did not answer within the timeout, or could not validate tokens (`503`) |
+| `9` | a service answered outside its contract: `500`, an unknown status, a body that is not the envelope (a `404` without one means the URL points at the wrong service) |
+| `10` | the token was refused (`401`) |
+| `11` | a service refused the request itself (`400`, `409`, `413`, `415`, `422`): the file, the message, the model alias |
 
 Code `5` is deliberately distinct from `0`: "there is no answer, because there is nothing in the
 document to find" is not a success, and a script calling the tool has to be able to tell the
-difference without parsing prose.
+difference without parsing prose. In the one-shot, a temporary document that could not be deleted
+fails the command with the deletion's code even when the answer came: the promise was to leave
+nothing behind.
 
 ### 7.5 Service errors in the output
 
-The tool prints the `code` and `message` from the service's error body, adding only what the operator
-can act on: which file to replace, how long to wait, which variable to set. The raw response body is
-not shown in normal mode — it is available with `--json`. The tool neither overrides nor renames the
-services' error codes.
+The tool prints the `code`, `message` and `details` from the service's error body — `details` is
+where the actionable values are (a limit and the actual size, `resets_at`, the available aliases) —
+and adds only what the operator can act on: which variable to set, how to get a new token. The raw
+response body is not shown in normal mode; with `--json` the error object carries `code`, `message`
+and `details` as the service sent them. The tool neither overrides nor renames the services' error
+codes, and branches on `code`, not on the status alone: a `429` is a rate limit or a budget.
 
 ---
 
@@ -552,44 +582,51 @@ services' error codes.
 
 ```python
 # clients/auth.py
-def get_token(settings: Settings) -> str: ...          # a ready-made token from the environment, or client_credentials; cached in memory
+class StaticToken:                                      # the ready-made token; client_credentials replaces it with `auth`
+    def authorization(self) -> str: ...                 # the `Authorization` header's value
 
-# clients/documents.py
-def create(file: bytes, name: str, filename: str) -> CreatedDocument: ...   # (document_id, chunk_count)
-def replace(document_id: str, file: bytes, name: str | None) -> CreatedDocument: ...
-def search(document_id: str, query: str) -> list[Chunk]: ...                # (chunk_id, text, page, score)
+# clients/http.py — one per service: its origin and /api/<svc>, the run's token and X-Request-ID
+class ServiceCaller:
+    def fetch(self, model: type[M], method: str, path: str, *, read_timeout: float, ...) -> M: ...
+    def send(self, method: str, path: str, *, read_timeout: float) -> None: ...
+
+# clients/documents.py — DocumentsClient(caller)
+def create(content: bytes, *, filename: str, name: str) -> CreatedDocument: ...   # (document_id, chunk_count)
+def replace(document_id: str, content: bytes, *, filename: str, name: str | None) -> CreatedDocument: ...
+def search(document_id: str, query: str) -> list[Chunk]: ...                      # (chunk_id, text, page, score)
 def delete(document_id: str) -> None: ...
 
-# clients/generation.py
-def generate(system: str, messages: list[Message], model: str) -> Generated: ...
+# clients/generation.py — GenerationClient(caller)
+def generate(*, system: str, messages: list[Message], model: str) -> Generated: ...
 # Generated = (text, usage, provider, model)
 
 # prompt/render.py
 def render(chunks: list[Chunk], guest_message: str) -> tuple[str, list[Message]]: ...
-# reads the prompt/system.txt and prompt/context.tmpl assets and substitutes the values
+# reads the system.txt, context.tmpl and fragment.tmpl assets and substitutes the values
 
-# flows.py
-def ingest(path: Path, name: str | None) -> CreatedDocument: ...
-def replace(document_id: str, path: Path, name: str | None) -> CreatedDocument: ...
-def ask(document_id: str, guest_message: str) -> Answer | None: ...   # None = no relevant context
-def ask_from_file(path: Path, guest_message: str) -> Answer | None: ...
-def remove(document_id: str) -> None: ...
+# flows.py — `services` carries both clients and the model alias
+def ingest(services, path: Path, name: str | None) -> CreatedDocument: ...
+def replace(services, document_id: str, path: Path, name: str | None) -> CreatedDocument: ...
+def ask(services, document_id: str, guest_message: str) -> Answer | None: ...   # None = no relevant context
+def ask_from_file(services, path: Path, guest_message: str) -> OneShot: ...     # (document_id, answer, cleanup_failure)
+def remove(services, document_id: str) -> None: ...
 ```
 
-Every client sets `Authorization: Bearer` and the `X-Request-ID` that is shared across the whole run
-of a command (US-C10) on the request, and translates the HTTP response into an exception of its own
-class — the services' codes are not parsed a second time in `flows.py`.
+Every call sets `Authorization: Bearer` and the `X-Request-ID` that is shared across the whole run
+of a command (US-C10), and `ServiceCaller` translates the HTTP response into the tool's own error
+types (`errors.py`) — the services' codes are read there and nowhere else. Waiting out a short
+`Retry-After` is also its job, per call: repeating a whole command would upload the file again.
 
 ### 8.1 UC-C3 "Answer a guest message"
 
 | # | Module and call | What happens |
 |---|---|---|
-| 1.1 | `config.load() -> Settings` | a missing required variable → exit with code `2` |
-| 1.2 | `clients.auth.get_token(settings)` | the token goes into process memory |
-| 1.3 | `clients.documents.search(document_id, guest_message) -> list[Chunk]` | `404` → code `4`; `429` → waiting out `Retry-After`, at most `RETRY_ON_429_MAX` times |
+| 1.1 | `config.load_settings() -> Settings` | a missing or invalid variable → exit with code `1` |
+| 1.2 | `clients.auth.StaticToken(settings.token)` | the token stays in process memory |
+| 1.3 | `documents.search(document_id, guest_message) -> list[Chunk]` | `404` → code `4`; `429 RateLimitExceededError` → waiting out a short `Retry-After`, at most `RETRY_ON_429_MAX` times |
 | 1.4 | if the list is empty → return `None` | generation is not called, exit code `5` |
 | 1.5 | `prompt.render(chunks, guest_message) -> (system, messages)` | substitution into the assets; no branching on content |
-| 1.6 | `clients.generation.generate(system, messages, settings.model_alias) -> Generated` | `502` → code `7` |
+| 1.6 | `generation.generate(system=…, messages=…, model=settings.model_alias) -> Generated` | `502` → code `7`; `429 BudgetExhaustedError` → code `6` at once |
 | 1.7 | printing `text` or the JSON object | |
 
 ### 8.2 UC-C4 "One-shot"
@@ -599,7 +636,7 @@ class — the services' codes are not parsed a second time in `flows.py`.
 | 2.1 | `flows.ingest(path, name=None)` | on error, exit; steps 2.2–2.3 are not performed |
 | 2.2 | `flows.ask(document_id, guest_message)` | the result is remembered, and so is an exception |
 | 2.3 | `flows.remove(document_id)` in a `finally` block | runs even when step 2.2 failed |
-| 2.4 | printing the result, or re-raising the original error | a deletion error does not replace the generation error; it is appended to `stderr` |
+| 2.4 | printing the result, or re-raising the original error | a deletion error does not replace the generation error; it is appended to `stderr` (and `cleanup_error` with `--json`). A deletion error after a successful answer: the answer is printed, the deletion error reported the same way, and the exit code is the deletion's. A `404` on the deletion is not an error: the document is gone, which is all the deletion was for |
 
 ### 8.3 UC-C1, UC-C2, UC-C5
 
@@ -621,9 +658,9 @@ scenarios, then the command layer.
 
 ### Platform-wide (cross-service)
 
-- `P-01` `infra/scripts/mint-dev-token.py` — issuing dev tokens and publishing JWKS for the local
-  stack; it is needed both by the services (validation) and by the tool (calls), so it comes first
-  (C-4)
+- `P-01` `tools/dev-minter` — issuing dev tokens and publishing JWKS for the local stack, as a
+  container on `backbone` (the services reach it by name from inside theirs); it is needed both by
+  the services (validation) and by the tool (calls), so it comes first (C-4)
 - `P-02` Registering the `guest-reply-cli` client in `auth`'s git config — `client_id`,
   `allowed_audiences`, TTLs; until `auth` exists this is recorded as a draft of the config
 
@@ -633,13 +670,14 @@ scenarios, then the command layer.
   call
 - `C-02` Obtaining and caching the token; the source is the dev minter or `client_credentials`
 - `C-03` HTTP clients for the services — setting `Authorization` and the shared `X-Request-ID`,
-  separate timeouts, translating response codes into the client's own exceptions
+  separate timeouts, translating response codes into the client's own exceptions, waiting out a
+  short `Retry-After`
 - `C-04` The prompt assets — the `system` prompt and the context template as files, plus rendering
   them by substitution
 - `C-05` The command scenarios — `ingest`, `replace`, `ask`, the one-shot with deletion in `finally`,
   and `rm`
 - `C-06` The command layer — commands and flags, human-readable and `--json` output, exit codes per
-  class of error, waiting out `Retry-After`
+  class of error
 - `C-07` Tests — HTTP is mocked, and what is checked is the order of the calls, the reaction to codes,
   and the exit codes
 
@@ -704,9 +742,9 @@ will not be one on dev.
 **C-4. Until `auth` exists, tokens are issued by a dev minter**
 Context: `auth` is not in the repository yet, but both services are obliged to validate JWTs offline
 already in this iteration.
-Decision: the `holahost/infra/scripts/mint-dev-token.py` script signs tokens with a dev key and
-publishes JWKS; the services validate against it, and the token contract is taken from the framework
-specification unchanged.
+Decision: the dev minter (`holahost/tools/dev-minter`), a container on `backbone`, signs tokens
+with a dev key and publishes JWKS; the services validate against it, and the token contract is taken
+from the framework specification unchanged.
 Rejected: turning authorization off for the iteration (the middleware and its tests would have to be
 written later and blind); building `auth` first (it pushes the iteration out and deprives it of a
 verifiable result).
@@ -732,8 +770,9 @@ orchestrator when it moves.
 never written up as a draft.
 Context: the tool sees `5xx` and timeouts from the services, while the generation service already
 retries the vendor internally.
-Decision: the CLI does not repeat `5xx` or timeouts; the only things repeated are waiting out
-`Retry-After` on `429` and a single token re-request on `401`.
+Decision: the CLI does not repeat `5xx` or timeouts; the only things repeated are waiting out a
+short `Retry-After` on `429 RateLimitExceededError` and, once `auth` exists, a single token
+re-request on `401`.
 Rejected: retries with backoff of the tool's own (they multiply the load on top of the service's
 retries and stretch out the time before the operator, who is at the terminal, hears about it and
 repeats the command themselves).

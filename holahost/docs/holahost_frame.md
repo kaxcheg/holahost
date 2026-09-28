@@ -381,6 +381,7 @@ clients:
     type: confidential
     secret_hash: "$argon2id$..."
     allowed_audiences: ["rag-documents", "llm-client"]
+    access_token_ttl: 900      # the dev minter (holahost/tools/dev-minter) issues the same claims
 ```
 
 ## auth is product-agnostic (sessions)
@@ -466,8 +467,8 @@ A local stack of all the microservices, without the frontend. Conceptually:
    cache) are containers inside the service's own compose project.
 4. auth comes up as an ordinary service; its dev JWT signing keys live in its `.env.dev`, and the
    other services validate tokens with the dev key. Until `auth` is built, tokens are minted by the
-   `infra/scripts/mint-dev-token.py` script with the same key, which also publishes JWKS; to the
-   services the source of the token is transparent.
+   dev minter (`tools/dev-minter`), a container on `backbone` that also publishes the JWKS the
+   services fetch by its name; to the services the source of the token is transparent.
 5. Check: `curl -H "x-origin-secret: <dev>" http://localhost/<svc>/health`.
 6. The whole stack: the `infra/scripts/dev-up.sh` script iterates over `services/*` and performs
    step 3.
