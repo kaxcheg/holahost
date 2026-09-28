@@ -381,7 +381,7 @@ clients:
     type: confidential
     secret_hash: "$argon2id$..."
     allowed_audiences: ["rag-documents", "llm-client"]
-    access_token_ttl: 900      # the dev minter (holahost/tools/dev-minter) issues the same claims
+    access_token_ttl: 900      # the dev minter (holahost/tools/dev-minter): the same claims, 30 days
 ```
 
 ## auth is product-agnostic (sessions)
@@ -457,21 +457,29 @@ On the EC2 instance, bootstrapped through cloud-init:
 
 ### dev (local)
 
-A local stack of all the microservices, without the frontend. Conceptually:
+A local stack of the microservices, without the frontend and without the perimeter: no gateway and
+no nginx. Each service publishes its own port on the host and a caller reaches it directly (the
+microservice brief's "dev").
 
-1. Once: `docker network create backbone`.
-2. Bring up the platform compose project locally: the same nginx config, with `x-origin-secret` set
-   to a known dev value; the entry point is `http://localhost/<svc>/…`.
-3. For each service: `docker compose -f services/<svc>/docker-compose.yml up -d` — the image is built
-   locally (`build:`), configuration and secrets come from `.env.dev`, and dependencies (database,
-   cache) are containers inside the service's own compose project.
-4. auth comes up as an ordinary service; its dev JWT signing keys live in its `.env.dev`, and the
-   other services validate tokens with the dev key. Until `auth` is built, tokens are minted by the
-   dev minter (`tools/dev-minter`), a container on `backbone` that also publishes the JWKS the
-   services fetch by its name; to the services the source of the token is transparent.
-5. Check: `curl -H "x-origin-secret: <dev>" http://localhost/<svc>/health`.
-6. The whole stack: the `infra/scripts/dev-up.sh` script iterates over `services/*` and performs
-   step 3.
+1. Once: `docker network create backbone` (every `make dev-up` below also creates it if missing).
+2. Tokens: until `auth` is built, the dev minter — `make dev-up` in `tools/dev-minter` — a container
+   on `backbone` that signs dev tokens and publishes the JWKS the services fetch by its name. To the
+   services the source of the token is transparent; `auth` will come up as an ordinary service, with
+   its dev signing key in its own `infra/envs/dev/.env`.
+3. For each service: `make dev-up` in `services/<svc>` — it builds the image, applies the migrations
+   and starts the service's own compose project (the application, plus its database and cache as
+   containers), configured from `infra/envs/dev/.env`. Each publishes its own `HOST_PORT`:
+   `rag-documents` 8080, `llm-client` 8081.
+4. Check: `curl http://localhost:<HOST_PORT>/api/<svc>/health`. Every other call carries a token
+   from the minter and an `X-Request-ID` the caller sets itself — on dev nothing else sets it.
+
+A local nginx is not built. Of what the perimeter's nginx does, the `x-origin-secret` check only has
+meaning behind the API Gateway, per-IP `limit_req` protects a public address from floods, and
+`X-Request-ID` is the caller's on dev; what is left is one origin for every service, and nothing on
+dev needs that yet — a service behaves the same either way, with no environment branches. It becomes
+worth running once the platform compose project exists (its nginx config is then best tried locally
+before staging) or once a frontend runs locally against the Orchestration Services and needs one
+origin.
 
 ### staging (terraform)
 
@@ -493,7 +501,7 @@ Identical to staging (the platform root uses the `prod` workspace; the service u
 # Adding a new microservice (Resource / Orchestration Service)
 
 A microservice's whole codebase is kept in isolation under `services/<svc>/`: the code, the
-Dockerfile, `docker-compose.yml`, `.env.dev.example`, CI/CD and OpenAPI.
+Dockerfile, `docker-compose.yml`, `infra/envs/dev/.env.example`, CI/CD and OpenAPI.
 
 ## Preliminary design of a new microservice
 
