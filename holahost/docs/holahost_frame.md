@@ -731,12 +731,19 @@ repeat the defaults in it.
 **Environments:** `dev` (local development), `staging` (checking the rollout and the smoke test
 before prod), `prod`.
 
-**dev.** The service's own compose project: the application container, built from `build:`, plus its
-dependencies as containers. The `backbone` network is external and created once. There is no platform
-nginx and no gateway on dev: the application's port is published on the host, callers reach it
-directly, and the caller sets `X-Request-ID` itself. Configuration comes from `.env.dev`, a copy of
-the versioned `.env.dev.example`; `.env.dev` itself never reaches git. Migrations are applied by a
+**dev.** The service's own compose project: the application container, built by an explicit
+`docker build` in `make dev-up` (the compose file has no `build:` section — the same file is synced
+to the instance, where there is nothing to build), plus its dependencies as containers. The
+`backbone` network is external and created once. There is no platform nginx and no gateway on dev:
+the application's port is published on the host, callers reach it directly, and the caller sets
+`X-Request-ID` itself. Configuration comes from `infra/envs/dev/.env`, a copy of the versioned
+`infra/envs/dev/.env.example`; the copy itself never reaches git. Migrations are applied by a
 separate Makefile target before the first start.
+
+**Runtime settings per environment.** Staging and prod read theirs from a committed
+`infra/envs/<env>/.env` — the non-secret settings only (limits, ceilings, the JWT variables,
+`AWS_REGION`); compose's `env_file` and the service's settings cannot start without it. No secret is
+ever in one.
 
 **Provisioning.** A service's infrastructure is described by its own Terraform roots, **one directory
 per environment** (`infra/envs/<env>/`), not a workspace:
@@ -757,7 +764,7 @@ application or its dependencies — they appear as containers when the compose p
 
 | Environment | Where they live | Who reads them | Rotation |
 |---|---|---|---|
-| dev | `.env.dev` on the developer's machine | the application process | not required; the values are known not to be real |
+| dev | `infra/envs/dev/.env` on the developer's machine | the application process | not required; the values are known not to be real |
 | staging / prod | AWS Secrets Manager, the resources created by the service's TF root | the container at startup, through the instance role, which has SM read | replacing the value in SM plus a container restart — but only for secrets the service merely **presents** (see below) |
 
 The values are filled in by hand once after `terraform apply`; only the secrets' names reach git and
@@ -769,7 +776,9 @@ secret has a second side holding a copy of it — a database role's password, a 
 provider — then restarting with the new value runs into the old one and brings down every connection.
 Such a secret needs a deploy step that brings the second side into line (for a database,
 `ALTER ROLE … PASSWORD`), and its rotation completes on the **next rollout**, not on a restart. The
-distinction has to be explicit in the service's runbook: for each secret, "restart" or "rollout".
+distinction has to be explicit in the service's runbook: for each secret, "restart" or "rollout". A
+key at a provider that keeps two keys valid at once rotates on a restart after all, if the order
+is kept — the new key issued first, the old one revoked only after the restart proved the new one.
 
 **Environment runbook.** A `docs/runbook.md` document in the service's repository, with a section per
 environment name. Each section answers four questions, and the answers have to be executable by

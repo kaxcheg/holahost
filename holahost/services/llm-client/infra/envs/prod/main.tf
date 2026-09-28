@@ -20,11 +20,26 @@ module "platform" {
 # `scripts/bootstrap.py`, which builds the same id in Python to read the value back.
 #
 # Value-less by design: no `secret_string`, so no secret material lands in state. The values
-# are filled in once by hand, per the runbook. A service with external providers adds one
-# name per key; one that stores nothing drops this resource and its outputs entirely.
+# are filled in once by hand, per the runbook.
+#
+# The provider keys are read off the registry the service validates at startup, one secret per
+# `api_key_ref`: a name in this root and a reference in that file cannot drift apart, so no CI step
+# has to compare them. Selected by having a reference rather than by `enabled`, so disabling a
+# provider does not delete its secret — removing its block from the registry does, at the next
+# apply (recoverable here within the 30-day window).
+#
+# The runtime settings come from this environment's `.env` the same way: the budget alarms compare
+# against the provider ceilings the service itself enforces, not a copy of them.
+
+locals {
+  registry          = yamldecode(file("${path.module}/../../../backend/app/config/registry.yaml"))
+  provider_key_refs = [for name, provider in local.registry.providers : provider.api_key_ref if try(provider.api_key_ref, null) != null]
+  enabled_providers = [for name, provider in local.registry.providers : name if provider.enabled]
+  settings          = { for pair in regexall("(?m)^([A-Z0-9_]+)=(.*)$", file("${path.module}/.env")) : pair[0] => pair[1] }
+}
 
 resource "aws_secretsmanager_secret" "this" {
-  for_each = toset(["db-password", "db-superuser-password"])
+  for_each = toset(concat(["db-password", "db-superuser-password"], local.provider_key_refs))
 
   name = "holahost/${var.env}/llm-client/${each.key}"
 

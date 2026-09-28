@@ -1,15 +1,14 @@
 # llm-client
 
-> **Design only.** This directory holds no implementation — the service is specified but not built.
-> What follows describes the intended contract, so that services designed against it stay honest.
-
 A Resource Service that is the platform's single point of contact with external LLM providers.
 Without it every service repeats the same four things: a provider SDK, a provider key, a retry
 policy for `429` and overload, and its own accounting. Platform-wide spend is then visible nowhere,
 and changing the model means editing N services.
 
 See the platform contract in [`../../README.md`](../../README.md); the full design is
-[`docs/llm_client_spec.md`](docs/llm_client_spec.md).
+[`docs/llm_client_spec.md`](docs/llm_client_spec.md), the published contract
+[`docs/openapi.json`](docs/openapi.json), and how to run it per environment
+[`docs/runbook.md`](docs/runbook.md).
 
 ## What it takes off a caller
 
@@ -28,16 +27,17 @@ See the platform contract in [`../../README.md`](../../README.md); the full desi
 The service has no product domain. The prompt always arrives from outside; scenarios live with the
 caller.
 
-## Intended API
+## API
 
-Base path `/api/llm-client`.
+Base path `/api/llm-client`; every route but `GET /health` needs a platform JWT with `llm-client` in
+its audience.
 
 ```
-POST /generate                     Idempotency-Key: <optional>
+POST /generate                     Idempotency-Key: <optional, 1..128>
 
 { "model": "fast", "system": "You are …",
   "messages": [{ "role": "user", "content": "…" }],
-  "max_tokens": 800, "temperature": 0.3 }
+  "max_tokens": 800, "temperature": 0.3, "stop": ["\n\n"] }
 
 200 { "text": "…",
       "usage": { "input_tokens": 1240, "output_tokens": 310 },
@@ -52,6 +52,11 @@ instruction together with untrusted data.
 `provider` and `model` in the response are the **actual** ones. When they differ from what was
 asked, `downgraded` says a budget policy fired and `failed_over` says a provider switch did. A
 caller that cares which model answered must read the response, not assume the request.
+
+A refusal is `{"error": {"code", "message", "details"}}`; branch on `code`. The two `429`s differ by
+it: `RateLimitExceededError` — too often, wait the seconds in `Retry-After`; `BudgetExhaustedError` —
+today's spend is gone, `Retry-After` counts to the window's reset. `UpstreamLlmError` (`502`) is the
+retryable one; a repeated `Idempotency-Key` is `409` and does not return the first answer.
 
 ## Domain
 
