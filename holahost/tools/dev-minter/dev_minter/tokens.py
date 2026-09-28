@@ -29,12 +29,17 @@ class Client:
     ttl_seconds: int
 
 
+DEV_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
+"""A dev token's lifetime: a month, not the registry's 15 minutes — why, see the package README's
+"The token"."""
+
 GUEST_REPLY_CLI = Client(
     client_id="guest-reply-cli",
     audiences=("rag-documents", "llm-client"),
-    ttl_seconds=900,
+    ttl_seconds=DEV_TOKEN_TTL_SECONDS,
 )
-"""The console orchestrator's entry in `auth`'s client registry (the platform specification)."""
+"""The console orchestrator's entry in `auth`'s client registry (the platform specification), with
+the dev lifetime."""
 
 
 def mint(key: SigningKey, client: Client, *, now: datetime) -> str:

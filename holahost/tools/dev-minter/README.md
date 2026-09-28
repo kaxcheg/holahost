@@ -37,7 +37,10 @@ EXPECTED_ISSUER=holahost-dev
 A service token as `auth` will issue it by `client_credentials`: `sub` and `client_id` are the
 client's id, `aud` its target services, plus `iat`, `exp` and `jti`; `kid` and `alg` in the header.
 The defaults are the `guest-reply-cli` entry of `auth`'s client registry (the platform
-specification): audiences `rag-documents` and `llm-client`, a 900-second lifetime. Another client:
+specification) — audiences `rag-documents` and `llm-client` — with a dev lifetime of 30 days rather
+than the registry's 15 minutes: a short lifetime is how `auth` bounds a token it cannot revoke, which
+dev does not need, and the key's deletion (`make dev-down-v`) still retires every dev token at once.
+Another client:
 
 ```bash
 docker compose exec -T dev-minter python -m dev_minter mint \

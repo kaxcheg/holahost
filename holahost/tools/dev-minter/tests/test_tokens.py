@@ -65,7 +65,7 @@ def test_a_token_for_another_audience_is_refused(key: SigningKey, jwks_url: str)
 
 
 def test_an_expired_token_is_refused(key: SigningKey, jwks_url: str) -> None:
-    token = mint(key, GUEST_REPLY_CLI, now=datetime.now(UTC) - timedelta(hours=1))
+    token = mint(key, GUEST_REPLY_CLI, now=datetime.now(UTC) - timedelta(days=31))
     with pytest.raises(AuthenticationError):
         _validate(token, jwks_url, "rag-documents")
 
@@ -74,7 +74,12 @@ def test_the_lifetime_is_the_clients(key: SigningKey) -> None:
     now = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
     claims = jwt.decode(mint(key, GUEST_REPLY_CLI, now=now), options={"verify_signature": False})
     assert claims["iat"] == int(now.timestamp())
-    assert claims["exp"] - claims["iat"] == 900
+    assert claims["exp"] - claims["iat"] == 30 * 24 * 60 * 60
+
+
+def test_a_month_old_token_still_passes(key: SigningKey, jwks_url: str) -> None:
+    token = mint(key, GUEST_REPLY_CLI, now=datetime.now(UTC) - timedelta(days=29))
+    assert _validate(token, jwks_url, "rag-documents").subject == "guest-reply-cli"
 
 
 def test_every_token_is_unique(key: SigningKey) -> None:

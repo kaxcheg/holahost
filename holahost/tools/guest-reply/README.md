@@ -51,7 +51,7 @@ make -C ../dev-minter dev-up                                  # the minter, on b
 (cd ../../services/rag-documents && make dev-up)              # :8080
 (cd ../../services/llm-client && make dev-up)                 # :8081
 export HOLAHOST_RAG_DOCUMENTS_URL=http://localhost:8080 HOLAHOST_LLM_CLIENT_URL=http://localhost:8081
-export HOLAHOST_TOKEN=$(make -s -C ../dev-minter token)       # valid 15 minutes
+export HOLAHOST_TOKEN=$(make -s -C ../dev-minter token)       # valid 30 days
 poetry run guest-reply ask --file guidebook.pdf "What time is check-in?"
 ```
 
