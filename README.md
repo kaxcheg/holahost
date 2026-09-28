@@ -13,7 +13,7 @@ in [`holahost/README.md`](holahost/README.md).
 holahost/
   services/<svc>/     backend microservices
   libs/<lib>/         shared platform libraries (path dependencies, not published)
-  tools/<tool>/       console tools — not deploy units
+  tools/<tool>/       console and dev-only tools — not deploy units
   templates/service/  the skeleton a new service is copied from
   infra/modules/      Terraform modules the services' own roots call
   make/common.mk      make targets every service includes
@@ -28,7 +28,7 @@ holahost/
 | [`rag-documents`](holahost/services/rag-documents/README.md) — document ingestion and vector search | implemented, with CI/CD and Terraform |
 | [`templates/service`](holahost/templates/service/README.md) — new-service skeleton | implemented |
 | `infra/modules` — `service-ecr`, `service-observability` | implemented |
-| [`llm-client`](holahost/services/llm-client/README.md) — facade over external LLM providers | designed, not built |
+| [`llm-client`](holahost/services/llm-client/README.md) — facade over external LLM providers | implemented, with CI/CD and Terraform |
 | [`guest-reply`](holahost/tools/guest-reply/README.md) — console orchestrator | implemented, with CI |
 | [`dev-minter`](holahost/tools/dev-minter/README.md) — dev-only token minter and JWKS, until `auth` exists | implemented, with CI |
 | `auth` — JWT issuer; platform Terraform root; web frontend | designed, not built |
@@ -45,9 +45,15 @@ the Docker images and CI use.
 make hooks-install                      # one-time: install the pre-commit and commit-msg hooks
 
 cd holahost/services/rag-documents
+cp infra/envs/dev/.env.example infra/envs/dev/.env   # once per service
 make dev-up                             # build, migrate, start the service and its Postgres
 make ci-local                           # what CI runs: hooks, tests, the OpenAPI contract check
 ```
+
+The local stack end to end — the dev minter for tokens, `rag-documents` on `:8080`, `llm-client` on
+`:8081` (a real `ANTHROPIC_API_KEY` in its `.env` to generate), and `guest-reply` answering from a
+guidebook — is in [`holahost/tools/guest-reply`](holahost/tools/guest-reply/README.md), "Running it
+locally".
 
 Each service documents its own operation in `docs/runbook.md` — deploying from scratch, verifying,
 upgrading, rolling back, rotating secrets.
