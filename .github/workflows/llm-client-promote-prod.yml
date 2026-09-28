@@ -1,7 +1,6 @@
 name: llm-client-promote-prod
 
-# The same pipeline as rag-documents-promote-prod.yml, which explains its steps; what is this
-# service's own is the paid smoke check, as in llm-client-deploy-staging.yml.
+# The trigger and this service's values; the pipeline is service-promote-prod.yml.
 
 on:
   push:
@@ -11,103 +10,13 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AWS_REGION: us-east-1
-
 jobs:
   promote:
-    runs-on: ubuntu-latest
-    # The approval gate: the `prod` environment's required reviewers hold the whole job, so nothing
-    # below — apply, migrations, rollout — starts before a person lets it.
-    environment: prod
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: aws-actions/configure-aws-credentials@v5
-        with:
-          # Same ACCOUNT_ID caveat as llm-client-deploy-staging.yml.
-          role-to-assume: arn:aws:iam::ACCOUNT_ID:role/github-actions-llm-client-prod
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: hashicorp/setup-terraform@v3
-
-      - uses: ./.github/actions/terraform-apply
-        with:
-          working-directory: holahost/services/llm-client/infra/common
-
-      - uses: ./.github/actions/terraform-apply
-        with:
-          working-directory: holahost/services/llm-client/infra/envs/prod
-
-      - name: Resolve digest by commit (no rebuild — build-once/promote-by-digest)
-        id: resolve
-        run: |
-          set -euo pipefail
-          REPO=$(terraform -chdir=holahost/services/llm-client/infra/common output -raw repository_url)
-          SHA_TAG="git-${GITHUB_SHA}"
-          DIGEST=$(aws ecr describe-images \
-            --repository-name "${REPO##*/}" \
-            --image-ids imageTag="$SHA_TAG" \
-            --query 'imageDetails[0].imageDigest' \
-            --output text 2>/dev/null || true)
-          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
-            echo "No image tagged $SHA_TAG in ${REPO##*/} — this commit was never deployed to staging." >&2
-            echo "Tag a commit that deploy-staging has already built, then re-run." >&2
-            exit 1
-          fi
-          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
-          echo "digest=$REPO@$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
-
-      - uses: ./.github/actions/ssm-migrate-deploy
-        with:
-          env: prod
-          service-name: llm-client
-          image: ${{ steps.resolve.outputs.digest }}
-          compose-file: holahost/services/llm-client/docker-compose.yml
-          env-file: holahost/services/llm-client/infra/envs/prod/.env
-
-      - uses: ./.github/actions/smoke-check
-        with:
-          url: https://hola.host/api/llm-client/health
-
-      # Gated as in llm-client-deploy-staging.yml.
-      - name: Is the paid smoke configured
-        id: smoke
-        run: echo "enabled=${{ secrets.LLM_CLIENT_SMOKE_CLIENT_ID != '' && secrets.LLM_CLIENT_SMOKE_CLIENT_SECRET != '' }}" >> "$GITHUB_OUTPUT"
-
-      - uses: ./.github/actions/llm-client-paid-smoke
-        if: steps.smoke.outputs.enabled == 'true'
-        with:
-          base-url: https://hola.host
-          env-file: holahost/services/llm-client/infra/envs/prod/.env
-          client-id: ${{ secrets.LLM_CLIENT_SMOKE_CLIENT_ID }}
-          client-secret: ${{ secrets.LLM_CLIENT_SMOKE_CLIENT_SECRET }}
-
-      - name: Paid smoke skipped
-        if: steps.smoke.outputs.enabled != 'true'
-        run: echo "::notice::LLM_CLIENT_SMOKE_CLIENT_ID and _SECRET are not both set in the prod environment — the generation smoke check did not run"
-
-      # After the smoke, so `release-<version>` in ECR means "this image answered in prod".
-      - name: Tag the shipped digest with the release version
-        run: |
-          set -euo pipefail
-          REPO="${{ steps.resolve.outputs.repo }}"
-          REPO_NAME="${REPO##*/}"
-          # GITHUB_REF_NAME = "llm-client/vYYYYMMDD.N" — the per-component version tag.
-          VERSION_TAG="release-${GITHUB_REF_NAME#*/}"
-          MANIFEST=$(aws ecr batch-get-image \
-            --repository-name "$REPO_NAME" \
-            --image-ids imageDigest="${{ steps.resolve.outputs.image_digest }}" \
-            --accepted-media-types \
-              "application/vnd.docker.distribution.manifest.v2+json" \
-              "application/vnd.oci.image.manifest.v1+json" \
-            --query 'images[0].imageManifest' --output text)
-          if aws ecr put-image \
-               --repository-name "$REPO_NAME" \
-               --image-tag "$VERSION_TAG" \
-               --image-manifest "$MANIFEST" >/dev/null 2>&1; then
-            echo "Tagged ${{ steps.resolve.outputs.image_digest }} as $VERSION_TAG."
-          else
-            echo "$VERSION_TAG already present — left as is."
-          fi
+    uses: ./.github/workflows/service-promote-prod.yml
+    with:
+      service: llm-client
+      # The paid generation, as in llm-client-deploy-staging.yml.
+      smoke-path: /generate
+      smoke-body: '{"model": "fast", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}'
+      smoke-summary: "{provider, model, usage}"
+      smoke-secret-prefix: LLM_CLIENT

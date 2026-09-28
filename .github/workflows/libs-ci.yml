@@ -5,8 +5,8 @@ name: libs-ci
 # library change, because its path filter matches `holahost/libs/`, and that run is what checks
 # the service against the changed code.
 #
-# Same shape as the services' stubs (see rag-documents-ci.yml): the path check is a job-internal
-# step, so a run that finds nothing to build still completes green.
+# Same shape as the services' pipeline (service-ci.yml): the path check is a job-internal step, so
+# a run that finds nothing to build still completes green.
 
 on:
   pull_request:

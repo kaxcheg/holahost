@@ -1,0 +1,128 @@
+name: service-deploy-staging
+
+# The staging rollout of every service, called from its own `<svc>-deploy-staging.yml`, which holds
+# only the trigger and the service's values. The caller grants `id-token: write` for the OIDC role.
+#
+# The job declares `environment: staging` here, not in the caller — a job that calls a workflow
+# cannot — and that is also what gives the smoke step the environment's secrets: they cannot be
+# passed from a caller.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: The service's name — its directory under holahost/services/ and its prefix.
+        type: string
+        required: true
+      smoke-path:
+        description: >-
+          The path, under the service's base path, of one authenticated request after the health
+          loop (e.g. /generate); empty — health only.
+        type: string
+        default: ""
+      smoke-body:
+        description: The authenticated request's JSON body.
+        type: string
+        default: "{}"
+      smoke-summary:
+        description: A jq filter over its answer — what the log shows of a success.
+        type: string
+        default: "."
+      smoke-secret-prefix:
+        description: >-
+          The prefix of the smoke client's credentials in the environment:
+          <prefix>_SMOKE_CLIENT_ID and <prefix>_SMOKE_CLIENT_SECRET (e.g. LLM_CLIENT).
+        type: string
+        default: ""
+
+env:
+  AWS_REGION: us-east-1
+  HOST: https://staging.hola.host
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      SERVICE_DIR: holahost/services/${{ inputs.service }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The same repository variable that turns on CI's `terraform plan`; until the platform AWS
+      # account and the service's OIDC role exist, this step fails, and the first rollout is by hand
+      # (the service's runbook).
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-actions-${{ inputs.service }}-staging
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: ${{ env.SERVICE_DIR }}/infra/common
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: ${{ env.SERVICE_DIR }}/infra/envs/staging
+
+      # Only a sha tag here. A version tag derived from the branch name cannot survive its own
+      # trigger: this workflow runs on every push to `release/v*`, a release branch takes
+      # stabilization commits after the first, and the ECR repository is immutable for everything
+      # but `latest*` — so the second push would re-push an already-taken tag and fail the build.
+      # The version tag is applied once instead, by promote-prod, onto the digest that ships.
+      - name: Compute image tag
+        id: tags
+        run: |
+          echo "repo_url=$(terraform -chdir="$SERVICE_DIR/infra/common" output -raw repository_url)" >> "$GITHUB_OUTPUT"
+          # The full sha, not the first seven characters: in a growing repository a short prefix
+          # carries a non-zero chance of collision for no benefit, and this tag is the only thing
+          # binding an image to its commit when promote-prod later looks it up.
+          echo "sha_tag=git-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/build-push-image
+        id: build
+        with:
+          dockerfile: ${{ env.SERVICE_DIR }}/Dockerfile
+          ecr-repo-url: ${{ steps.tags.outputs.repo_url }}
+          sha-tag: ${{ steps.tags.outputs.sha_tag }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: ./.github/actions/ssm-migrate-deploy
+        with:
+          env: staging
+          service-name: ${{ inputs.service }}
+          image: ${{ steps.build.outputs.digest }}
+          compose-file: ${{ env.SERVICE_DIR }}/docker-compose.yml
+          env-file: ${{ env.SERVICE_DIR }}/infra/envs/staging/.env
+
+      # Retried within a window rather than run once: a cold volume may have work to do on first
+      # boot (rag-documents downloads its embedding model).
+      - uses: ./.github/actions/smoke-check
+        with:
+          url: ${{ env.HOST }}/api/${{ inputs.service }}/health
+
+      # A step's `if` cannot read secrets, so this step turns their presence into an output. The
+      # credentials themselves go to the smoke step alone, not into every step's environment.
+      - name: Is the authenticated smoke configured
+        id: smoke
+        if: inputs.smoke-path != ''
+        run: echo "enabled=${{ secrets[format('{0}_SMOKE_CLIENT_ID', inputs.smoke-secret-prefix)] != '' && secrets[format('{0}_SMOKE_CLIENT_SECRET', inputs.smoke-secret-prefix)] != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/authenticated-smoke
+        if: steps.smoke.outputs.enabled == 'true'
+        with:
+          base-url: ${{ env.HOST }}
+          env-file: ${{ env.SERVICE_DIR }}/infra/envs/staging/.env
+          audience: ${{ inputs.service }}
+          path: /api/${{ inputs.service }}${{ inputs.smoke-path }}
+          body: ${{ inputs.smoke-body }}
+          summary: ${{ inputs.smoke-summary }}
+          client-id: ${{ secrets[format('{0}_SMOKE_CLIENT_ID', inputs.smoke-secret-prefix)] }}
+          client-secret: ${{ secrets[format('{0}_SMOKE_CLIENT_SECRET', inputs.smoke-secret-prefix)] }}
+
+      - name: Authenticated smoke skipped
+        if: inputs.smoke-path != '' && steps.smoke.outputs.enabled != 'true'
+        env:
+          PREFIX: ${{ inputs.smoke-secret-prefix }}
+        run: echo "::notice::${PREFIX}_SMOKE_CLIENT_ID and _SECRET are not both set in the staging environment — the authenticated smoke did not run"

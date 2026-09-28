@@ -1,0 +1,158 @@
+name: service-promote-prod
+
+# The prod promotion of every service, called from its own `<svc>-promote-prod.yml`, which holds only
+# the trigger and the service's values. The caller grants `id-token: write` for the OIDC role. The
+# smoke inputs and the environment's secrets work as in service-deploy-staging.yml.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: The service's name — its directory under holahost/services/ and its prefix.
+        type: string
+        required: true
+      smoke-path:
+        description: As in service-deploy-staging.yml.
+        type: string
+        default: ""
+      smoke-body:
+        description: As in service-deploy-staging.yml.
+        type: string
+        default: "{}"
+      smoke-summary:
+        description: As in service-deploy-staging.yml.
+        type: string
+        default: "."
+      smoke-secret-prefix:
+        description: As in service-deploy-staging.yml.
+        type: string
+        default: ""
+
+env:
+  AWS_REGION: us-east-1
+  HOST: https://hola.host
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # The approval gate: the `prod` environment's required reviewers hold the whole job, so nothing
+    # below — apply, migrations, rollout — starts before a person lets it.
+    environment: prod
+    env:
+      SERVICE_DIR: holahost/services/${{ inputs.service }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Same variable and caveat as service-deploy-staging.yml.
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-actions-${{ inputs.service }}-prod
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: ${{ env.SERVICE_DIR }}/infra/common
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          working-directory: ${{ env.SERVICE_DIR }}/infra/envs/prod
+
+      # Resolve by the commit's sha tag, not by a branch-derived tag: the git tag this workflow runs
+      # on points at exactly one commit, and deploy-staging pushed that commit's image as
+      # `git-<sha>` — so the sha tag is a direct, unambiguous handle on the image staging actually
+      # validated. A tag shared by every commit of a release branch would be ambiguous about which
+      # build shipped, and unpushable twice on an immutable repository.
+      #
+      # `describe-images`, not `docker pull` + `docker inspect`: the digest is registry metadata, so
+      # there is no reason to pull the whole image onto the runner to read it — nothing here ever
+      # runs the image, the instance pulls it itself by digest.
+      - name: Resolve digest by commit (no rebuild — build-once/promote-by-digest)
+        id: resolve
+        run: |
+          set -euo pipefail
+          REPO=$(terraform -chdir="$SERVICE_DIR/infra/common" output -raw repository_url)
+          # The same full sha deploy-staging writes. GITHUB_SHA here is the commit the `<svc>/v*`
+          # git tag points at, which is why that tag belongs on the `release/v*` commit that passed
+          # staging: a squash merge into `main` produces a new sha for which no image was ever built.
+          SHA_TAG="git-${GITHUB_SHA}"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "${REPO##*/}" \
+            --image-ids imageTag="$SHA_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "No image tagged $SHA_TAG in ${REPO##*/} — this commit was never deployed to staging." >&2
+            echo "Tag a commit that deploy-staging has already built, then re-run." >&2
+            exit 1
+          fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "digest=$REPO@$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/ssm-migrate-deploy
+        with:
+          env: prod
+          service-name: ${{ inputs.service }}
+          image: ${{ steps.resolve.outputs.digest }}
+          compose-file: ${{ env.SERVICE_DIR }}/docker-compose.yml
+          env-file: ${{ env.SERVICE_DIR }}/infra/envs/prod/.env
+
+      - uses: ./.github/actions/smoke-check
+        with:
+          url: ${{ env.HOST }}/api/${{ inputs.service }}/health
+
+      - name: Is the authenticated smoke configured
+        id: smoke
+        if: inputs.smoke-path != ''
+        run: echo "enabled=${{ secrets[format('{0}_SMOKE_CLIENT_ID', inputs.smoke-secret-prefix)] != '' && secrets[format('{0}_SMOKE_CLIENT_SECRET', inputs.smoke-secret-prefix)] != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/authenticated-smoke
+        if: steps.smoke.outputs.enabled == 'true'
+        with:
+          base-url: ${{ env.HOST }}
+          env-file: ${{ env.SERVICE_DIR }}/infra/envs/prod/.env
+          audience: ${{ inputs.service }}
+          path: /api/${{ inputs.service }}${{ inputs.smoke-path }}
+          body: ${{ inputs.smoke-body }}
+          summary: ${{ inputs.smoke-summary }}
+          client-id: ${{ secrets[format('{0}_SMOKE_CLIENT_ID', inputs.smoke-secret-prefix)] }}
+          client-secret: ${{ secrets[format('{0}_SMOKE_CLIENT_SECRET', inputs.smoke-secret-prefix)] }}
+
+      - name: Authenticated smoke skipped
+        if: inputs.smoke-path != '' && steps.smoke.outputs.enabled != 'true'
+        env:
+          PREFIX: ${{ inputs.smoke-secret-prefix }}
+        run: echo "::notice::${PREFIX}_SMOKE_CLIENT_ID and _SECRET are not both set in the prod environment — the authenticated smoke did not run"
+
+      # Only now, after the deploy is live and answering, does the version tag get applied — so
+      # `release-vYYYYMMDD.N` in ECR means "this exact image shipped to prod", not "this was built at
+      # some point". Applied by retagging the existing manifest (put-image), never by a second
+      # build: the digest is unchanged, so the immutable repository accepts one new name for an
+      # image it already holds. Idempotent on a re-run — an identical tag+manifest comes back as
+      # ImageAlreadyExistsException, which is success for our purposes, not a failure.
+      - name: Tag the shipped digest with the release version
+        env:
+          REPO: ${{ steps.resolve.outputs.repo }}
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          REPO_NAME="${REPO##*/}"
+          # GITHUB_REF_NAME = "<svc>/vYYYYMMDD.N" — the per-component version tag.
+          VERSION_TAG="release-${GITHUB_REF_NAME#*/}"
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name "$REPO_NAME" \
+            --image-ids imageDigest="$IMAGE_DIGEST" \
+            --accepted-media-types \
+              "application/vnd.docker.distribution.manifest.v2+json" \
+              "application/vnd.oci.image.manifest.v1+json" \
+            --query 'images[0].imageManifest' --output text)
+          if aws ecr put-image \
+               --repository-name "$REPO_NAME" \
+               --image-tag "$VERSION_TAG" \
+               --image-manifest "$MANIFEST" >/dev/null 2>&1; then
+            echo "Tagged $IMAGE_DIGEST as $VERSION_TAG."
+          else
+            echo "$VERSION_TAG already present — left as is."
+          fi

@@ -1,9 +1,6 @@
 name: llm-client-ci
 
-# The platform's per-service pipeline, the same shape as rag-documents-ci.yml: the path filter is a
-# job-internal step so the job always completes, and shared step logic lives in .github/actions/.
-# Why each step is shaped the way it is is written once, there; the comments here cover what is
-# this service's own.
+# The triggers and this service's values; the pipeline is service-ci.yml.
 
 on:
   pull_request:
@@ -17,143 +14,10 @@ permissions:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0 # full history — needed for the diff-based path filter below
-
-      - name: Detect llm-client changes
-        id: filter
-        run: |
-          base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
-            base="$(git merge-base origin/develop HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD)"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          if git diff --name-only "$base" HEAD | grep -qE '^(holahost/(services/llm-client|libs/[^/]+|make|infra/modules)/|\.github/(actions/|workflows/llm-client-)|\.pre-commit-config\.yaml$|\.tool-versions$)'; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: ./.github/actions/setup-python-toolchain
-        if: steps.filter.outputs.changed == 'true'
-
-      - name: Install dependencies (llm-client backend)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/backend
-        run: poetry install
-
-      - name: Pre-commit (generic hooks over this service's changed files)
-        if: steps.filter.outputs.changed == 'true'
-        env:
-          SKIP: python-ruff,python-ruff-format,python-mypy,python-import-linter
-        run: |
-          pip install pre-commit
-          pre-commit run --files $(git diff --name-only "${{ steps.filter.outputs.base }}" HEAD -- holahost/services/llm-client)
-
-      - name: Python gates (llm-client backend)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/backend
-        run: |
-          poetry run ruff check .
-          poetry run ruff format --check .
-          poetry run mypy .
-          poetry run lint-imports
-
-      # No test reaches a provider: the adapter's tests stand the vendor's endpoint up locally, so
-      # the pipeline holds no provider key and spends nothing.
-      - name: Unit tests
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/backend
-        run: poetry run pytest -m "not integration"
-
-      - name: Integration tests (testcontainers — needs Docker)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/backend
-        run: poetry run pytest -m integration
-
-      - name: OpenAPI schema is current
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client
-        run: make openapi-check
-
+    uses: ./.github/workflows/service-ci.yml
+    with:
+      service: llm-client
       # The registry is read once, at startup, and an error in it stops the process there — on the
       # instance, after the old container is gone. This runs the same check where it costs a red
       # pull request instead.
-      - name: Registry is valid
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client
-        run: make validate-registry
-
-      - name: Docker build (no push)
-        if: steps.filter.outputs.changed == 'true'
-        run: |
-          PYTHON_VERSION=$(awk '$1=="python"{print $2}' .tool-versions)
-          docker build -f holahost/services/llm-client/Dockerfile \
-            --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
-            -t llm-client:ci .
-
-      # The same ceiling as the service's Makefile (`MAX_IMAGE_MB`).
-      - name: Image size budget
-        if: steps.filter.outputs.changed == 'true'
-        env:
-          MAX_IMAGE_MB: 600
-        run: |
-          set -euo pipefail
-          size_mb=$(( $(docker image inspect llm-client:ci --format '{{.Size}}') / 1000000 ))
-          echo "llm-client:ci is ${size_mb} MB (ceiling ${MAX_IMAGE_MB} MB)"
-          if [ "$size_mb" -gt "$MAX_IMAGE_MB" ]; then
-            echo "::error::image grew past its size budget — check .dockerignore and new dependencies"
-            exit 1
-          fi
-
-      - uses: hashicorp/setup-terraform@v3
-        if: steps.filter.outputs.changed == 'true'
-
-      # Besides the syntax, `validate` of an environment root is what checks the provider key
-      # secrets: the root derives them from `registry.yaml`, so an enabled provider's secret cannot
-      # be missing from Terraform.
-      - name: Terraform validate (common)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/infra/common
-        run: terraform init -backend=false && terraform validate
-
-      - name: Terraform validate (envs/staging)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/infra/envs/staging
-        run: terraform init -backend=false && terraform validate
-
-      - name: Terraform validate (envs/prod)
-        if: steps.filter.outputs.changed == 'true'
-        working-directory: holahost/services/llm-client/infra/envs/prod
-        run: terraform init -backend=false && terraform validate
-
-      # Off until the repository variable `AWS_ACCOUNT_ID` is set, and skipped on a fork PR — the
-      # conditions and why both are needed: rag-documents-ci.yml.
-      - name: Configure AWS credentials (read-only, for plan)
-        id: aws
-        if: >-
-          steps.filter.outputs.changed == 'true'
-          && vars.AWS_ACCOUNT_ID != ''
-          && github.event.pull_request.head.repo.fork != true
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-actions-llm-client-plan
-
-      - name: Terraform plan (common)
-        if: steps.aws.outcome == 'success'
-        working-directory: holahost/services/llm-client/infra/common
-        run: terraform init && terraform plan -lock=false -input=false
-
-      - name: Terraform plan (envs/staging)
-        if: steps.aws.outcome == 'success'
-        working-directory: holahost/services/llm-client/infra/envs/staging
-        run: terraform init && terraform plan -lock=false -input=false
-
-      - name: Terraform plan (envs/prod)
-        if: steps.aws.outcome == 'success'
-        working-directory: holahost/services/llm-client/infra/envs/prod
-        run: terraform init && terraform plan -lock=false -input=false
+      checks: validate-registry

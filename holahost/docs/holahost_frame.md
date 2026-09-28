@@ -845,10 +845,14 @@ generic hooks over its changed files, and `ruff`, `mypy` and `lint-imports` chec
 package. Walking every package from a pipeline would make it install every other package's
 environment and block a PR on code it does not own.
 
-**Pipelines.** GitHub Actions reads workflows only from the root `.github/workflows/`, so each
-service's pipelines are files there, `<svc>-*.yml`, and their repeated steps are composite actions in
-`.github/actions/` (an action only one service uses carries its name: `llm-client-paid-smoke`). The
-path filter is a step inside the job rather than `on.paths`: a workflow skipped by `on.paths` leaves
+**Pipelines.** GitHub Actions reads workflows only from the root `.github/workflows/`. The body of
+each pipeline is written once, as a called workflow (`workflow_call`): `service-ci.yml`,
+`service-deploy-staging.yml`, `service-promote-prod.yml`. A service's own `<svc>-*.yml` holds only the
+trigger and its values — its name, the make targets of its own checks (`checks`), and whether the
+rollout ends with an authenticated request (`smoke-*`). The steps repeated inside a job are composite
+actions in `.github/actions/`. The image size ceiling is read from the service's Makefile
+(`make ci-image`), so it has one home. The path filter is a step inside the job rather than
+`on.paths`: a workflow skipped by `on.paths` leaves
 a required check pending forever, while a job whose filter finds nothing completes green. It matches
 `holahost/services/<svc>/`, `holahost/libs/`, `holahost/make/`, `holahost/infra/modules/`, the
 pipeline's own files and the repository-wide tool versions. The libraries are matched because a
@@ -862,7 +866,7 @@ diff from the root commit matches every filter.
 |---|---|---|
 | `<svc>-ci` | a PR into `develop` / `main` / `release/*`, a push to a short-lived branch | `pre-commit` → the Python gates of the service's package → unit and integration tests → `openapi-check` and the service's own checks → `docker build` without a push and the image size ceiling → `terraform validate` of the service's roots, then `terraform plan` once the repository variable `AWS_ACCOUNT_ID` exists and the PR is not from a fork |
 | `libs-ci` | the same, with a path filter of `holahost/libs/**` | `pre-commit` → each library's Python gates → its unit tests |
-| `<svc>-deploy-staging` | a push to `release/v*` | `terraform apply` → `docker build` and push to ECR under the `git-<sha>` tag (that one only — see "Image tags" below), remembering the digest → SSM Run Command: `alembic upgrade head`, then provisioning the application role, then `docker compose up -d` → smoke |
+| `<svc>-deploy-staging` | a push to `release/v*` | `terraform apply` → `docker build` and push to ECR under the `git-<sha>` tag (that one only — see "Image tags" below), remembering the digest → SSM Run Command: `alembic upgrade head`, then provisioning the application role, then `docker compose up -d` → smoke: the `/health` loop, then, if the service asks for it, one authenticated request, sent once |
 | `<svc>-promote-prod` | a push of a `<svc>/v*` tag | an `environment: prod` gate with manual approval, holding the whole job → `terraform apply` → resolve the digest by the tagged commit's `git-<sha>` **without rebuilding** → SSM Run Command: migrations, then provisioning the application role, then rolling out that same digest → smoke → tagging the rolled-out digest `release-v<version>` |
 
 `deploy-staging` has no path filter: every push to `release/v*` rolls out every service to staging,
@@ -943,17 +947,17 @@ subsequent service.
 | `holahost-db` — the storage-failure contract (three types) and the translation of vendor errors, the `UnitOfWork` port and its SQLAlchemy implementation, the engine factory, retrying a transaction on conflict, the two Postgres identities as typed settings, RLS binding and the startup guard, provisioning of the application role, the skeleton of `alembic/env.py` | `holahost/libs/holahost-db/` | implemented |
 | The shared make targets (`lint`, `format`, `typecheck`, `test`, `test-int`, `lint-imports`, `openapi`, `dev-*`, `migrate-*`, `ci-local`, `ci-image`, `ci-tf`) | `holahost/make/common.mk`, pulled in with `include` from a service's `Makefile` | implemented |
 | The platform's Terraform modules: `service-ecr` (the image repository and its lifecycle policy), `service-observability` (the log group, the SNS topic and its subscription, the filters and the alarm over the `op_completed` core) | `holahost/infra/modules/` | implemented |
-| The shared CI composite actions: `setup-python-toolchain`, `build-push-image`, `ssm-migrate-deploy`, `smoke-check`, `terraform-apply` | `.github/actions/` (the repository root — GitHub reads only that) | implemented |
+| The shared CI composite actions: `setup-python-toolchain`, `build-push-image`, `ssm-migrate-deploy`, `smoke-check`, `authenticated-smoke`, `terraform-apply` | `.github/actions/` (the repository root — GitHub reads only that) | implemented |
 | The service template: the clean-architecture tree, `Dockerfile`, `docker-compose.yml`, `.env.example`, `alembic.ini`, a base `pyproject.toml` (`ruff`, `mypy` strict, the `import-linter` contract, `pytest`), a test skeleton (testcontainers + `alembic upgrade` + provisioning of the unprivileged role, a JWKS server and token minting, registration of the error handlers), the domain exception type already listed in `SILENT_500_TYPES`, and a generated `docs/openapi.json` | `holahost/templates/service/` | implemented; `make test`, `make test-int` and `make openapi-check` pass on the copied tree |
 | `holahost-client` — the caller's discipline: obtaining and caching an s2s token, setting `X-Request-ID`, honouring `Retry-After`, parsing the error envelope into exceptions | `holahost/libs/holahost-client/` | placeholder, see below |
-| A reusable CI workflow (`workflow_call`) instead of a copy of the pipeline body in every service's workflow file | `.github/workflows/` | placeholder, see below |
+| The pipelines' bodies as called workflows (`workflow_call`): `service-ci`, `service-deploy-staging`, `service-promote-prod`; a service's `<svc>-*.yml` passes its values | `.github/workflows/` | implemented |
 
 ## What stayed a placeholder, and why exactly these
 
 The rule for filling this in is unchanged: where there is no content, the name, the place and the
 purpose stand; the content appears with the first piece of development that needed the entity. Below
-are the two cases where a consumer arguably already exists but extracting is premature — a decision,
-not an oversight.
+is the case where a consumer arguably already exists but extracting is premature — a decision, not an
+oversight.
 
 **`holahost-client`.** The framework specification requires the caller's discipline, and
 `guest-reply` implements it — but there is exactly one consumer. The next one will be built
@@ -962,17 +966,6 @@ until `exp`, but through a token exchange in the hot path on every on-behalf-of-
 `guest-reply`'s client would not suit it, and the API would have to be broken right after it
 appeared. What remains common is `X-Request-ID` and honouring `Retry-After` — a few dozen lines. The
 trigger: the first Orchestration Service.
-
-**A reusable CI workflow.** The repeating *steps* are already extracted — those are the composite
-actions above. Designing a `workflow_call` from a single example was a way to guess the wrong
-interface: a workflow is not typed, and nothing checks the mistake. The second pipeline
-(`llm-client`) has now shown the divergence: in `ci`, the service's name (from which the filter, the
-directories, the image and the plan role follow), the image size ceiling and a check of its own
-(`validate-registry`); in the rollout pipelines, a smoke step of its own. The extraction is a
-separate change rather than part of the second service: a called workflow's job reports under a new
-check name, so it renames the required checks of every service at once, and branch protection has
-to change in the same step. The trigger: the third pipeline, or the next change to a step the
-copies share.
 
 ## The operation-completion event contract
 
