@@ -27,7 +27,7 @@ from infrastructure.registry.config_providers_repo import (
     load_providers_repo,
 )
 
-# The alias `.github/actions/llm-client-paid-smoke` generates on.
+# The alias the rollout's paid smoke generates on — `.github/workflows/llm-client-*.yml`.
 SMOKE_ALIAS = "fast"
 
 

@@ -1,7 +1,6 @@
 name: llm-client-deploy-staging
 
-# The same pipeline as rag-documents-deploy-staging.yml, which explains its steps; what is this
-# service's own is the smoke check, which spends money.
+# The trigger and this service's values; the pipeline is service-deploy-staging.yml.
 
 on:
   push:
@@ -11,74 +10,16 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AWS_REGION: us-east-1
-
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: aws-actions/configure-aws-credentials@v5
-        with:
-          # ACCOUNT_ID and the IAM role do not exist yet: both wait on the platform-level AWS
-          # account and OIDC provider. Fill in once those land.
-          role-to-assume: arn:aws:iam::ACCOUNT_ID:role/github-actions-llm-client-staging
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: hashicorp/setup-terraform@v3
-
-      - uses: ./.github/actions/terraform-apply
-        with:
-          working-directory: holahost/services/llm-client/infra/common
-
-      - uses: ./.github/actions/terraform-apply
-        with:
-          working-directory: holahost/services/llm-client/infra/envs/staging
-
-      - name: Compute image tag
-        id: tags
-        run: |
-          echo "repo_url=$(terraform -chdir=holahost/services/llm-client/infra/common output -raw repository_url)" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=git-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
-      - uses: ./.github/actions/build-push-image
-        id: build
-        with:
-          dockerfile: holahost/services/llm-client/Dockerfile
-          ecr-repo-url: ${{ steps.tags.outputs.repo_url }}
-          sha-tag: ${{ steps.tags.outputs.sha_tag }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: ./.github/actions/ssm-migrate-deploy
-        with:
-          env: staging
-          service-name: llm-client
-          image: ${{ steps.build.outputs.digest }}
-          compose-file: holahost/services/llm-client/docker-compose.yml
-          env-file: holahost/services/llm-client/infra/envs/staging/.env
-
-      # Free, and retried: health reads the database and never calls a provider.
-      - uses: ./.github/actions/smoke-check
-        with:
-          url: https://staging.hola.host/api/llm-client/health
-
-      # A step's `if` cannot read secrets, so this step turns their presence into an output. The
-      # credentials themselves go to the smoke step alone, not into every step's environment.
-      - name: Is the paid smoke configured
-        id: smoke
-        run: echo "enabled=${{ secrets.LLM_CLIENT_SMOKE_CLIENT_ID != '' && secrets.LLM_CLIENT_SMOKE_CLIENT_SECRET != '' }}" >> "$GITHUB_OUTPUT"
-
-      - uses: ./.github/actions/llm-client-paid-smoke
-        if: steps.smoke.outputs.enabled == 'true'
-        with:
-          base-url: https://staging.hola.host
-          env-file: holahost/services/llm-client/infra/envs/staging/.env
-          client-id: ${{ secrets.LLM_CLIENT_SMOKE_CLIENT_ID }}
-          client-secret: ${{ secrets.LLM_CLIENT_SMOKE_CLIENT_SECRET }}
-
-      - name: Paid smoke skipped
-        if: steps.smoke.outputs.enabled != 'true'
-        run: echo "::notice::LLM_CLIENT_SMOKE_CLIENT_ID and _SECRET are not both set in the staging environment — the generation smoke check did not run"
+    uses: ./.github/workflows/service-deploy-staging.yml
+    with:
+      service: llm-client
+      # One real generation after the health loop: it checks the provider key, the registry and
+      # the accounting path of a live call, which health cannot — and it costs money, which is why
+      # it is the cheapest alias with a one-token ceiling. The registry keeps `fast` resolvable
+      # (`make validate-registry`).
+      smoke-path: /generate
+      smoke-body: '{"model": "fast", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}'
+      smoke-summary: "{provider, model, usage}"
+      smoke-secret-prefix: LLM_CLIENT

@@ -1,0 +1,90 @@
+name: Authenticated smoke
+description: >
+  One real request through the deployed service, as a caller: a service token from auth, then one
+  `POST` of the given body to the given path. It checks what the free health loop cannot — that the
+  service serves an authenticated request end to end — and it may cost money or change state, so it
+  runs exactly once: no loop, no retry. A failed request fails the deploy; re-running the job is the
+  retry, and a person decides on it — so a failure prints the answer's status and error envelope,
+  and every run prints the request id to find the call's `op_completed` by.
+
+  The client is registered in auth with the service among its allowed audiences. The token request
+  is the frame spec's S2S `client_credentials`, form-encoded as RFC 6749 defines it, sent to the
+  issuer the service itself trusts — `EXPECTED_ISSUER` in the environment's .env, so the two cannot
+  point at different hosts.
+inputs:
+  base-url:
+    description: The environment's gateway, e.g. https://staging.hola.host.
+    required: true
+  env-file:
+    description: The environment's .env, relative to the repo root; its EXPECTED_ISSUER is auth.
+    required: true
+  audience:
+    description: The service's audience — its name.
+    required: true
+  path:
+    description: The request's path, base path included, e.g. /api/llm-client/generate.
+    required: true
+  body:
+    description: The request's JSON body.
+    required: true
+  summary:
+    description: A jq filter over the answer — what the log shows of a success.
+    required: false
+    default: "."
+  client-id:
+    required: true
+  client-secret:
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      # Inputs reach the script as environment variables rather than being interpolated into it,
+      # so nothing in a value is ever read as shell.
+      env:
+        BASE_URL: ${{ inputs.base-url }}
+        ENV_FILE: ${{ inputs.env-file }}
+        AUDIENCE: ${{ inputs.audience }}
+        REQUEST_PATH: ${{ inputs.path }}
+        BODY: ${{ inputs.body }}
+        SUMMARY: ${{ inputs.summary }}
+        CLIENT_ID: ${{ inputs.client-id }}
+        CLIENT_SECRET: ${{ inputs.client-secret }}
+      run: |
+        set -euo pipefail
+        issuer=$(sed -n 's/^EXPECTED_ISSUER=//p' "$ENV_FILE")
+        if [ -z "$issuer" ]; then
+          echo "::error::no EXPECTED_ISSUER in $ENV_FILE"
+          exit 1
+        fi
+
+        # -S keeps curl's own error line under -s; --fail-with-body keeps the error envelope that
+        # plain -f discards. --max-time bounds each call: a hung connection must fail the step, not
+        # hold the job until GitHub's limit.
+        if ! token_response=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 30 \
+            -u "$CLIENT_ID:$CLIENT_SECRET" \
+            --data-urlencode grant_type=client_credentials \
+            --data-urlencode "audience=$AUDIENCE" \
+            "$issuer/token"); then
+          echo "::error::auth refused the smoke client's token request"
+          echo "$token_response"
+          exit 1
+        fi
+        token=$(jq -er .access_token <<< "$token_response")
+        echo "::add-mask::$token"
+
+        # No X-Request-ID of our own: the gateway attaches it, and the service echoes it back.
+        headers="$RUNNER_TEMP/authenticated-smoke-headers"
+        status=0
+        response=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 120 -D "$headers" \
+          -H "Authorization: Bearer $token" \
+          -H 'Content-Type: application/json' \
+          -d "$BODY" \
+          "$BASE_URL$REQUEST_PATH") || status=$?
+        grep -i '^x-request-id:' "$headers" || true
+        if [ "$status" -ne 0 ]; then
+          echo "::error::the authenticated smoke failed — do not re-run before reading the answer below"
+          echo "$response"
+          exit 1
+        fi
+        jq -e "$SUMMARY" <<< "$response"
