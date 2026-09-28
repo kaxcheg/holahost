@@ -17,6 +17,11 @@ service inherits and the reasoning behind them — is
 | **Resource Service** | A narrow domain with little business logic. Owns data or fronts an external provider, and validates tokens. `rag-documents` and `llm-client` are Resource Services. |
 | **Orchestration Service** | Implements a product's backend: validates tokens and orchestrates calls to Resource Services on behalf of a user, through token exchange. |
 
+Neither `auth` nor an Orchestration Service exists yet. Until `auth` does, the dev minter
+([`tools/dev-minter`](tools/dev-minter/README.md)) issues the tokens on dev; until an Orchestration
+Service does, the console tool [`tools/guest-reply`](tools/guest-reply/README.md) plays that role for
+the one product scenario — answering a guest from a guidebook — as a service-token caller.
+
 ## How a request reaches a service
 
 ```
@@ -28,9 +33,11 @@ header, applies a per-IP `limit_req`, stamps `X-Request-ID` and resolves the ser
 shared `backbone` Docker network. **The gateway does not authenticate** — every service validates
 the JWT itself, offline, against cached JWKS.
 
-On `dev` there is no gateway and no nginx: the service publishes its port on the host and callers
-set `X-Request-ID` themselves. A service behaves identically either way — no environment branches,
-and it compensates for nothing the perimeter would otherwise do.
+On `dev` there is no gateway and no nginx: each service publishes its own port on the host
+(`HOST_PORT` — `rag-documents` 8080, `llm-client` 8081), callers set `X-Request-ID` themselves, and
+the services fetch their JWKS from the dev minter on `backbone`. A service behaves identically either
+way — no environment branches, and it compensates for nothing the perimeter would otherwise do. The
+dev stack step by step is in the framework specification's "dev (local)".
 
 ## The contract every microservice satisfies
 
