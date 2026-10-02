@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Hook entrypoint:  python3 -I -S "$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook" <guard>
 
-The order below is the fail-open contract. (1) The kill switch. (2) A self-gate that needs nothing but `os`:
+The order below is the fail-open contract. (1) The kill switch — the `global` Procedure's, defined once in
+`~/.claude/lib/procs_switch.py` (it needs nothing but `os`). (2) A self-gate that needs nothing but `os`:
 a session that is not in a build project pays a few milliseconds and cannot be affected by a bug in the
 library. (3) Only then is the library imported and the guard run.
 """
@@ -42,8 +43,10 @@ def has_state(project: str) -> bool:
 
 def main() -> int:
     guard = sys.argv[1] if len(sys.argv) > 1 else ""
-    config = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
-    if os.environ.get("PROCS_GUARDS") == "off" or os.path.exists(os.path.join(config, "procs.guards.off")):
+    sys.path.insert(0, os.path.expanduser("~/.claude/lib"))
+    from procs_switch import guards_off
+
+    if guards_off():
         return 0
     if guard in BUILD_GUARDS and not has_state(os.environ.get("CLAUDE_PROJECT_DIR") or "."):
         return 0
