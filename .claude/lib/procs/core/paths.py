@@ -1,6 +1,6 @@
 """Where the procedure's own files and the session's project live.
 
-The kill switch is not here: `bin/procs-hook` asks the `global` Procedure's `~/.claude/lib/procs_switch.py` first
+The kill switch is not here: `bin/procs-hook` asks `~/.claude/lib/procs_switch.py` first
 thing, before importing this library — so a broken library cannot take away the way to switch the library off.
 Everything that only served that check (`config_dir`, `guards_disabled`, `GUARDS_OFF_FILE`) is gone.
 """

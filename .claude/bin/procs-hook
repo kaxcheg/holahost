@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hook entrypoint:  python3 -I -S "$CLAUDE_PROJECT_DIR/.claude/bin/procs-hook" <guard>
 
-The order below is the fail-open contract. (1) The kill switch — the `global` Procedure's, defined once in
+The order below is the fail-open contract. (1) The kill switch — `~/.claude`'s, defined once in
 `~/.claude/lib/procs_switch.py` (it needs nothing but `os`). (2) A self-gate that needs nothing but `os`:
 a session that is not in a build project pays a few milliseconds and cannot be affected by a bug in the
 library. (3) Only then is the library imported and the guard run.

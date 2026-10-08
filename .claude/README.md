@@ -27,7 +27,7 @@ hooks and permissions live in this repository's `.claude/` and take effect only 
 
 ## Kill switch
 
-The guards switch is the `global` Procedure's (`~/.claude/CLAUDE.md` → Guards switch; its one definition is
+The guards switch is `~/.claude`'s (`~/.claude/CLAUDE.md` → Common rules → Guards switch; its one definition is
 `~/.claude/lib/procs_switch.py`). `bin/procs-hook` asks it first thing, before this library is imported. Without a
 `.build-state/` directory — at the project root or up to three levels down, next to a spec's `docs/` — the guards
 stay silent.
